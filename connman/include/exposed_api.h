@@ -64,8 +64,6 @@ int connman_iptables_delete(const char *table_name,
 	
 int connman_iptables_commit(const char *table_name);
 
-void connman_iptables_cleanup(void);
-
 int connman_iptables_dump(const char *table_name);
 
 int connman_iptables_change_policy(const char *table_name,
