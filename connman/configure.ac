@@ -309,6 +309,11 @@ PKG_CHECK_MODULES(XTABLES, xtables >= 1.4.11, dummy=yes,
 AC_SUBST(XTABLES_CFLAGS)
 AC_SUBST(XTABLES_LIBS)
 
+PKG_CHECK_MODULES(LIBIPTC, libiptc >= 0.27.1, dummy=yes,
+				AC_MSG_ERROR(Libiptc library is required))
+AC_SUBST(LIBIPTC_CFLAGS)
+AC_SUBST(LIBIPTC_LIBS)
+
 AC_ARG_ENABLE(test, AC_HELP_STRING([--enable-test],
 		[enable test/example scripts]), [enable_test=${enableval}])
 AM_CONDITIONAL(TEST, test "${enable_test}" = "yes")

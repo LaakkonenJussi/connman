@@ -41,13 +41,6 @@ int connman_iptables_delete_chain(const char *table_name,
 int connman_iptables_flush_chain(const char *table_name,
 					const char *chain);
 
-/* Disabled for now. The 2nd parameter is defined in
-* src/connman.h
-*/
-/*int connman_iptables_iterate_chains(const char *table_name,
-				connman_iptables_iterate_chains_cb_t cb,
-				void *user_data);*/
-
 int connman_iptables_init(void);
 
 int connman_iptables_insert(const char *table_name,
@@ -61,7 +54,7 @@ int connman_iptables_append(const char *table_name,
 int connman_iptables_delete(const char *table_name,
 				const char *chain,
 				const char *rule_spec);
-	
+
 int connman_iptables_commit(const char *table_name);
 
 int connman_iptables_dump(const char *table_name);
@@ -70,49 +63,16 @@ int connman_iptables_change_policy(const char *table_name,
 					const char *chain,
 					const char *policy);
 					
+int connman_iptables_save(const char *fpath);
+
+int connman_iptables_restore(const char *fpath);
+
+int connman_iptables_clear(const char* tablename);
+
+const char* connman_iptables_default_save_path(int ip_version);
+					
 /* IPTABLES FUNCTIONS END */
 
-/* FIREWALL FUNCTIONS */
-
-int connman_firewall_init(void);
-
-void connman_firewall_cleanup(void);
-	
-bool connman_firewall_is_up(void);
-	
-struct firewall_context *connman_firewall_create(void);
-
-void connman_firewall_destroy(struct firewall_context *ctx);
-
-int connman_firewall_enable(struct firewall_context *ctx);
-
-int connman_firewall_disable(struct firewall_context *ctx);
-
-int connman_firewall_add_rule(struct firewall_context *ctx,
-				const char *table,
-				const char *chain,
-				const char *rule_fmt, ...);
-
-int connman_firewall_enable_rule(struct firewall_context *ctx, int id);
-	
-int connman_firewall_disable_rule(struct firewall_context *ctx, int id);
-
-int connman_firewall_remove_rule(struct firewall_context *ctx, int id);
-
-/* FIREWALL FUNCTIONS END */
-
-/* NAT FUNCTIONS */
-
-int connman_nat_init(void);
-
-int connman_nat_enable(const char *name, const char *address,
-				unsigned char prefixlen);
-
-void connman_nat_disable(const char *name);
-
-void connman_nat_cleanup(void);
-
-/* NAT FUNCTIONS END */
 
 #ifdef __cplusplus
 }

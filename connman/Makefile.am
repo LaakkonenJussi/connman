@@ -127,7 +127,7 @@ src_connmand_SOURCES = $(gdhcp_sources) $(gweb_sources) \
 
 src_connmand_LDADD = gdbus/libgdbus-internal.la $(builtin_libadd) \
 			@GLIB_LIBS@ @DBUS_LIBS@ @XTABLES_LIBS@ @GNUTLS_LIBS@ \
-			@IPHB_LIBS@ -lresolv -ldl -lrt
+			@IPHB_LIBS@ @LIBIPTC_LIBS@ -lresolv -ldl -lrt
 
 src_connmand_LDFLAGS = -Wl,--export-dynamic \
 				-Wl,--version-script=$(srcdir)/src/connman.ver
@@ -353,7 +353,7 @@ tools_dbus_test_LDADD = gdbus/libgdbus-internal.la @GLIB_LIBS@ @DBUS_LIBS@
 tools_polkit_test_LDADD = @DBUS_LIBS@
 
 tools_iptables_test_SOURCES = src/log.c src/iptables.c tools/iptables-test.c
-tools_iptables_test_LDADD = @GLIB_LIBS@ @XTABLES_LIBS@ -ldl
+tools_iptables_test_LDADD = @GLIB_LIBS@ @XTABLES_LIBS@ @LIBIPTC_LIBS@ -ldl
 
 tools_private_network_test_LDADD = @GLIB_LIBS@ @DBUS_LIBS@
 
@@ -368,7 +368,7 @@ tools_iptables_unit_CFLAGS = @DBUS_CFLAGS@ @GLIB_CFLAGS@ @XTABLES_CFLAGS@ \
 tools_iptables_unit_SOURCES = src/log.c \
 		 src/iptables.c src/firewall.c src/nat.c tools/iptables-unit.c
 tools_iptables_unit_LDADD = gdbus/libgdbus-internal.la \
-				@GLIB_LIBS@ @DBUS_LIBS@ @XTABLES_LIBS@ -ldl
+				@GLIB_LIBS@ @DBUS_LIBS@ @XTABLES_LIBS@ @LIBIPTC_LIBS@ -ldl
 
 tools_dnsproxy_test_SOURCES = tools/dnsproxy-test.c
 tools_dnsproxy_test_LDADD = @GLIB_LIBS@

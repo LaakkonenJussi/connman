@@ -88,16 +88,6 @@ int connman_iptables_commit(const char *table_name)
 	return __connman_iptables_commit(table_name);
 }
 
-void connman_iptables_cleanup(void)
-{
-	__connman_iptables_cleanup();
-}
-
-int connman_iptables_dump(const char *table_name)
-{
-	return __connman_iptables_dump(table_name);
-}
-
 int connman_iptables_change_policy(const char *table_name,
 					const char *chain,
 					const char *policy)
@@ -105,100 +95,24 @@ int connman_iptables_change_policy(const char *table_name,
 	return __connman_iptables_change_policy(table_name, chain, policy);
 }
 
-int connman_firewall_init(void)
+int connman_iptables_save(const char* fpath)
 {
-	return __connman_firewall_init();
+	return __connman_iptables_save(fpath);
 }
 
-void connman_firewall_cleanup(void)
+int connman_iptables_restore(const char* fpath)
 {
-	__connman_firewall_cleanup();
-}
-	
-bool connman_firewall_is_up(void)
-{
-	return __connman_firewall_is_up();
-}
-	
-struct firewall_context *connman_firewall_create(void)
-{
-	return __connman_firewall_create();
+	return __connman_iptables_restore(fpath);
 }
 
-void connman_firewall_destroy(struct firewall_context *ctx)
+int connman_iptables_clear(const char* tablename)
 {
-	__connman_firewall_destroy(ctx);
+	return __connman_iptables_clear(tablename);
 }
 
-int connman_firewall_enable(struct firewall_context *ctx)
+const char* connman_iptables_default_save_path(int ip_version)
 {
-	return __connman_firewall_enable(ctx);
-}
-
-int connman_firewall_disable(struct firewall_context *ctx)
-{
-	return __connman_firewall_disable(ctx);
-}
-
-/**
-* This wrappers' prototype is identical to the internal function prototype but
-* functionality differs because of the variadic arguments. Here the arguments
-* given are concatenated to a single char* that is passed to internal function
-* without formatting specification. Since the __connman_firewall_add_rule
-* behaves similarly all proper commands are applied.
-*/
-int connman_firewall_add_rule(struct firewall_context *ctx,
-				const char *table,
-				const char *chain,
-				const char *rule_fmt, ...)
-{
-	int rval = 0;
-	va_list args;
-	char* va_all_args = NULL;
-	
-	va_start(args,rule_fmt);
-	va_all_args = g_strdup_vprintf(rule_fmt,args);
-	va_end(args);
-
-	rval = __connman_firewall_add_rule(ctx,table, chain, va_all_args);
-	g_free(va_all_args);
-	return rval;
-}
-
-int connman_firewall_enable_rule(struct firewall_context *ctx, int id)
-{
-	return __connman_firewall_enable_rule(ctx, id);
-}
-	
-int connman_firewall_disable_rule(struct firewall_context *ctx, int id)
-{
-	return __connman_firewall_disable_rule(ctx, id);
-}
-
-int connman_firewall_remove_rule(struct firewall_context *ctx, int id)
-{
-	return __connman_firewall_remove_rule(ctx, id);
-}
-
-int connman_nat_init(void)
-{
-	return __connman_nat_init();
-}
-
-int connman_nat_enable(const char *name, const char *address,
-				unsigned char prefixlen)
-{
-	return connman_nat_enable(name, address, prefixlen);
-}
-
-void connman_nat_disable(const char *name)
-{
-	__connman_nat_disable(name);
-}
-
-void connman_nat_cleanup(void)
-{
-	__connman_nat_cleanup();
+	return __connman_iptables_default_save_path(ip_version);
 }
 
 

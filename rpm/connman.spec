@@ -21,6 +21,7 @@ Requires(preun): systemd
 Requires(post): systemd
 Requires(postun): systemd
 BuildRequires:  pkgconfig(xtables)
+BuildRequires:	pkgconfig(libiptc)
 BuildRequires:  pkgconfig(glib-2.0) >= 2.28
 BuildRequires:  pkgconfig(gthread-2.0) >= 2.16
 BuildRequires:  pkgconfig(dbus-1) >= 1.4
@@ -39,6 +40,7 @@ BuildRequires:  pkgconfig(libmce-glib)
 BuildRequires:  pkgconfig(libgsupplicant) >= 1.0.6
 BuildRequires:  ppp-devel
 BuildRequires:  libtool
+BuildRequires:  iptables-devel
 
 %description
 Connection Manager provides a daemon for managing Internet connections
