@@ -356,8 +356,10 @@ tools_dbus_test_LDADD = gdbus/libgdbus-internal.la @GLIB_LIBS@ @DBUS_LIBS@
 
 tools_polkit_test_LDADD = @DBUS_LIBS@
 
-tools_iptables_test_SOURCES = src/log.c src/iptables.c tools/iptables-test.c
-tools_iptables_test_LDADD = @GLIB_LIBS@ @XTABLES_LIBS@ @LIBIPTC_LIBS@ -ldl
+tools_iptables_test_CFLAGS = -DDEFAULT_STORAGE_ROOT=\""$(storageroot)\""
+tools_iptables_test_SOURCES = src/log.c src/storage.c src/inotify.c \
+		src/iptables.c tools/iptables-test.c
+tools_iptables_test_LDADD =  @GLIB_LIBS@ @XTABLES_LIBS@ @LIBIPTC_LIBS@ -ldl
 
 tools_private_network_test_LDADD = @GLIB_LIBS@ @DBUS_LIBS@
 
@@ -368,9 +370,11 @@ tools_session_test_LDADD = gdbus/libgdbus-internal.la \
 				@GLIB_LIBS@ @DBUS_LIBS@ -ldl
 
 tools_iptables_unit_CFLAGS = @DBUS_CFLAGS@ @GLIB_CFLAGS@ @XTABLES_CFLAGS@ \
-		-DIPTABLES_SAVE=\""${IPTABLES_SAVE}"\"
-tools_iptables_unit_SOURCES = src/log.c \
-		 src/iptables.c src/firewall.c src/nat.c tools/iptables-unit.c
+		-DIPTABLES_SAVE=\""${IPTABLES_SAVE}"\" \
+		-DDEFAULT_STORAGE_ROOT=\""$(storageroot)\""
+tools_iptables_unit_SOURCES = src/log.c src/storage.c src/inotify.c \
+		 src/iptables.c src/firewall.c src/nat.c \
+		 tools/iptables-unit.c
 tools_iptables_unit_LDADD = gdbus/libgdbus-internal.la \
 				@GLIB_LIBS@ @DBUS_LIBS@ @XTABLES_LIBS@ @LIBIPTC_LIBS@ -ldl
 

@@ -44,11 +44,11 @@
 #include <linux/netfilter/xt_connmark.h>
 
 #include "connman.h"
+
 #include "src/shared/util.h"
 
-#define IPTABLES_NAMES_FILE				"/proc/net/ip_tables_names"
-#define IPTABLES_PATH					"/etc/iptables"
-#define IPTABLES_DEFAULT_V4_SAVE_FILE 	IPTABLES_PATH"/rules.v4"
+#define IPTABLES_NAMES_FILE					"/proc/net/ip_tables_names"
+#define IPTABLES_DEFAULT_V4_SAVE_FILE 		"iptables/rules.v4"
 
 
 #define INFO(fmt,arg...) connman_info(fmt, ## arg)
@@ -3081,9 +3081,9 @@ int __connman_iptables_save(const char* fpath)
 
 		if(save_file)
 		{
-			// Don't allow to overwrite executables, allow only /etc/iptables
+			// Don't allow to overwrite executables, allow only connman storage
 			if(g_file_test(save_file,G_FILE_TEST_IS_EXECUTABLE) ||
-				!g_str_has_prefix(save_file,IPTABLES_PATH))
+				!g_str_has_prefix(save_file, STORAGEDIR))
 				goto out;
 		}
 		// File does not exist, check directory where file will be located
@@ -3091,15 +3091,22 @@ int __connman_iptables_save(const char* fpath)
 		{
 			dir = realpath(dirname((char*)fpath),NULL);
 			
-			// Allow only to /etc/iptables
-			if(dir && !g_str_has_prefix(dir,IPTABLES_PATH))
+			// Allow only to connman storage
+			if(dir && !g_str_has_prefix(dir, STORAGEDIR))
 				goto out;
 		}
 	}
 	
+	// File not given, use default
+	if(!save_file)
+		save_file = g_strdup_printf("%s/%s", STORAGEDIR, 
+						IPTABLES_DEFAULT_V4_SAVE_FILE);
+	
+	DBG("connman_iptables_save() saving firewall to %s", save_file);
+
 	save_in_progress = true;
 	
-	if(!open_write_socket(save_file ? save_file : IPTABLES_DEFAULT_V4_SAVE_FILE))
+	if(!open_write_socket(save_file))
 	{
 		rval = (fsock_write > 0 ? 
 			iptables_for_each_table(&iptables_save_table) : 1);
@@ -3112,7 +3119,7 @@ out:
 		g_free(save_file);
 	if(dir)
 		g_free(dir);
-	INFO("connman_iptables_save returning %d",rval);
+
 	return rval;
 }
 
@@ -3144,9 +3151,10 @@ int __connman_iptables_clear(const char* tablename)
 const char* __connman_iptables_default_save_path(int ip_version)
 {
 	if(ip_version == 4)
-		return IPTABLES_DEFAULT_V4_SAVE_FILE;
+		return g_strdup_printf("%s/%s", STORAGEDIR,
+			IPTABLES_DEFAULT_V4_SAVE_FILE);
 	else
-		return "Not implemented";
+		return g_strdup("Not implemented");
 }
 
 int __connman_iptables_init(void)
