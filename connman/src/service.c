@@ -4675,6 +4675,13 @@ static bool auto_connect_service(GList *services,
 			continue;
 		}
 
+		if (service->new_service &&
+			reason == CONNMAN_SERVICE_CONNECT_REASON_AUTO) {
+			DBG("service %p type %s new (skipping)", service,
+				__connman_service_type2string(service->type));
+			continue;
+		}
+
 		if (!service->favorite) {
 			/*
 			 * If we are connecting preferred technologies and
@@ -5328,7 +5335,7 @@ static DBusMessage *check_access(DBusConnection *conn,
 	dbus_uint32_t get_props = 0;
 	dbus_uint32_t set_props = 0;
 	dbus_uint32_t calls = ACCESS_METHOD_ALWAYS_ALLOWED;
-	int i;
+	guint i;
 
 	for (i=0; i<G_N_ELEMENTS(service_property_access); i++) {
 		const struct connman_service_property_access *pa =
