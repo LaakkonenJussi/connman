@@ -58,8 +58,6 @@ endif
 if SAILFISH_ACCESS
 builtin_modules += sailfish_access
 builtin_sources += plugins/sailfish_access.c
-builtin_modules += sailfish_exposed_api
-builtin_sources += plugins/sailfish_exposed_api.c
 endif
 
 if SAILFISH_WAKEUP_TIMER

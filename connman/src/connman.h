@@ -972,12 +972,6 @@ int __connman_iptables_init(void);
 void __connman_iptables_cleanup(void);
 int __connman_iptables_commit(const char *table_name);
 
-int __connman_iptables_save(const char *fpath);
-int __connman_iptables_restore(const char *fpath);
-int __connman_iptables_clear(const char *tablename);
-
-const char* __connman_iptables_default_save_path(int ip_version);
-
 int __connman_dnsproxy_init(void);
 void __connman_dnsproxy_cleanup(void);
 int __connman_dnsproxy_add_listener(int index);

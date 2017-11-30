@@ -12,7 +12,7 @@ include_HEADERS = include/log.h include/plugin.h \
 			include/storage.h include/provision.h \
 			include/session.h include/ipaddress.h include/agent.h \
 			include/inotify.h include/peer.h include/machine.h \
-			include/technology.h include/exposed_api.h \
+			include/technology.h include/iptables_extension.h \
 			include/dbus.h include/gdbus_external.h
 
 nodist_include_HEADERS = include/version.h
@@ -123,7 +123,7 @@ src_connmand_SOURCES = $(gdhcp_sources) $(gweb_sources) \
 			src/inotify.c src/firewall.c src/ipv6pd.c src/peer.c \
 			src/peer_service.c src/machine.c src/util.c \
 			src/wakeup_timer.c src/jolla-stats.c src/fsid.c \
-			src/access.c
+			src/access.c src/iptables_extension.c
 
 src_connmand_LDADD = gdbus/libgdbus-internal.la $(builtin_libadd) \
 			@GLIB_LIBS@ @DBUS_LIBS@ @XTABLES_LIBS@ @GNUTLS_LIBS@ \
