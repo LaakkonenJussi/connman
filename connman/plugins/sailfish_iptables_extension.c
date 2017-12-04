@@ -1,6 +1,7 @@
 /*
  *
- *  Connection Manager wrapper to expose firewall functions for SailfishOS
+ *  Connection Manager wrapper implementation of the exposed iptables functions
+ *  for SailfishOS MDM. Contains save, restore and clear functionality.
  *
  *  Copyright (C) 2017 Jolla Ltd. All rights reserved.
  *  Contact: Jussi Laakkonen <jussi.laakkonen@jolla.com>
@@ -53,7 +54,6 @@
 #define IPTABLES_NAMES_FILE					"/proc/net/ip_tables_names"
 #define IPTABLES_DEFAULT_V4_SAVE_FILE 		"iptables/rules.v4"
 
-static gint fsock_write = -1;
 static bool save_in_progress = false;
 
 gint check_save_directory(const char* fpath)
@@ -96,42 +96,49 @@ gint check_save_directory(const char* fpath)
 *	Returns: int (0 ok, -1 cannot write or create to file, 1 cannot create dir)
 */
 
+gint open_socket(const gchar* fpath, gint flags, gint mode)
+{
+	gint fsock = -1;
+	
+	if(check_save_directory(fpath))
+		return 1;
+	
+	if(((fsock = g_open(fpath, flags, mode)) > 0) &&
+		g_file_test(fpath,G_FILE_TEST_EXISTS))
+	{
+		DBG("IPTABLES save file opened, path %s",fpath);
+		return fsock;
+	}
+	else
+	{
+		ERR("IPTABLES cannot be saved to %s - socket: %d",fpath,fsock);
+		return -1;
+	}
+}
+
 gint open_write_socket(const gchar* fpath)
 {
 	gint mode = S_IRUSR|S_IWUSR;
 	gint flags = O_WRONLY;
 	
-	if(check_save_directory(fpath))
-		return 1;
-	
 	flags |= (g_file_test(fpath,G_FILE_TEST_EXISTS|G_FILE_TEST_IS_REGULAR) ?
 		O_TRUNC : O_CREAT);
 	
-	if(((fsock_write = g_open(fpath, flags, mode)) > 0) &&
-		g_file_test(fpath,G_FILE_TEST_EXISTS))
-	{
-		DBG("IPTABLES save file opened, path %s",fpath);
-		return 0;
-	}
-	else
-	{
-		ERR("IPTABLES cannot be saved to %s - socket: %d",fpath,fsock_write);
-		return -1;
-	}
+	return open_socket(fpath, flags, mode);
 }
 
-gint close_write_socket()
+gint close_socket(gint *fsock)
 {
 	GError *error = NULL;
 	gint rval = 0;
 	
-	if(fsock_write < 0)
+	if(*fsock < 0)
 	{
 		ERR("FILE CLOSE ERROR invalid socket");
 		return -1;
 	}
 		
-	if(!g_close(fsock_write,&error))
+	if(!g_close(*fsock, &error))
 	{
 		ERR("FILE CLOSE ERROR %s", (error ? error->message : ""));
 		if(error)
@@ -139,18 +146,19 @@ gint close_write_socket()
 		rval = 1;
 	}
 	else
-		DBG("IPTABLES save file closed");
+		DBG("IPTABLES file socket %d closed", fsock);
 		
-	fsock_write = -1;
+	*fsock = -1;
 	return rval;
 }
 
-gint iptables_append_to_file(gchar* data, gint datalen, gboolean freedata)
+gint iptables_append_to_file(gint fsock, gchar* data, gint datalen,
+	gboolean freedata)
 {
 	gint wrote = 0;
-	if(fsock_write > 0)
+	if(fsock > 0)
 	{
-		wrote = write(fsock_write, data, datalen);
+		wrote = write(fsock, data, datalen);
 		if(freedata)
 			g_free(data);
 		return wrote;
@@ -158,13 +166,13 @@ gint iptables_append_to_file(gchar* data, gint datalen, gboolean freedata)
 	return 0;
 }
 
-gboolean iptables_append_gstring_to_file(GString *str)
+gboolean iptables_append_gstring_to_file(gint fsock, GString *str)
 {
 	if(str)
 	{
 		gchar* line = g_string_free(str,FALSE);
 		gint len = strlen(line);
-		return iptables_append_to_file(line,len,TRUE) == len;
+		return iptables_append_to_file(fsock, line, len, TRUE) == len;
 	}
 	return FALSE;
 }
@@ -495,49 +503,49 @@ void print_iptables_rule(GString* line, const struct ipt_entry *e,
 	g_string_append(line, "\n");
 }
 
-// Adapted from iptables source iptables-save.c
-static gint iptables_for_each_table(int (*func) (const char *tablename))
+// Adapted from iptables source iptables-save.c - kept for future use
+/*static gint iptables_for_each_table(gint fsock, int (*func) (gint fsock, const char *table_name))
 {
 	int ret = 0;
 	FILE *procfile = NULL;
-	char tablename[XT_TABLE_MAXNAMELEN+1];
+	char table_name[XT_TABLE_MAXNAMELEN+1];
 
 	procfile = fopen(IPTABLES_NAMES_FILE, "re");
 	
-	while (fgets(tablename, sizeof(tablename), procfile))
+	while (fgets(table_name, sizeof(table_name), procfile))
 	{
-		if (tablename[strlen(tablename) - 1] != '\n')
-			ERR("iptables_for_each_table() Badly formed tablename `%s'",
-				tablename);
+		if (table_name[strlen(table_name) - 1] != '\n')
+			ERR("iptables_for_each_table() Badly formed table_name `%s'",
+				table_name);
 			
-		tablename[strlen(tablename) - 1] = '\0';
-		ret += func(tablename);
+		table_name[strlen(table_name) - 1] = '\0';
+		ret += func(fsock, table_name);
 	}
 
 	fclose(procfile);
 	return ret;
-}
+}*/
 
 // Adapted from iptables source iptables-save.c
-static int iptables_save_table(const char *tablename)
+static int iptables_save_table(gint fsock, const char *table_name)
 {
 	struct xtc_handle *h = NULL;
 	const char *chain = NULL;
 	GString *line = NULL;
 	
-	if(!tablename)
+	if(!table_name)
 	{
 		ERR("iptables_save_table() called with empty table");
 		return 1;
 	}
 	
-	DBG("%s %s", "iptables save table: ", tablename);
+	DBG("%s %s", "iptables save table: ", table_name);
 	
-	h = iptc_init(tablename);
+	h = iptc_init(table_name);
 	if (h == NULL)
 	{
 		xtables_load_ko(xtables_modprobe_program, false);
-		h = iptc_init(tablename);
+		h = iptc_init(table_name);
 	}
 	if (!h)
 	{
@@ -550,7 +558,7 @@ static int iptables_save_table(const char *tablename)
 	time_t now = time(NULL);
 
 	g_string_append_printf(line,"# Generated by connman on %s", ctime(&now));
-	g_string_append_printf(line,"*%s\n", tablename);
+	g_string_append_printf(line,"*%s\n", table_name);
 
 	/* Dump out chain names first,
 	 * thereby preventing dependency conflicts */
@@ -588,7 +596,7 @@ static int iptables_save_table(const char *tablename)
 	g_string_append_printf(line,"# Completed on %s", ctime(&now));
 	iptc_free(h);
 	
-	if(!iptables_append_gstring_to_file(line))
+	if(!iptables_append_gstring_to_file(fsock, line))
 	{
 		ERR("print_ip invalid lenght write at iptables save");
 		return 1;
@@ -597,25 +605,25 @@ static int iptables_save_table(const char *tablename)
 	return 0;
 }
 
-static int iptables_clear_table(const char *tablename)
+static int iptables_clear_table(const char *table_name)
 {
 	struct xtc_handle *h = NULL;
 	const char *chain = NULL;
 	gint rval = 0;
-	DBG("iptables clear %s",tablename);
+	DBG("iptables clear %s",table_name);
 	
-	if(!tablename)
+	if(!table_name)
 	{
 		ERR("iptables_clear_table() called with empty table");
 		return 1;
 	}
 			
-	h = iptc_init(tablename);
+	h = iptc_init(table_name);
 	
 	if (!h)
 	{
 		xtables_load_ko(xtables_modprobe_program, false);
-		h = iptc_init(tablename);
+		h = iptc_init(table_name);
 	}
 	if (!h)
 	{
@@ -638,10 +646,15 @@ static int iptables_clear_table(const char *tablename)
 	return rval;
 }
 
-int __connman_iptables_save(const char* fpath)
+/*
+*
+* return: 0 on success, 1 error and -1 if save is already in progress
+*/
+int connman_iptables_save(const char* table_name, const char* fpath)
 {
 	// TODO ADD MUTEX
-	gint rval = -1;
+	gint rval = 1;
+	gint fsock_write = -1;
 	char *save_file = NULL, *dir = NULL;
 	
 	if(save_in_progress)
@@ -651,7 +664,7 @@ int __connman_iptables_save(const char* fpath)
 	}
 
 	if(fsock_write != -1)
-		close_write_socket();
+		close_socket(&fsock_write);
 		
 	if(fpath)
 	{
@@ -685,46 +698,49 @@ int __connman_iptables_save(const char* fpath)
 
 	save_in_progress = true;
 	
-	if(!open_write_socket(save_file))
+	if((fsock_write = open_write_socket(save_file)) > 0)
 	{
-		rval = (fsock_write > 0 ? 
-			iptables_for_each_table(&iptables_save_table) : 1);
-		close_write_socket();
+		rval = iptables_save_table(fsock_write, table_name);
+		
+		if(close_socket(&fsock_write) != 0)
+			DBG("connman_iptables_save() cannot close write socket");
 	}
 	save_in_progress = false;
 	
 out:
-	if(save_file)
-		g_free(save_file);
-	if(dir)
-		g_free(dir);
+	g_free(save_file);
+	g_free(dir);
 
 	return rval;
 }
 
 
-int __connman_iptables_restore(const char* fpath)
+int connman_iptables_restore(const char* table_name, const char* fpath)
 {
-	DBG("%s", "iptables restore clear all iptables tables");
+	if(table_name)
+	{
+		DBG("%s %s", "iptables restore iptables table", table_name);
 	
-	/*TODO: first do clear iptables_for_each_table(&iptables_clear_table);
-	 and restore the firewall from given file.
-	*/ 
-	return 0;
+		/*TODO: first do clear iptables_for_each_table(&iptables_clear_table);
+		 and restore the firewall from given file.
+		*/
+		
+		if(iptables_clear_table(table_name) != 0)
+			return 1;
+		
+		return 0;
+	}
+	return 1;
 }
 
-int __connman_iptables_clear(const char* tablename)
+int connman_iptables_clear(const char* table_name)
 {
-	if(tablename)
+	if(table_name)
 	{
-		DBG("iptables clear table %s", tablename);
-		return iptables_clear_table(tablename);
+		DBG("iptables clear table %s", table_name);
+		return iptables_clear_table(table_name);
 	}
-	else
-	{
-		DBG("iptables clear all tables");
-		return iptables_for_each_table(&iptables_clear_table);
-	}
+	return 1;
 }
 
 const char* __connman_iptables_default_save_path(int ip_version)
@@ -761,11 +777,6 @@ int connman_iptables_iterate_chains(const char *table_name,
 	return __connman_iptables_iterate_chains(table_name, cb, user_data);
 }
 
-int connman_iptables_init(void)
-{
-	return __connman_iptables_init();
-}
-
 int connman_iptables_insert(const char *table_name,
 				const char *chain,
 				const char *rule_spec)
@@ -799,24 +810,25 @@ int connman_iptables_change_policy(const char *table_name,
 	return __connman_iptables_change_policy(table_name, chain, policy);
 }
 
-int connman_iptables_save(const char* fpath)
-{
-	return __connman_iptables_save(fpath);
-}
-
-int connman_iptables_restore(const char* fpath)
-{
-	return __connman_iptables_restore(fpath);
-}
-
-int connman_iptables_clear(const char* tablename)
-{
-	return __connman_iptables_clear(tablename);
-}
-
 const char* connman_iptables_default_save_path(int ip_version)
 {
 	return __connman_iptables_default_save_path(ip_version);
 }
+
+static int sailfish_iptables_extension_init()
+{
+	DBG("Sailfish iptables extension init()");
+	return 0;
+}
+
+void sailfish_iptables_extension_exit()
+{
+	DBG("Sailfish iptables extension exit()");
+}
+
+CONNMAN_PLUGIN_DEFINE(sailfish_iptables_extension, "Sailfish iptables extension",
+	VERSION,
+	CONNMAN_PLUGIN_PRIORITY_HIGH - 1,
+	sailfish_iptables_extension_init, sailfish_iptables_extension_exit)
 
 

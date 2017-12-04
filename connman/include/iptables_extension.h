@@ -1,6 +1,6 @@
 /*
  *
- *  Connection Manager wrapper to expose firewall functions for SailfishOS
+ *  Connection Manager wrapper to expose iptables functions for SailfishOS MDM.
  *
  *  Copyright (C) 2017 Jolla Ltd. All rights reserved.
  *  Contact: Jussi Laakkonen <jussi.laakkonen@jolla.com>
@@ -41,8 +41,6 @@ int connman_iptables_delete_chain(const char *table_name,
 int connman_iptables_flush_chain(const char *table_name,
 					const char *chain);
 
-int connman_iptables_init(void);
-
 int connman_iptables_insert(const char *table_name,
 				const char *chain,
 				const char *rule_spec);
@@ -57,15 +55,13 @@ int connman_iptables_delete(const char *table_name,
 
 int connman_iptables_commit(const char *table_name);
 
-int connman_iptables_dump(const char *table_name);
-
 int connman_iptables_change_policy(const char *table_name,
 					const char *chain,
 					const char *policy);
 					
-int connman_iptables_save(const char *fpath);
+int connman_iptables_save(const char* tablename, const char *fpath);
 
-int connman_iptables_restore(const char *fpath);
+int connman_iptables_restore(const char* tablename, const char *fpath);
 
 int connman_iptables_clear(const char* tablename);
 
