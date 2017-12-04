@@ -309,10 +309,6 @@ PKG_CHECK_MODULES(XTABLES, xtables >= 1.4.11, dummy=yes,
 AC_SUBST(XTABLES_CFLAGS)
 AC_SUBST(XTABLES_LIBS)
 
-PKG_CHECK_MODULES(LIBIPTC, libiptc >= 0.27.1, dummy=yes,
-				AC_MSG_ERROR(Libiptc library is required))
-AC_SUBST(LIBIPTC_CFLAGS)
-AC_SUBST(LIBIPTC_LIBS)
 
 AC_ARG_ENABLE(test, AC_HELP_STRING([--enable-test],
 		[enable test/example scripts]), [enable_test=${enableval}])
@@ -447,6 +443,18 @@ if (test "${enable_sailfish_ofono}" = "yes"); then
 	CFLAGS="$CFLAGS $GOFONO_CFLAGS $GOFONOEXT_CFLAGS"
 	LIBS="$LIBS $GOFONO_LIBS $GOFONOEXT_LIBS"
 	need_glibutil=yes
+fi
+
+AC_ARG_ENABLE(sailfish-iptables-extension,
+	AC_HELP_STRING([--enable-iptables-extension], [enable Sailfish iptables extension plugin]),
+		[enable_sailfish_iptables_extension=${enableval}], [enable_sailfish_iptables_extension="no"])
+AM_CONDITIONAL(SAILFISH_IPTABLES_EXTENSION, test "${enable_sailfish_iptables_extension}" != "no")
+
+if (test "${enable_sailfish_iptables_extension}" = "yes"); then
+	PKG_CHECK_MODULES(LIBIPTC, libiptc >= 0.27.1, dummy=yes,
+			AC_MSG_ERROR(Libiptc library is required))
+	AC_SUBST(LIBIPTC_CFLAGS)
+	AC_SUBST(LIBIPTC_LIBS)
 fi
 
 if (test "${need_glibutil}" = "yes"); then

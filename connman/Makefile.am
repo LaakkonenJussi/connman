@@ -123,7 +123,7 @@ src_connmand_SOURCES = $(gdhcp_sources) $(gweb_sources) \
 			src/inotify.c src/firewall.c src/ipv6pd.c src/peer.c \
 			src/peer_service.c src/machine.c src/util.c \
 			src/wakeup_timer.c src/jolla-stats.c src/fsid.c \
-			src/access.c src/iptables_extension.c
+			src/access.c
 
 src_connmand_LDADD = gdbus/libgdbus-internal.la $(builtin_libadd) \
 			@GLIB_LIBS@ @DBUS_LIBS@ @XTABLES_LIBS@ @GNUTLS_LIBS@ \
