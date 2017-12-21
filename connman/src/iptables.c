@@ -1722,7 +1722,7 @@ static int parse_ip_and_mask(const char *str, struct in_addr *ip,
 
 	if (tokens[1]) {
 		prefixlength = strtol(tokens[1], NULL, 10);
-		if (prefixlength > 31) {
+		if (prefixlength > 32) {
 			err = -1;
 			goto out;
 		}
@@ -2026,16 +2026,6 @@ static int parse_rule_spec(struct connman_iptables *table,
 		case 'p':
 			/* Protocol match */
 			ctx->proto = xtables_parse_protocol(optarg);
-			if(ctx->proto)
-			{
-				xt_m = prepare_matches(table,
-					&ctx->xt_rm, optarg);
-				if (!xt_m) {
-					err = -EINVAL;
-					goto out;
-				}
-				ctx->xt_m = g_list_append(ctx->xt_m, xt_m);
-			}
 			break;
 		case 'j':
 			/* Target */
