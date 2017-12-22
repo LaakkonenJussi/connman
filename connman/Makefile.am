@@ -272,7 +272,7 @@ client_connmanctl_LDADD = gdbus/libgdbus-internal.la @DBUS_LIBS@ @GLIB_LIBS@ \
 endif
 
 noinst_PROGRAMS += unit/test-access unit/test-dnsproxy unit/test-ippool \
-	unit/test-sailfish_access
+	unit/test-sailfish_access unit/test-sailfish_iptables_extension
 
 if TEST_COVERAGE
 COVERAGE_OPT = --coverage
@@ -293,12 +293,18 @@ unit_test_sailfish_access_SOURCES = unit/test-sailfish_access.c \
 			src/log.c src/access.c plugins/sailfish_access.c
 unit_test_sailfish_access_LDADD = @GLIB_LIBS@ -ldl
 
+unit_test_sailfish_iptables_extension_CFLAGS = $(COVERAGE_OPT) $(AM_CFLAGS)
+unit_test_sailfish_iptables_extension_SOURCES = unit/test-sailfish_iptables_extension.c \
+			src/log.c src/storage.c src/inotify.c src/iptables.c src/firewall.c \
+			plugins/sailfish_iptables_extension.c
+unit_test_sailfish_iptables_extension_LDADD = @GLIB_LIBS@ @XTABLES_LIBS@ @LIBIPTC_LIBS@ -ldl
+
 unit_test_dnsproxy_CFLAGS = $(COVERAGE_OPT) $(AM_CFLAGS)
 unit_test_dnsproxy_SOURCES = unit/test-dnsproxy.c src/log.c
 unit_test_dnsproxy_LDADD = @GLIB_LIBS@ -lresolv -ldl
 
 TESTS = unit/test-access unit/test-ippool unit/test-dnsproxy \
-	unit/test-sailfish_access
+	unit/test-sailfish_access unit/test-sailfish_iptables_extension
 
 if SAILFISH_WAKEUP_TIMER
 unit_test_sailfish_wakeup_timer_CFLAGS = $(COVERAGE_OPT) $(AM_CFLAGS)

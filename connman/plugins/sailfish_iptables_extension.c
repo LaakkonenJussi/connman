@@ -59,31 +59,42 @@ static bool save_in_progress = false;
 
 gint check_save_directory(const char* fpath)
 {
-	gchar* path = g_path_get_dirname(fpath);
+	gchar* path = NULL;
 	gint mode = S_IRWXU;
 	gint rval = 0;
 	
+	if(!fpath || !(*fpath))
+		return 1;
+		
+	path = g_path_get_dirname(fpath);
+	
+	if(!g_str_has_prefix(path, STORAGEDIR))
+	{
+		rval = 1;
+		goto out;
+	}
+
 	if(g_file_test(path,G_FILE_TEST_EXISTS))
 	{
 		// regular file
 		if(!g_file_test(path,G_FILE_TEST_IS_DIR))
 		{
-			DBG("Removing %s",path);
+			DBG("check_save_directory() Removing %s",path);
 			if(g_remove(path))
 			{
-				g_free(path);
-				return -1;
+				rval = -1;
+				goto out;
 			}
 		}
 		// exists and is a dir
 		else
 		{
-			DBG("Dir %s exists, nothing done.", path);
+			DBG("check_save_directory() Dir %s exists, nothing done.", path);
 			goto out;
 		}
 	}
 	
-	DBG("Creating new dir for saving %s", path);
+	DBG("check_save_directory() Creating new dir for saving %s", path);
 	rval = g_mkdir_with_parents(path,mode);
 
 out:
@@ -417,7 +428,6 @@ static void print_iface(GString* line, char letter, const char *iface,
 	if (mask[0] == 0)
 		return;
 
-	line = g_string_new("");
 	g_string_append_printf(line,"%s -%c ", invert ? " !" : "", letter);
 
 	for (i = 0; i < IFNAMSIZ; i++)
@@ -554,7 +564,8 @@ void print_iptables_rule(GString* line, const struct ipt_entry *e,
 	g_string_append(line, "\n");
 }
 
-static int iptables_check_table(const char *table_name)
+// From iptables-save.c
+int iptables_check_table(const char *table_name)
 {
 	int ret = 1;
 	FILE *procfile = NULL;
@@ -714,7 +725,7 @@ static int iptables_iptc_set_policy(const gchar* table_name, const gchar* chain,
 {
 	gint rval = 0;
 	struct xtc_handle *h = NULL;
-	struct ipt_counters counters = {0};
+	struct xt_counters counters = {0};
 	
 	if(!(table_name && *table_name && chain && *chain && policy && *policy))
 		return 1;
@@ -948,7 +959,7 @@ int connman_iptables_restore(const char* table_name, const char* fpath)
 			!g_str_has_prefix(load_file, STORAGEDIR))
 				goto out;
 	}
-	// File does not exist
+	// File not given or found
 	else
 		load_file = g_strdup_printf("%s/%s", STORAGEDIR, 
 						IPTABLES_DEFAULT_V4_SAVE_FILE);
