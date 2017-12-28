@@ -48,6 +48,7 @@
 #include <linux/netfilter/xt_connmark.h>
 
 #include <iptables_extension.h>
+#include <libiptc/libiptc.h>
 
 #define INFO(fmt,arg...)					connman_info(fmt, ## arg)
 #define ERR(fmt,arg...)						connman_error(fmt, ## arg)
@@ -104,7 +105,8 @@ out:
 	
 }
 
-gboolean iptables_set_file_contents(const gchar *fpath, GString *str)
+gint iptables_set_file_contents(const gchar *fpath, GString *str,
+	gboolean free_str)
 {
 	gboolean rval = false;
 	
@@ -119,12 +121,12 @@ gboolean iptables_set_file_contents(const gchar *fpath, GString *str)
 			ERR("iptables_set_file_contents() %s", err->message);
 			g_error_free(err);
 		}
-
-		// GString character data was not free'd
-		g_string_free(str,TRUE);
 	}
 	
-	return rval;
+	if(free_str && str)
+		g_string_free(str, true);
+	
+	return rval ? 0 : 1;
 }
 
 GString* iptables_get_file_contents(const gchar* fpath)
@@ -389,12 +391,13 @@ static int match_iterate(
 static int print_match_save(GString *line, const struct xt_entry_match *e,
 			const struct ipt_ip *ip)
 {
-	const struct xtables_match *match =
+	struct xtables_match *match =
 		xtables_find_match(e->u.user.name, XTF_TRY_LOAD, NULL);
 
 	if (match) {
 		g_string_append_printf(line, " -m %s", e->u.user.name);
 		print_match(line, ip, match, e);
+		free(match); // xtables_find_match allocates a clone
 	}
 	else
 	{
@@ -593,13 +596,7 @@ static int iptables_save_table(const char *fpath, const char *table_name)
 	g_string_append_printf(line,"# Completed on %s", ctime(&now));
 	iptc_free(h);
 	
-	/*if(!iptables_append_gstring_to_file(fsock, line))
-	{
-		ERR("iptables_save_table() cannot save firewall");
-		return 1;
-	}*/
-	
-	return iptables_set_file_contents(fpath, line) ? 0 : 1;
+	return iptables_set_file_contents(fpath, line, true);
 }
 
 static int iptables_clear_table(const char *table_name)
@@ -626,7 +623,8 @@ static int iptables_clear_table(const char *table_name)
 	if(!iptc_commit(h))
 		rval = 1;
 	
-	iptc_free(h);
+	if(h)
+		iptc_free(h);
 
 	return rval;
 }
@@ -673,7 +671,8 @@ static int iptables_iptc_set_policy(const gchar* table_name, const gchar* chain,
 	}
 
 out:
-	iptc_free(h);
+	if(h)
+		iptc_free(h);
 
 	return rval;
 }
@@ -800,7 +799,6 @@ int connman_iptables_save(const char* table_name, const char* fpath)
 {
 	// TODO ADD MUTEX
 	gint rval = 1;
-	//gint fsock_write = -1;
 	char *save_file = NULL, *dir = NULL;
 	
 	if(save_in_progress)
@@ -808,9 +806,6 @@ int connman_iptables_save(const char* table_name, const char* fpath)
 		DBG("SAVE ALREADY IN PROGRESS");
 		return -1;
 	}
-
-	/*if(fsock_write != -1)
-		close_socket(&fsock_write);*/
 		
 	// Remove all /./ and /../ and expand symlink
 	save_file = realpath(fpath,NULL);
@@ -833,14 +828,6 @@ int connman_iptables_save(const char* table_name, const char* fpath)
 	DBG("connman_iptables_save() saving firewall to %s", save_file);
 
 	save_in_progress = true;
-	
-	/*if((fsock_write = open_write_socket(save_file)) > 0)
-	{
-		rval = iptables_save_table(fsock_write, table_name);
-		
-		if(close_socket(&fsock_write) != 0)
-			DBG("connman_iptables_save() cannot close write socket");
-	}*/
 	
 	rval = iptables_save_table(save_file, table_name);
 	

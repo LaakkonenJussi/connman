@@ -76,7 +76,7 @@ typedef struct output_capture_data {
 
 // Function protos
 gint check_save_directory(const char* fpath);
-gboolean iptables_set_file_contents(const gchar *fpath, GString *str);
+gboolean iptables_set_file_contents(const gchar *fpath, GString *str, gboolean free_str);
 GString* iptables_get_file_contents(const gchar* fpath);
 
 gint stdout_capture_start(output_capture_data *data);
@@ -89,20 +89,22 @@ void test_iptables_file_access_basic()
 {
 	__connman_storage_init(NULL, 0700, 0600); // From main.c
 	
-	g_assert(!iptables_set_file_contents(NULL, NULL));
-	g_assert(!iptables_set_file_contents("", NULL));
+	g_assert(iptables_set_file_contents(NULL, NULL, true));
+	g_assert(iptables_set_file_contents(NULL, NULL, false));
+	
+	g_assert(iptables_set_file_contents("", NULL, true));
 	
 	gchar *path = g_strdup("some/path");
-	g_assert(!iptables_set_file_contents(path,NULL));
+	g_assert(iptables_set_file_contents(path,NULL, true));
 	
 	g_assert(!iptables_get_file_contents(NULL));
 	g_assert(!iptables_get_file_contents(""));
 	
 	GString *str = g_string_new(NULL);
-	g_assert(!iptables_set_file_contents(path, str));
+	g_assert(iptables_set_file_contents(path, str, false));
 	
 	g_string_printf(str, "content");
-	g_assert(!iptables_set_file_contents(path, str));
+	g_assert(iptables_set_file_contents(path, str, false));
 	
 	g_free(path);
 	g_string_free(str, true);
@@ -126,7 +128,7 @@ void test_iptables_file_access_fail()
 			
 			// First check that these paths cannot be written to
 			g_assert(check_save_directory(path));
-			g_assert(!iptables_set_file_contents(path,str));
+			g_assert(iptables_set_file_contents(path, str, false));
 			
 			g_free(path);
 		}	
@@ -147,7 +149,7 @@ void test_iptables_file_access_success()
 	__connman_storage_init("/tmp", 0700, 0600); // From main.c
 
 	g_assert(!check_save_directory(path));
-	g_assert(iptables_set_file_contents(path,str));
+	g_assert(!iptables_set_file_contents(path, str, true));
 	g_assert(g_file_test(path,G_FILE_TEST_EXISTS));
 	
 	GString* str_get = iptables_get_file_contents(path);
