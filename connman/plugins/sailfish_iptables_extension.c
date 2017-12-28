@@ -104,7 +104,8 @@ out:
 	
 }
 
-gboolean iptables_set_file_contents(const gchar *fpath, GString *str)
+gint iptables_set_file_contents(const gchar *fpath, GString *str,
+	gboolean free_str)
 {
 	gboolean rval = false;
 	
@@ -119,12 +120,12 @@ gboolean iptables_set_file_contents(const gchar *fpath, GString *str)
 			ERR("iptables_set_file_contents() %s", err->message);
 			g_error_free(err);
 		}
-
-		// GString character data was not free'd
-		g_string_free(str,TRUE);
 	}
 	
-	return rval;
+	if(free_str && str)
+		g_string_free(str, true);
+	
+	return rval ? 0 : 1;
 }
 
 GString* iptables_get_file_contents(const gchar* fpath)
@@ -593,13 +594,7 @@ static int iptables_save_table(const char *fpath, const char *table_name)
 	g_string_append_printf(line,"# Completed on %s", ctime(&now));
 	iptc_free(h);
 	
-	/*if(!iptables_append_gstring_to_file(fsock, line))
-	{
-		ERR("iptables_save_table() cannot save firewall");
-		return 1;
-	}*/
-	
-	return iptables_set_file_contents(fpath, line) ? 0 : 1;
+	return iptables_set_file_contents(fpath, line, true);
 }
 
 static int iptables_clear_table(const char *table_name)
@@ -800,7 +795,6 @@ int connman_iptables_save(const char* table_name, const char* fpath)
 {
 	// TODO ADD MUTEX
 	gint rval = 1;
-	//gint fsock_write = -1;
 	char *save_file = NULL, *dir = NULL;
 	
 	if(save_in_progress)
@@ -808,9 +802,6 @@ int connman_iptables_save(const char* table_name, const char* fpath)
 		DBG("SAVE ALREADY IN PROGRESS");
 		return -1;
 	}
-
-	/*if(fsock_write != -1)
-		close_socket(&fsock_write);*/
 		
 	// Remove all /./ and /../ and expand symlink
 	save_file = realpath(fpath,NULL);
@@ -833,14 +824,6 @@ int connman_iptables_save(const char* table_name, const char* fpath)
 	DBG("connman_iptables_save() saving firewall to %s", save_file);
 
 	save_in_progress = true;
-	
-	/*if((fsock_write = open_write_socket(save_file)) > 0)
-	{
-		rval = iptables_save_table(fsock_write, table_name);
-		
-		if(close_socket(&fsock_write) != 0)
-			DBG("connman_iptables_save() cannot close write socket");
-	}*/
 	
 	rval = iptables_save_table(save_file, table_name);
 	
