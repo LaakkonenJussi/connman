@@ -594,6 +594,7 @@ static int iptables_save_table(const char *fpath, const char *table_name)
 	now = time(NULL);
 	g_string_append_printf(line,"COMMIT\n");
 	g_string_append_printf(line,"# Completed on %s", ctime(&now));
+	
 	iptc_free(h);
 	
 	return iptables_set_file_contents(fpath, line, true);
@@ -799,7 +800,7 @@ int connman_iptables_save(const char* table_name, const char* fpath)
 {
 	// TODO ADD MUTEX
 	gint rval = 1;
-	char *save_file = NULL, *dir = NULL;
+	char *save_file = NULL;
 	
 	if(save_in_progress)
 	{
@@ -835,7 +836,6 @@ int connman_iptables_save(const char* table_name, const char* fpath)
 	
 out:
 	g_free(save_file);
-	g_free(dir);
 
 	return rval;
 }
@@ -891,12 +891,30 @@ const char* __connman_iptables_default_save_path(int ip_version)
 int connman_iptables_new_chain(const char *table_name,
 					const char *chain)
 {
+	struct xtc_handle *h = get_iptc_handle(table_name);
+	
+	if(!h || !chain || !(*chain))
+		return 1;
+	
+	// Do not allow to add duplicate of builtin chain or a chain with same name 
+	if(iptc_builtin(chain, h) || iptc_is_chain(chain, h))
+		return 1;
+		
+	iptc_free(h);
+
 	return __connman_iptables_new_chain(table_name, chain);
 }
 	
 int connman_iptables_delete_chain(const char *table_name,
 					const char *chain)
 {
+	struct xtc_handle *h = get_iptc_handle(table_name);
+	
+	if(!h || !chain || !(*chain) || iptc_builtin(chain, h))
+		return 1;
+	
+	iptc_free(h);
+
 	return __connman_iptables_delete_chain(table_name, chain);
 }
 
