@@ -30,6 +30,14 @@
 extern "C" {
 #endif
 
+struct iptables_content {
+	gchar *table;
+	GList *chains;
+	GList *rules;
+};
+
+typedef struct iptables_content connman_iptables_content;
+
 /* IPTABLES FUNCTIONS */
 
 int connman_iptables_new_chain(const char *table_name,
@@ -66,6 +74,9 @@ int connman_iptables_restore(const char* tablename, const char *fpath);
 int connman_iptables_clear(const char* tablename);
 
 const char* connman_iptables_default_save_path(int ip_version);
+
+connman_iptables_content* connman_iptables_get_content(const char *table_name);
+void connman_iptables_free_content(connman_iptables_content *content);
 					
 /* IPTABLES FUNCTIONS END */
 
