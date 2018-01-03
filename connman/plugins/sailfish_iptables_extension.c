@@ -666,9 +666,9 @@ static int iptables_iptc_set_policy(const gchar* table_name, const gchar* chain,
 
 	if(!iptc_is_chain(chain,h))
 	{
-		ERR("iptables_iptc_set_policy() invalid chain given.");
-		rval = 1;
-		goto out;
+		DBG("iptables_iptc_set_policy() chain does not exist, adding new.");
+		rval = connman_iptables_new_chain(table_name, chain);
+		goto out; // No policy change for custom chains
 	}
 	
 	// Do nothing for chains that are not builtin, iptc_set_policy supports
@@ -913,32 +913,26 @@ const char* __connman_iptables_default_save_path(int ip_version)
 		return g_strdup("Not implemented");
 }
 
+/*
+	Returns: 0 Ok, -1 Parameter error, -EINVAL or -ENOMEM on Error
+*/
 int connman_iptables_new_chain(const char *table_name,
 					const char *chain)
 {
-	struct xtc_handle *h = get_iptc_handle(table_name);
-	
-	if(!h || !chain || !(*chain))
-		return 1;
-	
-	// Do not allow to add duplicate of builtin chain or a chain with same name 
-	if(iptc_builtin(chain, h) || iptc_is_chain(chain, h))
-		return 1;
-		
-	iptc_free(h);
+	if(!table_name || !(*table_name) || !chain || !(*chain))
+		return -1;
 
 	return __connman_iptables_new_chain(table_name, chain);
 }
-	
+
+/*
+	Returns: 0 Ok, -1 Parameter error, -EINVAL or -ENOMEM on error,
+*/
 int connman_iptables_delete_chain(const char *table_name,
 					const char *chain)
 {
-	struct xtc_handle *h = get_iptc_handle(table_name);
-	
-	if(!h || !chain || !(*chain) || iptc_builtin(chain, h))
-		return 1;
-	
-	iptc_free(h);
+	if(!table_name || !(*table_name) || !chain || !(*chain))
+		return -1;
 
 	return __connman_iptables_delete_chain(table_name, chain);
 }
@@ -946,6 +940,9 @@ int connman_iptables_delete_chain(const char *table_name,
 int connman_iptables_flush_chain(const char *table_name,
 					const char *chain)
 {
+	if(!table_name || !(*table_name) || !chain || !(*chain))
+		return -1;
+		
 	return __connman_iptables_flush_chain(table_name, chain);
 }
 	
@@ -1044,7 +1041,7 @@ connman_iptables_content* iptables_get_content(GString *output, const gchar* tab
 				policy_tokens = g_strsplit(&(tokens[i][1]), " ", 3);
 				if(g_strv_length(policy_tokens) > 2)
 				{
-					content->chains = g_list_append(content->chains, 
+					content->chains = g_list_prepend(content->chains,
 						g_strdup_printf("%s %s", 
 							policy_tokens[0], policy_tokens[1]));
 				}
@@ -1053,7 +1050,7 @@ connman_iptables_content* iptables_get_content(GString *output, const gchar* tab
 				break;
 			// Rule
 			case '-':
-				content->rules = g_list_append(content->rules,
+				content->rules = g_list_prepend(content->rules,
 					g_strdup(tokens[i]));	
 				break;
 			// Anything else, stop processing
@@ -1062,6 +1059,9 @@ connman_iptables_content* iptables_get_content(GString *output, const gchar* tab
 				break;
 		}
 	}
+	
+	content->chains = g_list_reverse(content->chains);
+	content->rules = g_list_reverse(content->rules);
 	
 	g_strfreev(tokens);
 	
