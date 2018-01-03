@@ -597,6 +597,10 @@ static int iptables_add_chain(struct connman_iptables *table,
 	u_int16_t entry_head_size, entry_return_size;
 
 	DBG("table %s chain %s", table->name, name);
+	
+	/* Do not allow to add duplicate chains */
+	if(find_chain_head(table, name))
+		return -EINVAL;
 
 	last = g_list_last(table->entries);
 

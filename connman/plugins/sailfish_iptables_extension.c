@@ -913,32 +913,26 @@ const char* __connman_iptables_default_save_path(int ip_version)
 		return g_strdup("Not implemented");
 }
 
+/*
+	Returns: 0 Ok, -1 Parameter error, -EINVAL or -ENOMEM on Error
+*/
 int connman_iptables_new_chain(const char *table_name,
 					const char *chain)
 {
-	struct xtc_handle *h = get_iptc_handle(table_name);
-	
-	if(!h || !chain || !(*chain))
-		return 1;
-	
-	// Do not allow to add duplicate of builtin chain or a chain with same name 
-	if(iptc_builtin(chain, h) || iptc_is_chain(chain, h))
-		return 1;
-		
-	iptc_free(h);
+	if(!table_name || !(*table_name) || !chain || !(*chain))
+		return -1;
 
 	return __connman_iptables_new_chain(table_name, chain);
 }
-	
+
+/*
+	Returns: 0 Ok, -1 Parameter error, -EINVAL or -ENOMEM on error,
+*/
 int connman_iptables_delete_chain(const char *table_name,
 					const char *chain)
 {
-	struct xtc_handle *h = get_iptc_handle(table_name);
-	
-	if(!h || !chain || !(*chain) || iptc_builtin(chain, h))
-		return 1;
-	
-	iptc_free(h);
+	if(!table_name || !(*table_name) || !chain || !(*chain))
+		return -1;
 
 	return __connman_iptables_delete_chain(table_name, chain);
 }
@@ -946,6 +940,9 @@ int connman_iptables_delete_chain(const char *table_name,
 int connman_iptables_flush_chain(const char *table_name,
 					const char *chain)
 {
+	if(!table_name || !(*table_name) || !chain || !(*chain))
+		return -1;
+		
 	return __connman_iptables_flush_chain(table_name, chain);
 }
 	
