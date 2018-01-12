@@ -49,6 +49,9 @@ int connman_iptables_delete_chain(const char *table_name,
 int connman_iptables_flush_chain(const char *table_name,
 					const char *chain);
 
+int connman_iptables_find_chain(const char *table_name,
+					const char *chain);
+
 int connman_iptables_insert(const char *table_name,
 				const char *chain,
 				const char *rule_spec);
@@ -77,6 +80,7 @@ const char* connman_iptables_default_save_path(int ip_version);
 
 connman_iptables_content* connman_iptables_get_content(const char *table_name);
 void connman_iptables_free_content(connman_iptables_content *content);
+
 					
 /* IPTABLES FUNCTIONS END */
 

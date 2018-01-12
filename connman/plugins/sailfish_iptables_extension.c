@@ -953,6 +953,18 @@ int connman_iptables_iterate_chains(const char *table_name,
 	return __connman_iptables_iterate_chains(table_name, cb, user_data);
 }
 
+/*
+	Returns: 0 if chain found, 1 if not found, -1 Parameter error,
+	-EINVAL on table not found error
+*/
+int connman_iptables_find_chain(const char *table_name, const char *chain)
+{
+	if(!table_name || !(*table_name) || !chain || !(*chain))
+		return -1;
+	
+	return __connman_iptables_find_chain(table_name, chain);
+}
+
 int connman_iptables_insert(const char *table_name,
 				const char *chain,
 				const char *rule_spec)
