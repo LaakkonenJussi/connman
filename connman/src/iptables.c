@@ -2209,7 +2209,7 @@ int __connman_iptables_find_chain(const char *table_name,
 		return -EINVAL;
 	
 	if(!find_chain_head(table, chain))
-		return 1; // Not Found
+		return -1; // Not Found
 	
 	return 0; // Found
 }

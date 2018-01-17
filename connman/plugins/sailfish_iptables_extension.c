@@ -960,7 +960,7 @@ int connman_iptables_iterate_chains(const char *table_name,
 int connman_iptables_find_chain(const char *table_name, const char *chain)
 {
 	if(!table_name || !(*table_name) || !chain || !(*chain))
-		return -1;
+		return -EINVAL;
 	
 	return __connman_iptables_find_chain(table_name, chain);
 }
