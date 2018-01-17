@@ -162,6 +162,9 @@ typedef struct output_capture_data {
 
 gint stdout_capture_start(output_capture_data *data)
 {
+	if(fflush(stdout))
+		ERR("stdout_capture_start() cannot fflush stdout before use.");
+	
 	data->stdout_saved = dup(fileno(stdout));
 	
 	if(pipe(data->stdout_pipes))
@@ -705,25 +708,32 @@ out:
 
 static int iptables_parse_policy(const gchar* table_name, const gchar* policy)
 {
-	gint rval = 1;
+	gint rval = 1, policy_tokens = 3;
 	
-	if(table_name && *table_name && policy && *policy)
+	if(!table_name || !(*table_name) || !policy || !(*policy))
+		return rval;
+		
+	// Format :CHAIN POLICY [int:int]
+	gchar** tokens = g_strsplit(&(policy[1]), " ", policy_tokens);
+	
+	if(tokens && g_strv_length(tokens) == policy_tokens)
 	{
-		// Format :CHAIN POLICY [int:int]
-		gchar** tokens = g_strsplit(&(policy[1]), " ", 3);
-		
-		gchar** counter_tokens = g_strsplit_set(tokens[2], "[:]", 0);
-		
-		// counters start with '[' so first token is empty, start from 1
-		guint64 packet_counter = g_ascii_strtoull(counter_tokens[1], NULL, 10);
-		guint64 byte_counter = g_ascii_strtoull(counter_tokens[2], NULL, 10);
-				
-		rval = iptables_iptc_set_policy(table_name, tokens[0], tokens[1],
-				packet_counter, byte_counter);
+		gchar** counter_tokens = g_strsplit_set(tokens[2], "[:]", -1);
 
-		g_strfreev(tokens);
+		if(counter_tokens && g_strv_length(counter_tokens) > 2)
+		{	
+			// counters start with '[' so first token is empty, start from 1
+			guint64 packet_cntr = g_ascii_strtoull(counter_tokens[1],NULL, 10);
+			guint64 byte_cntr = g_ascii_strtoull(counter_tokens[2], NULL, 10);
+			
+			rval = iptables_iptc_set_policy(table_name, tokens[0], tokens[1],
+					packet_cntr, byte_cntr);
+		}
 		g_strfreev(counter_tokens);
+	
 	}
+	
+	g_strfreev(tokens);
 	
 	return rval;
 }
@@ -738,19 +748,24 @@ static int iptables_parse_rule(const gchar* table_name, const gchar* rule)
 		// Format, e.g., -A CHAIN -p tcp -s 1.2.3.4  ...
 		gchar** tokens = g_strsplit(&(rule[1])," ", 0);
 		
-		GString *rule_str = g_string_new(NULL);
+		if(tokens && g_strv_length(tokens) > 2)
+		{
+			GString *rule_str = g_string_new(NULL);
 		
-		// Start from rule spec
-		for(i = 2 ; tokens[i] && *(tokens[i]); i++)
-			g_string_append_printf(rule_str,"%s ", tokens[i]);
+			// Start from rule spec
+			for(i = 2 ; tokens[i] && *(tokens[i]); i++)
+				g_string_append_printf(rule_str,"%s ", tokens[i]);
 			
-		DBG("Adding to table \"%s\" chain \"%s\" rule: %s",
-			table_name, tokens[1], rule_str->str);
+			DBG("Adding to table \"%s\" chain \"%s\" rule: %s",
+				table_name, tokens[1], rule_str->str);
 			
-		rval = __connman_iptables_append(table_name, tokens[1], rule_str->str);
+			rval = __connman_iptables_append(table_name, tokens[1],
+				rule_str->str);
+		
+			g_string_free(rule_str,true);
+		}
 		
 		g_strfreev(tokens);
-		g_string_free(rule_str,true);
 	}
 	
 	return rval;
@@ -954,8 +969,7 @@ int connman_iptables_iterate_chains(const char *table_name,
 }
 
 /*
-	Returns: 0 if chain found, 1 if not found, -1 Parameter error,
-	-EINVAL on table not found error
+	Returns: 0 if chain found, -ENOENT if not found, -EINVAL on parameter error
 */
 int connman_iptables_find_chain(const char *table_name, const char *chain)
 {
