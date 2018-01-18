@@ -192,10 +192,35 @@ gint stdout_capture_start(output_capture_data *data)
 void stdout_capture_data(output_capture_data *data)
 {
 	data->stdout_data = g_try_malloc0(data->stdout_read_limit);
+	ssize_t bytes_read = 0;
 
-	data->stdout_bytes_read = read(data->stdout_pipes[0],
-		data->stdout_data,
-		data->stdout_read_limit);
+	do {
+		bytes_read = read(data->stdout_pipes[0],
+			&(data->stdout_data[data->stdout_bytes_read]),
+			data->stdout_read_limit);
+
+		data->stdout_bytes_read += bytes_read;
+		
+		// Read full amount
+		if(bytes_read == data->stdout_read_limit)
+		{
+			// Increase size of the data by the amount of read limit
+			data->stdout_data = g_try_realloc(data->stdout_data, 
+				data->stdout_bytes_read + data->stdout_read_limit);
+			
+			// g_try_realloc() does not zero bytes, do it with memset
+			memset(&(data->stdout_data[data->stdout_bytes_read]), '\0',
+				data->stdout_read_limit);
+		}
+		// Read less than limit, stop
+		else
+			break;
+			
+	} while(bytes_read > 0);
+	
+	if(bytes_read == -1)
+		ERR("stdout_capture_data() error while reading stdout: %s",
+			strerror(errno));
 }
 
 gint stdout_capture_end(output_capture_data *data)
@@ -211,7 +236,6 @@ gint stdout_capture_end(output_capture_data *data)
 /*
 	Calls the save() function of iptables entry. Captures the stdout
 	of the save() method and appends it to given GString.
-
 */
 static void print_target_or_match(GString *line, const void *ip,
 	const struct xtables_target *target, const struct xt_entry_target *t_entry,
@@ -220,7 +244,7 @@ static void print_target_or_match(GString *line, const void *ip,
 	output_capture_data data = {
 		.stdout_pipes = {0},
 		.stdout_saved = 0,
-		.stdout_read_limit = 2000,
+		.stdout_read_limit = 1024,
 		.stdout_bytes_read = 0,
 		.stdout_data = NULL
 	};
@@ -269,7 +293,9 @@ static void print_match(GString *line, const void *ip,
 		print_target_or_match(line,ip,NULL,NULL,match,entry);
 }
 
-// Adapted from iptables source iptables.c
+/* 	Adapted from GPLv2 iptables source file (v.1.4.15) iptables.c:987
+	function print_proto().
+*/
 static void print_proto(GString* line, uint16_t proto, int invert)
 {
 	if (proto) {
@@ -296,7 +322,7 @@ static void print_proto(GString* line, uint16_t proto, int invert)
 	}
 }
 
-// Adapted from iptables source iptables.c
+/* 	From GPLv2 iptables source file (v.1.4.15) iptables.c:1010 */
 #define IP_PARTS_NATIVE(n)			\
 (unsigned int)((n)>>24)&0xFF,			\
 (unsigned int)((n)>>16)&0xFF,			\
@@ -305,7 +331,9 @@ static void print_proto(GString* line, uint16_t proto, int invert)
 
 #define IP_PARTS(n) IP_PARTS_NATIVE(ntohl(n))
 
-// Adapted from iptables source iptables.c
+/* 	Adapted from GPLv2 iptables source file (v.1.4.15) iptables.c:1068
+	function print_ip().
+*/
 static void print_ip(GString* line, const char *prefix, uint32_t ip,
 		     uint32_t mask, int invert)
 {
@@ -335,7 +363,9 @@ static void print_ip(GString* line, const char *prefix, uint32_t ip,
 	}
 }
 
-// Adapted from iptables source iptables.c
+/* 	Adapted from GPLv2 iptables source file (v.1.4.15) iptables.c:1020
+	function print_iface().
+*/
 static void print_iface(GString* line, char letter, const char *iface,
 	const unsigned char *mask, int invert)
 {
@@ -364,8 +394,8 @@ static void print_iface(GString* line, char letter, const char *iface,
 	}
 }
 
-/* Re-implemented XT_MATCH_ITERATE preprocessor macro in C from iptables
-	source include/linux/netfilter/x_tables.h
+/* Re-implemented XT_MATCH_ITERATE preprocessor macro in C from GPLv2 iptables
+	source header include/linux/netfilter/x_tables.h
 */
 static int match_iterate(
 	GString *line, const struct ipt_entry *e,
@@ -390,7 +420,9 @@ static int match_iterate(
 	return rval;
 }
 
-// Adapted from iptables source iptables.c
+/* 	Adapted from GPLv2 iptables source file (v.1.4.15) iptables.c:1044
+	function print_match_save().
+*/
 static int print_match_save(GString *line, const struct xt_entry_match *e,
 			const struct ipt_ip *ip)
 {
@@ -413,7 +445,9 @@ static int print_match_save(GString *line, const struct xt_entry_match *e,
 	return 0;
 }
 
-// Adapted from iptables source iptables.c
+/* 	Adapted from GPLv2 iptables source file (v.1.4.15) iptables.c:59
+	function print_rule4().
+*/
 void print_iptables_rule(GString* line, const struct ipt_entry *e,
 		struct xtc_handle *h, const char *chain, int counters)
 {
@@ -481,7 +515,9 @@ void print_iptables_rule(GString* line, const struct ipt_entry *e,
 	g_string_append(line, "\n");
 }
 
-// From iptables-save.c
+/* 	Adapted from GPLv2 iptables source file (v.1.4.15) iptables-save.c:35
+	function for_each_table().
+*/
 int iptables_check_table(const char *table_name)
 {
 	int ret = 1;
@@ -539,7 +575,9 @@ static struct xtc_handle* get_iptc_handle(const char *table_name)
 	return h;
 }
 
-// Adapted from iptables source iptables-save.c
+/* 	Adapted from GPLv2 iptables source file (v.1.4.15) iptables-save.c:59
+	function do_output().
+*/
 static int iptables_save_table(const char *fpath, GString** output,
 	const char *table_name, gboolean save_to_file)
 {
