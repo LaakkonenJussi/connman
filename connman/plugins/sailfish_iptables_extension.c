@@ -62,6 +62,7 @@ gint check_save_directory(const char* fpath)
 {
 	gchar* path = NULL;
 	gint mode = S_IRWXU;
+	gint access_mode = R_OK|W_OK|X_OK;
 	gint rval = 0;
 	
 	if(!fpath || !(*fpath))
@@ -77,19 +78,32 @@ gint check_save_directory(const char* fpath)
 
 	if(g_file_test(path,G_FILE_TEST_EXISTS))
 	{
-		// regular file
-		if(!g_file_test(path,G_FILE_TEST_IS_DIR))
+		// Try to remove regular file or symlink 
+		if(g_file_test(path,G_FILE_TEST_IS_REGULAR) ||
+			g_file_test(path, G_FILE_TEST_IS_SYMLINK))
 		{
 			DBG("check_save_directory() Removing %s",path);
 			if(g_remove(path))
 			{
+				ERR("check_save_directory() Remove of %s failed (%s)",
+					path, strerror(errno));
 				rval = -1;
 				goto out;
 			}
 		}
+		
 		// exists and is a dir
-		else
+		if(g_file_test(path, G_FILE_TEST_IS_DIR))
 		{
+			// Check that this dir can be accessed
+			if(access(path, access_mode) == -1)
+			{
+				printf("check_save_directory() Dir %s cannot be accessed (%s).",
+					path, strerror(errno));
+				rval = -1;
+				goto out;
+			}
+			
 			DBG("check_save_directory() Dir %s exists, nothing done.", path);
 			goto out;
 		}
@@ -105,20 +119,30 @@ out:
 	
 }
 
+/*
+	Set content to given file, calls check_save_directory() to check the
+	save location.
+	
+	@returns: 0 on success, 1 on access/content and -1 on parameter error.
+*/
 gint iptables_set_file_contents(const gchar *fpath, GString *str,
 	gboolean free_str)
 {
-	gboolean rval = false;
+	gint rval = 1;
 	
-	if(fpath && *fpath && !check_save_directory(fpath) && str && str->len)
+	if(!fpath || !(*fpath) || !str || !str->len)
+		return -1;
+		
+	if(!check_save_directory(fpath))
 	{
 		GError *err = NULL;
 		
-		rval = g_file_set_contents(fpath, str->str, str->len, &err);
-		
-		if(!rval || err)
+		rval = g_file_set_contents(fpath, str->str, str->len, &err) ? 0 : 1;
+			
+		if(rval || err)
 		{
-			ERR("iptables_set_file_contents() %s", err->message);
+			ERR("iptables_set_file_contents() %s",
+				err ? err->message : "noerror");
 			g_error_free(err);
 		}
 	}
@@ -126,14 +150,17 @@ gint iptables_set_file_contents(const gchar *fpath, GString *str,
 	if(free_str && str)
 		g_string_free(str, true);
 	
-	return rval ? 0 : 1;
+	return rval;
 }
 
+/*
+	Get content from a file specified in path.
+*/
 GString* iptables_get_file_contents(const gchar* fpath)
 {
 	GString *contents = NULL;
 	
-	if(fpath && *fpath)
+	if(fpath && *fpath && g_str_has_prefix(fpath, STORAGEDIR))
 	{
 		gchar *content = NULL;
 		gsize len = -1;
