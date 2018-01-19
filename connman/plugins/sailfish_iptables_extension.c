@@ -70,7 +70,10 @@ gint check_save_directory(const char* fpath)
 		
 	path = g_path_get_dirname(fpath);
 	
-	if(!g_str_has_prefix(path, STORAGEDIR))
+	// If given path has no proper prefix or is is ending with / or
+	// is the same as the STORAGEDIR path
+	if(!g_str_has_prefix(path, STORAGEDIR) || g_str_has_suffix(path,"/") ||
+		g_strcmp0(path,STORAGEDIR) == 0)
 	{
 		rval = 1;
 		goto out;
@@ -98,7 +101,7 @@ gint check_save_directory(const char* fpath)
 			// Check that this dir can be accessed
 			if(access(path, access_mode) == -1)
 			{
-				printf("check_save_directory() Dir %s cannot be accessed (%s).",
+				ERR("check_save_directory() Dir %s cannot be accessed (%s).",
 					path, strerror(errno));
 				rval = -1;
 				goto out;
@@ -114,9 +117,7 @@ gint check_save_directory(const char* fpath)
 
 out:
 	g_free(path);
-	
 	return rval;
-	
 }
 
 /*

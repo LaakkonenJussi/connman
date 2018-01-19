@@ -22,12 +22,14 @@
  */
 
 #include <glib.h>
+#include <glib/gstdio.h>
 #include <stdio.h>
 #include <unistd.h>
 #include "src/connman.h"
 #include "include/iptables_extension.h"
 
 #define PREFIX 	"/iptables"
+#define TEST_PATH_PREFIX "/tmp/connman_test"
 
 const gchar const * invalid_paths[] = {
 	"/",
@@ -115,6 +117,38 @@ int iptables_check_table(const char *table_name);
 
 connman_iptables_content* iptables_get_content(GString *output, const gchar* table_name);
 
+gchar* setup_test_directory()
+{
+	gchar *test_path = NULL;
+
+	test_path = g_strdup_printf("%s.XXXXXX", TEST_PATH_PREFIX);
+	
+	g_assert(test_path);
+	
+	if(!g_file_test(test_path, G_FILE_TEST_EXISTS))
+		test_path = g_mkdtemp(test_path);
+	
+	g_assert(g_file_test(test_path, G_FILE_TEST_EXISTS));
+	g_assert(g_file_test(test_path, G_FILE_TEST_IS_DIR));
+	
+	return test_path;
+}
+
+void cleanup_test_directory(gchar *test_path)
+{
+	gint access_mode = R_OK|W_OK|X_OK;
+		
+	if(g_file_test(test_path, G_FILE_TEST_IS_DIR))
+	{
+		g_assert(!access(test_path, access_mode));
+		
+		// TODO add recursive deletion of all files in test_path
+		g_rmdir(test_path);
+	}
+	
+	g_free(test_path);
+}
+
 void test_iptables_file_access_basic()
 {
 	__connman_storage_init(NULL, 0700, 0600); // From main.c
@@ -146,17 +180,58 @@ void test_iptables_file_access_fail()
 {	
 	gint i = 0, j = 0;
 	GString *str = g_string_new("content");
+	gchar *test_path = setup_test_directory();
 	
-	__connman_storage_init(NULL, 0700, 0600); // From main.c
+	__connman_storage_init(test_path, 0700, 0600); // From main.c
 	
 	for(i = 0; invalid_paths[i]; i++)
 	{
 		for(j = 0; test_files[j]; j++)
 		{
-			gchar *path = g_strdup_printf("%s%s", invalid_paths[i],
-				test_files[j]);
+			gchar *path = g_strdup_printf("%s%s%s", test_path,
+				invalid_paths[i], test_files[j]);
 			
-			// First check that these paths cannot be written to
+			/*  Check that the path cannot be accessed. This check is done for
+				the system directories and to avoid littering the filesystem
+				is not attempted to be written to if check_save_directory() is
+				not checking properly.
+			*/
+			g_assert(check_save_directory(path));
+			
+			g_free(path);
+		}	
+	}
+	
+	g_string_free(str,true);
+	
+	__connman_storage_cleanup();
+	
+	cleanup_test_directory(test_path);
+}
+
+void test_iptables_file_access_write_fail()
+{	
+	gint i = 0, j = 0;
+	gchar *init_path = NULL;
+	gchar *test_path = NULL;
+	
+	GString *str = g_string_new("content");
+	
+	test_path = setup_test_directory();
+	init_path = g_strdup_printf("%s%s", test_path, "/var/lib");
+	
+	__connman_storage_init(init_path, 0700, 0600); // From main.c
+	
+	for(i = 0; invalid_paths[i]; i++)
+	{
+		for(j = 0; test_files[j]; j++)
+		{
+			gchar *path = g_strdup_printf("%s%s%s",
+				test_path, invalid_paths[i], test_files[j]);
+			
+			/*	First check that these paths cannot be written to - the system
+				paths are prefixed, so system directories are not touched here
+			*/
 			g_assert(check_save_directory(path));
 			g_assert(iptables_set_file_contents(path, str, false));
 			
@@ -167,16 +242,25 @@ void test_iptables_file_access_fail()
 	g_string_free(str,true);
 	
 	__connman_storage_cleanup();
+	
+	g_free(init_path);
+	
+	cleanup_test_directory(test_path);
 }
 
 void test_iptables_file_access_success()
 {
 	gchar content[] = "content";
 	GString *str = g_string_new(content);
-	gchar *path = g_strdup("/tmp/connman/iptables-test/test.file");
+	gchar *test_path = NULL;
+	gchar *path = NULL;
+	
+	test_path = setup_test_directory();
+	path = g_strdup_printf("%s/%s", test_path, "connman/iptables-test/test.file");
 	
 	// Initialize custom dir for testing
-	__connman_storage_init("/tmp", 0700, 0600); // From main.c
+	setup_test_directory();
+	__connman_storage_init(test_path, 0700, 0600); // From main.c
 
 	g_assert(!check_save_directory(path));
 	g_assert(!iptables_set_file_contents(path, str, true));
@@ -191,14 +275,17 @@ void test_iptables_file_access_success()
 	g_string_free(str_get, true);
 	
 	__connman_storage_cleanup();
+	
+	cleanup_test_directory(test_path);
 }
 
 void test_iptables_save_fail()
 {
 	gint i = 0, j = 0;
 	gchar table_name[] = "filter";
+	gchar *test_path = setup_test_directory();
 	
-	__connman_storage_init(NULL, 0700, 0600); // From main.c
+	__connman_storage_init(test_path, 0700, 0600); // From main.c
 	
 	g_assert(connman_iptables_save(NULL,NULL));
 	g_assert(connman_iptables_save("",NULL));
@@ -211,8 +298,8 @@ void test_iptables_save_fail()
 	{
 		for(j = 0; test_files[j]; j++)
 		{
-			gchar *path = g_strdup_printf("%s%s", invalid_paths[i],
-				test_files[j]);
+			gchar *path = g_strdup_printf("%s%s%s", test_path, 
+				invalid_paths[i], test_files[j]);
 			
 			g_assert(connman_iptables_save(table_name, path));
 			
@@ -221,14 +308,17 @@ void test_iptables_save_fail()
 	}
 	
 	__connman_storage_cleanup();
+	
+	cleanup_test_directory(test_path);
 }
 
 void test_iptables_restore_fail()
 {
 	gint i = 0, j = 0;
 	gchar table_name[] = "filter";
+	gchar *test_path = setup_test_directory();
 	
-	__connman_storage_init(NULL, 0700, 0600); // From main.c
+	__connman_storage_init(test_path, 0700, 0600); // From main.c
 	
 	g_assert(connman_iptables_restore(NULL,NULL));
 	g_assert(connman_iptables_restore("",NULL));
@@ -241,8 +331,8 @@ void test_iptables_restore_fail()
 	{
 		for(j = 0; test_files[j]; j++)
 		{
-			gchar *path = g_strdup_printf("%s%s", invalid_paths[i],
-				test_files[j]);
+			gchar *path = g_strdup_printf("%s%s%s", test_path,
+				invalid_paths[i], test_files[j]);
 			
 			g_assert(connman_iptables_restore(table_name, path));
 			
@@ -251,6 +341,8 @@ void test_iptables_restore_fail()
 	}
 	
 	__connman_storage_cleanup();
+	
+	cleanup_test_directory(test_path);
 }
 
 void test_iptables_clear_fail()
@@ -361,6 +453,7 @@ int main(int argc, char **argv)
 	
 	g_test_add_func(PREFIX "/file_access_basic", test_iptables_file_access_basic);
 	g_test_add_func(PREFIX "/file_access_fail", test_iptables_file_access_fail);
+	g_test_add_func(PREFIX "/file_access_write_fail", test_iptables_file_access_write_fail);
 	g_test_add_func(PREFIX "/file_access_success", test_iptables_file_access_success);
 	
 	g_test_add_func(PREFIX "/save_fail", test_iptables_save_fail);
