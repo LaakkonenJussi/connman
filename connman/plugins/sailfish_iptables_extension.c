@@ -284,9 +284,11 @@ static void print_target_or_match(GString *line, const void *ip,
 	if(stdout_capture_start(&data))
 		return;
 	
-	if(target && t_entry && target->save)
+	if(target && t_entry && target->save &&
+		t_entry->u.user.revision == target->revision) //Iptables 1.6.1 iptables.c:1139
 		target->save(ip,t_entry);
-	else if(match && m_entry && match->save)
+	else if(match && m_entry && match->save && 
+		m_entry->u.user.revision == match->revision) //Iptables 1.6.1 iptables.c:1036
 		match->save(ip,m_entry);
 		
 	if(fflush(stdout))
@@ -376,12 +378,12 @@ static void print_ip(GString* line, const char *prefix, uint32_t ip,
 		prefix,
 		IP_PARTS(ip));
 
-	if (mask == 0xFFFFFFFFL)
+	if (mask == 0xFFFFFFFFU)
 		g_string_append(line,"/32");
 	else
 	{
 		i    = 32;
-		bits = 0xFFFFFFFEL;
+		bits = 0xFFFFFFFEU;
 		while (--i >= 0 && hmask != bits)
 			bits <<= 1;
 		if (i >= 0)
@@ -448,7 +450,7 @@ static int match_iterate(
 	return rval;
 }
 
-/* 	Adapted from GPLv2 iptables source file (v.1.4.15) iptables.c:1044
+/* 	Adapted from GPLv2 iptables source file (v.1.6.1) iptables.c:1025
 	function print_match_save().
 */
 static int print_match_save(GString *line, const struct xt_entry_match *e,
@@ -458,7 +460,8 @@ static int print_match_save(GString *line, const struct xt_entry_match *e,
 		xtables_find_match(e->u.user.name, XTF_TRY_LOAD, NULL);
 
 	if (match) {
-		g_string_append_printf(line, " -m %s", e->u.user.name);
+		g_string_append_printf(line, " -m %s",
+			match->alias ? match->alias(e) : e->u.user.name);
 		print_match(line, ip, match, e);
 		free(match); // xtables_find_match allocates a clone
 	}
@@ -473,7 +476,7 @@ static int print_match_save(GString *line, const struct xt_entry_match *e,
 	return 0;
 }
 
-/* 	Adapted from GPLv2 iptables source file (v.1.4.15) iptables.c:59
+/* 	Adapted from GPLv2 iptables source file (v.1.4.15) iptables.c:1099
 	function print_rule4().
 */
 void print_iptables_rule(GString* line, const struct ipt_entry *e,
@@ -516,15 +519,15 @@ void print_iptables_rule(GString* line, const struct ipt_entry *e,
 
 	/* print counters for iptables -R */
 	if (counters < 0)
-		g_string_append_printf(line," -c %llu %llu", (unsigned long long)e->counters.pcnt, (unsigned long long)e->counters.bcnt);
+		g_string_append_printf(line," -c %llu %llu",
+			(unsigned long long)e->counters.pcnt,
+			(unsigned long long)e->counters.bcnt);
 	
-	/* Print target name */
+	/* Print target name and targinfo part */
+	// iptc_get_target() returns an empty string if target does not exist
 	target_name = iptc_get_target(e, h);
-	if (target_name && (*target_name != '\0'))
-		g_string_append_printf(line," -%c %s", e->ip.flags & IPT_F_GOTO ? 'g' : 'j', target_name);
-
-	/* Print targetinfo part */
 	t = ipt_get_target((struct ipt_entry *)e);
+	
 	if (t->u.user.name[0])
 	{
 		const struct xtables_target *target =
@@ -537,8 +540,19 @@ void print_iptables_rule(GString* line, const struct ipt_entry *e,
 			return;
 		}
 
+		// Make sure that alias exists or target_name has content
+		if(target->alias || *target_name)
+		{
+			// Iptables v1.6.1 iptables.c:1138 print target info before checks
+			g_string_append_printf(line, " -j %s",
+				target->alias ? target->alias(t) : target_name);
+		}
+			
 		print_target(line, &e->ip, target, t);
 	}
+	else if (target_name && (*target_name != '\0'))
+		g_string_append_printf(line," -%c %s",
+			e->ip.flags & IPT_F_GOTO ? 'g' : 'j', target_name);
 
 	g_string_append(line, "\n");
 }
@@ -560,20 +574,38 @@ int iptables_check_table(const char *table_name)
 	procfile = fopen(IPTABLES_NAMES_FILE, "re");
 	
 	if(!procfile)
-		return ret;
+	{
+		switch(errno)
+		{
+			case ENOENT:
+				ERR("iptables_check_table() names file %s does not exist",
+					IPTABLES_NAMES_FILE);
+				return -ENOENT;
+			case EACCES:
+				ERR("iptables_check_table() names file %s cannot be accessed",
+					IPTABLES_NAMES_FILE);
+				return -EACCES;
+			default:
+				ERR("iptables_check_table() cannot open names file %s, %s",
+					IPTABLES_NAMES_FILE, strerror(errno));
+				return -1;
+		}
+	}
 	
 	while (fgets(read_table_name, sizeof(read_table_name), procfile))
 	{
 		if (read_table_name[strlen(read_table_name) - 1] != '\n')
 			ERR("iptables_check_table() Badly formed table_name `%s'",
 				read_table_name);
-			
-		read_table_name[strlen(read_table_name) - 1] = '\0';
+		else
+		{
+			read_table_name[strlen(read_table_name) - 1] = '\0';
 		
-		ret = g_ascii_strcasecmp(read_table_name,table_name);
+			ret = g_ascii_strcasecmp(read_table_name,table_name);
 		
-		if(!ret) // 0, match
-			break;
+			if(!ret) // 0, match
+				break;
+		}
 		
 		memset(&read_table_name,0,sizeof(read_table_name));
 	}
@@ -613,11 +645,16 @@ static int iptables_save_table(const char *fpath, GString** output,
 	const char *chain = NULL;
 	GString *line = NULL;
 	time_t now = {0};
+	gint table_result = iptables_check_table(table_name);
 	
-	if(iptables_check_table(table_name))
+	switch(table_result)
 	{
-		ERR("iptables_save_table() called with invalid table name");
-		return 1;
+		case 0:
+			break;
+		case 1:
+			ERR("iptables_save_table() called with invalid table name");
+		default:
+			return 1; // Error accessing iptables names file
 	}
 	
 	if(!save_to_file && (!output || !(*output) || (*output)->len))
@@ -695,11 +732,16 @@ static int iptables_clear_table(const char *table_name)
 	struct xtc_handle *h = NULL;
 	const char *chain = NULL;
 	gint rval = 0;
+	gint table_result = iptables_check_table(table_name);
 	
-	if(iptables_check_table(table_name))
+	switch(table_result)
 	{
-		ERR("iptables_clear_table() called with invalid table name");
-		return 1;
+		case 0:
+			break;
+		case 1:
+			ERR("iptables_clear_table() called with invalid table name");
+		default:
+			return 1; // Error accessing iptables names file
 	}
 			
 	if(!(h = get_iptc_handle(table_name)))
@@ -842,11 +884,16 @@ static int iptables_restore_table(const char *table_name, const char *fpath)
 	gint rval = 0, i = 0;
 	gboolean content_matches = false;
 	gboolean process = true;
+	gint table_result = iptables_check_table(table_name);
 	
-	if(!table_name || iptables_check_table(table_name))
+	switch(table_result)
 	{
-		ERR("iptables_restore_table() called with invalid table name");
-		return 1;
+		case 0:
+			break;
+		case 1:
+			ERR("iptables_restore_table() called with invalid table name");
+		default:
+			return 1;
 	}
 	
 	GString *content = iptables_get_file_contents(fpath);

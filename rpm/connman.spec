@@ -13,6 +13,7 @@ Requires:   ofono
 Requires:   pacrunner
 Requires:   connman-configs
 Requires:   systemd
+Requires:   iptables >= 1.6.1
 Requires:   libgofono >= 2.0.0
 Requires:   libglibutil >= 1.0.21
 Requires:   libdbusaccess >= 1.0.2
