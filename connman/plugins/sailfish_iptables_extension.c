@@ -463,7 +463,11 @@ static int print_match_save(GString *line, const struct xt_entry_match *e,
 		g_string_append_printf(line, " -m %s",
 			match->alias ? match->alias(e) : e->u.user.name);
 		print_match(line, ip, match, e);
-		free(match); // xtables_find_match allocates a clone
+		/* TODO fix xtables_find_match returned content allocation OR
+			devise a way to go around it and enable freeing of match.
+			Currently each found match potentially leaks memory, occurs with
+			comments added to iptables rule. After fixing free match. */
+		//free(match); // xtables_find_match allocates a clone
 	}
 	else
 	{
