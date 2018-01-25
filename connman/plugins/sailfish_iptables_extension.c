@@ -850,30 +850,61 @@ static int iptables_parse_policy(const gchar* table_name, const gchar* policy)
 	return rval;
 }
 
-static int iptables_parse_rule(const gchar* table_name, const gchar* rule)
+static int iptables_parse_rule(const gchar* table_name, gchar* rule)
 {
 	gint rval = 1;
+	gchar unwanted_chars[] = "\\\"";
 	
 	if(table_name && *table_name && rule && *rule)
 	{
 		gint i = 0;
-		// Format, e.g., -A CHAIN -p tcp -s 1.2.3.4  ...
-		gchar** tokens = g_strsplit(&(rule[1])," ", 0);
+		
+		// Remove '\' and '"' from rule
+		rule = g_strdelimit(rule, unwanted_chars, ' ');
+		
+		// Format, e.g., -A CHAIN -p tcp -s 1.2.3.4  ... separated with spaces
+		gchar** tokens = g_strsplit_set(rule, " ", -1);
 		
 		if(tokens && g_strv_length(tokens) > 2)
 		{
 			GString *rule_str = g_string_new(NULL);
-		
-			// Start from rule spec
-			for(i = 2 ; tokens[i] && *(tokens[i]); i++)
-				g_string_append_printf(rule_str,"%s ", tokens[i]);
 			
-			DBG("Adding to table \"%s\" chain \"%s\" rule: %s",
-				table_name, tokens[1], rule_str->str);
+			// Construct rule to be added
+			for(i = 2 ; tokens[i] ; i++)
+			{
+				// Do not add empty content (or spaces)
+				if(*(tokens[i]) && g_strcmp0(tokens[i]," ") != 0)
+					g_string_append_printf(rule_str,"%s ", tokens[i]);
+			}
 			
-			rval = __connman_iptables_append(table_name, tokens[1],
-				rule_str->str);
-		
+			// First token contains the mode, prefixed with '-'
+			switch(tokens[0][1])
+			{
+				// Append
+				case 'A':
+					ERR("Append to table \"%s\" chain \"%s\" rule: %s",
+						table_name, tokens[1], rule_str->str);
+					rval = __connman_iptables_append(table_name, tokens[1],
+							rule_str->str);
+					break;
+				// Insert
+				case 'I':
+					ERR("Insert to table \"%s\" chain \"%s\" rule: %s",
+						table_name, tokens[1], rule_str->str);
+					rval = __connman_iptables_insert(table_name, tokens[1],
+							rule_str->str);
+					break;
+				// Delete
+				case 'D':
+					ERR("Delete from table \"%s\" chain \"%s\" rule: %s",
+						table_name, tokens[1], rule_str->str);
+					rval = __connman_iptables_delete(table_name, tokens[1],
+							rule_str->str);
+					break;
+				default:
+					ERR("iptables_parse_rule() invalid rule prefix %c",
+						rule[1]);
+			}
 			g_string_free(rule_str,true);
 		}
 		
