@@ -882,21 +882,21 @@ static int iptables_parse_rule(const gchar* table_name, gchar* rule)
 			{
 				// Append
 				case 'A':
-					ERR("Append to table \"%s\" chain \"%s\" rule: %s",
+					DBG("Append to table \"%s\" chain \"%s\" rule: %s",
 						table_name, tokens[1], rule_str->str);
 					rval = __connman_iptables_append(table_name, tokens[1],
 							rule_str->str);
 					break;
 				// Insert
 				case 'I':
-					ERR("Insert to table \"%s\" chain \"%s\" rule: %s",
+					DBG("Insert to table \"%s\" chain \"%s\" rule: %s",
 						table_name, tokens[1], rule_str->str);
 					rval = __connman_iptables_insert(table_name, tokens[1],
 							rule_str->str);
 					break;
 				// Delete
 				case 'D':
-					ERR("Delete from table \"%s\" chain \"%s\" rule: %s",
+					DBG("Delete from table \"%s\" chain \"%s\" rule: %s",
 						table_name, tokens[1], rule_str->str);
 					rval = __connman_iptables_delete(table_name, tokens[1],
 							rule_str->str);

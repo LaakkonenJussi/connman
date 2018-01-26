@@ -1773,7 +1773,7 @@ struct parse_context {
 	struct xtables_target *xt_t;
 	GList *xt_m;
 	struct xtables_rule_match *xt_rm;
-	int proto;
+	uint16_t proto;
 };
 
 static int prepare_getopt_args(const char *str, struct parse_context *ctx)
@@ -1784,8 +1784,6 @@ static int prepare_getopt_args(const char *str, struct parse_context *ctx)
 	tokens = g_strsplit_set(str, " ", -1);
 
 	i = g_strv_length(tokens);
-
-	ctx->proto = 0;
 
 	/* Add space for the argv[0] value */
 	ctx->argc = i + 1;
@@ -1949,7 +1947,7 @@ static int parse_rule_spec(struct connman_iptables *table,
 	 *    xtables_option_mpcall() depending on which version
 	 *    of libxtables is found.
 	 */
-	struct xtables_match *xt_m = NULL;
+	struct xtables_match *xt_m;
 	bool invert = false;
 	int len, c, err;
 
@@ -2030,6 +2028,12 @@ static int parse_rule_spec(struct connman_iptables *table,
 		case 'p':
 			/* Protocol match */
 			ctx->proto = xtables_parse_protocol(optarg);
+
+			/* If protocol was set add it to ipt_ip.
+			 * xtables_parse_protocol() returns 0 or UINT16_MAX (-1) on error
+			 * */
+			if (ctx->proto > 0 && ctx->proto < UINT16_MAX)
+				ctx->ip->proto = ctx->proto;
 			break;
 		case 'j':
 			/* Target */
@@ -2067,8 +2071,6 @@ static int parse_rule_spec(struct connman_iptables *table,
 
 	err = final_check_xt_modules(ctx);
 
-	if(ctx->proto)
-		ctx->ip->proto = ctx->proto;
 out:
 	return err;
 }
