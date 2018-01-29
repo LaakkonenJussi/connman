@@ -597,7 +597,7 @@ static int iptables_add_chain(struct connman_iptables *table,
 	u_int16_t entry_head_size, entry_return_size;
 
 	DBG("table %s chain %s", table->name, name);
-	
+
 	/* Do not allow to add duplicate chains */
 	if (find_chain_head(table, name))
 		return -EEXIST;
@@ -2026,13 +2026,14 @@ static int parse_rule_spec(struct connman_iptables *table,
 
 			break;
 		case 'p':
-			/* Protocol match */
 			ctx->proto = xtables_parse_protocol(optarg);
 
-			/* If protocol was set add it to ipt_ip.
-			 * xtables_parse_protocol() returns 0 or UINT16_MAX (-1) on error
-			 * */
-			if (ctx->proto > 0 && ctx->proto < UINT16_MAX)
+			/*
+			 * If protocol was set add it to ipt_ip.
+			 * xtables_parse_protocol() returns 0 or
+			 * UINT16_MAX (-1) on error
+			 */
+		        if (ctx->proto > 0 && ctx->proto < UINT16_MAX)
 				ctx->ip->proto = ctx->proto;
 			break;
 		case 'j':
@@ -2063,6 +2064,7 @@ static int parse_rule_spec(struct connman_iptables *table,
 			err = parse_xt_modules(c, invert, ctx);
 			if (err == 1)
 				continue;
+
 			break;
 		}
 
