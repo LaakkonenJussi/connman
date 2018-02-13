@@ -22,7 +22,8 @@ noinst_HEADERS = include/rtnl.h include/task.h \
 			include/provider.h include/vpn-dbus.h \
 			include/utsname.h include/timeserver.h include/proxy.h \
 			include/wakeup_timer.h include/access.h \
-			include/setting.h
+			include/setting.h \
+			include/backtrace.h
 
 local_headers = $(foreach file,$(include_HEADERS) $(nodist_include_HEADERS) \
 			$(noinst_HEADERS), include/connman/$(notdir $(file)))
@@ -43,6 +44,10 @@ if WISPR
 gweb_sources += gweb/giognutls.h gweb/giognutls.c
 else
 gweb_sources += gweb/giognutls.h gweb/gionotls.c
+endif
+
+if BACKTRACE
+backtrace_sources = src/backtrace.c
 endif
 
 shared_sources = src/shared/util.h src/shared/util.c \
@@ -104,7 +109,7 @@ MANUAL_PAGES =
 
 sbin_PROGRAMS = src/connmand src/connmand-wait-online
 
-src_connmand_SOURCES = $(gdhcp_sources) $(gweb_sources) \
+src_connmand_SOURCES = $(gdhcp_sources) $(gweb_sources) $(backtrace_sources) \
 			$(builtin_sources) $(shared_sources) src/connman.ver \
 			src/main.c src/connman.h src/log.c \
 			src/error.c src/plugin.c src/task.c \
@@ -149,7 +154,7 @@ builtin_vpn_cflags =
 
 sbin_PROGRAMS += vpn/connman-vpnd
 
-vpn_connman_vpnd_SOURCES = $(builtin_vpn_sources) \
+vpn_connman_vpnd_SOURCES = $(builtin_vpn_sources) $(backtrace_sources) \
 			$(gweb_sources) vpn/vpn.ver vpn/main.c vpn/vpn.h \
 			src/log.c src/error.c src/plugin.c src/task.c \
 			vpn/vpn-manager.c vpn/vpn-provider.c \
@@ -278,29 +283,33 @@ if TEST_COVERAGE
 COVERAGE_OPT = --coverage
 endif
 
-unit_test_ippool_SOURCES = src/log.c src/dbus.c src/error.c \
-					src/ippool.c unit/test-ippool.c
+unit_test_ippool_SOURCES = $(backtrace_sources) src/log.c src/dbus.c \
+					src/error.c src/ippool.c unit/test-ippool.c
 unit_test_ippool_CFLAGS = $(COVERAGE_OPT) $(AM_CFLAGS)
 unit_test_ippool_LDADD = gdbus/libgdbus-internal.la \
 				@GLIB_LIBS@ @DBUS_LIBS@ -ldl
 
 unit_test_access_CFLAGS = $(COVERAGE_OPT) $(AM_CFLAGS)
-unit_test_access_SOURCES = unit/test-access.c src/access.c src/log.c
+unit_test_access_SOURCES = unit/test-access.c src/access.c src/log.c \
+				$(backtrace_sources)
 unit_test_access_LDADD = @GLIB_LIBS@ -ldl
 
 unit_test_sailfish_access_CFLAGS = $(COVERAGE_OPT) $(AM_CFLAGS)
 unit_test_sailfish_access_SOURCES = unit/test-sailfish_access.c \
-			src/log.c src/access.c plugins/sailfish_access.c
+			src/log.c src/access.c plugins/sailfish_access.c \
+			$(backtrace_sources)
 unit_test_sailfish_access_LDADD = @GLIB_LIBS@ -ldl
 
 unit_test_sailfish_iptables_extension_CFLAGS = $(COVERAGE_OPT) $(AM_CFLAGS)
-unit_test_sailfish_iptables_extension_SOURCES = unit/test-sailfish_iptables_extension.c \
-			src/log.c src/storage.c src/inotify.c src/iptables.c src/firewall.c \
+unit_test_sailfish_iptables_extension_SOURCES = $(backtrace_sources) \
+			unit/test-sailfish_iptables_extension.c src/log.c src/storage.c \
+			src/inotify.c src/iptables.c src/firewall.c \
 			plugins/sailfish_iptables_extension.c
 unit_test_sailfish_iptables_extension_LDADD = @GLIB_LIBS@ @XTABLES_LIBS@ @LIBIPTC_LIBS@ -ldl
 
 unit_test_dnsproxy_CFLAGS = $(COVERAGE_OPT) $(AM_CFLAGS)
-unit_test_dnsproxy_SOURCES = unit/test-dnsproxy.c src/log.c
+unit_test_dnsproxy_SOURCES = unit/test-dnsproxy.c src/log.c \
+				$(backtrace_sources)
 unit_test_dnsproxy_LDADD = @GLIB_LIBS@ -lresolv -ldl
 
 TESTS = unit/test-access unit/test-ippool unit/test-dnsproxy \
@@ -310,7 +319,8 @@ if SAILFISH_WAKEUP_TIMER
 unit_test_sailfish_wakeup_timer_CFLAGS = $(COVERAGE_OPT) $(AM_CFLAGS)
 unit_test_sailfish_wakeup_timer_SOURCES = unit/test-sailfish_wakeup_timer.c \
 				src/log.c src/wakeup_timer.c \
-				plugins/sailfish_wakeup_timer.c
+				plugins/sailfish_wakeup_timer.c \
+				$(backtrace_sources)
 unit_test_sailfish_wakeup_timer_LDADD = @GLIB_LIBS@ -lrt -ldl
 noinst_PROGRAMS += unit/test-sailfish_wakeup_timer
 TESTS += unit/test-sailfish_wakeup_timer
@@ -363,13 +373,13 @@ tools_dbus_test_LDADD = gdbus/libgdbus-internal.la @GLIB_LIBS@ @DBUS_LIBS@
 tools_polkit_test_LDADD = @DBUS_LIBS@
 
 tools_iptables_test_CFLAGS = -DDEFAULT_STORAGE_ROOT=\""$(storageroot)\""
-tools_iptables_test_SOURCES = src/log.c src/storage.c src/inotify.c \
-		src/iptables.c tools/iptables-test.c
-tools_iptables_test_LDADD =  @GLIB_LIBS@ @XTABLES_LIBS@ @LIBIPTC_LIBS@ -ldl
+tools_iptables_test_SOURCES = $(backtrace_sources) src/log.c src/iptables.c tools/iptables-test.c \
+		src/storage.c src/inotify.c
+tools_iptables_test_LDADD = @GLIB_LIBS@ @XTABLES_LIBS@ @LIBIPTC_LIBS@ -ldl
 
 tools_private_network_test_LDADD = @GLIB_LIBS@ @DBUS_LIBS@
 
-tools_session_test_SOURCES = src/log.c src/dbus.c src/error.c \
+tools_session_test_SOURCES = $(backtrace_sources) src/log.c src/dbus.c src/error.c \
 		tools/session-test.c tools/session-utils.c tools/manager-api.c \
 		tools/session-api.c tools/session-test.h
 tools_session_test_LDADD = gdbus/libgdbus-internal.la \
@@ -378,9 +388,9 @@ tools_session_test_LDADD = gdbus/libgdbus-internal.la \
 tools_iptables_unit_CFLAGS = @DBUS_CFLAGS@ @GLIB_CFLAGS@ @XTABLES_CFLAGS@ \
 		-DIPTABLES_SAVE=\""${IPTABLES_SAVE}"\" \
 		-DDEFAULT_STORAGE_ROOT=\""$(storageroot)\""
-tools_iptables_unit_SOURCES = src/log.c src/storage.c src/inotify.c \
-		 src/iptables.c src/firewall.c src/nat.c \
-		 tools/iptables-unit.c
+tools_iptables_unit_SOURCES = $(backtrace_sources) src/log.c \
+		 src/iptables.c src/firewall.c src/nat.c tools/iptables-unit.c \
+		 src/storage.c src/inotify.c
 tools_iptables_unit_LDADD = gdbus/libgdbus-internal.la \
 				@GLIB_LIBS@ @DBUS_LIBS@ @XTABLES_LIBS@ @LIBIPTC_LIBS@ -ldl
 
