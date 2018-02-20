@@ -94,6 +94,11 @@ builtin_modules += sailfish_usb_tethering
 builtin_sources += plugins/sailfish_usb_tethering.c
 endif
 
+if SAILFISH_IPTABLES_EXTENSION
+builtin_modules += sailfish_iptables_extension
+builtin_sources += plugins/sailfish_iptables_extension.c
+endif
+
 if VPN
 builtin_modules += vpn
 builtin_sources += plugins/vpn.c

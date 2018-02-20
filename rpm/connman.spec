@@ -13,6 +13,7 @@ Requires:   ofono
 Requires:   pacrunner
 Requires:   connman-configs
 Requires:   systemd
+Requires:   iptables >= 1.6.1
 Requires:   libgofono >= 2.0.0
 Requires:   libglibutil >= 1.0.21
 Requires:   libdbusaccess >= 1.0.2
@@ -21,6 +22,7 @@ Requires(preun): systemd
 Requires(post): systemd
 Requires(postun): systemd
 BuildRequires:  pkgconfig(xtables)
+BuildRequires:	pkgconfig(libiptc)
 BuildRequires:  pkgconfig(glib-2.0) >= 2.28
 BuildRequires:  pkgconfig(gthread-2.0) >= 2.16
 BuildRequires:  pkgconfig(dbus-1) >= 1.4
@@ -39,6 +41,7 @@ BuildRequires:  pkgconfig(libmce-glib)
 BuildRequires:  pkgconfig(libgsupplicant) >= 1.0.6
 BuildRequires:  ppp-devel
 BuildRequires:  libtool
+BuildRequires:  iptables-devel >= 1.6.1
 
 %description
 Connection Manager provides a daemon for managing Internet connections
@@ -122,6 +125,7 @@ Documentation for connman.
     --enable-sailfish-usb-tethering \
     --enable-sailfish-wifi \
     --enable-sailfish-access \
+    --enable-sailfish-iptables-extension \
     --disable-gadget \
     --with-systemdunitdir=/%{_lib}/systemd/system \
     --enable-systemd \

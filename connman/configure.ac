@@ -447,6 +447,18 @@ if (test "${enable_sailfish_ofono}" = "yes"); then
 	need_glibutil=yes
 fi
 
+AC_ARG_ENABLE(sailfish-iptables-extension,
+	AC_HELP_STRING([--enable-iptables-extension], [enable Sailfish iptables extension plugin]),
+		[enable_sailfish_iptables_extension=${enableval}], [enable_sailfish_iptables_extension="no"])
+AM_CONDITIONAL(SAILFISH_IPTABLES_EXTENSION, test "${enable_sailfish_iptables_extension}" != "no")
+
+if (test "${enable_sailfish_iptables_extension}" = "yes"); then
+	PKG_CHECK_MODULES(LIBIPTC, libiptc >= 0.27.1, dummy=yes,
+			AC_MSG_ERROR(Libiptc library is required))
+	AC_SUBST(LIBIPTC_CFLAGS)
+	AC_SUBST(LIBIPTC_LIBS)
+fi
+
 if (test "${need_glibutil}" = "yes"); then
 	PKG_CHECK_MODULES(GLIBUTIL, libglibutil >= 1.0.21, dummy=yes,
 				AC_MSG_ERROR(libglibutil >= 1.0.21 is required))

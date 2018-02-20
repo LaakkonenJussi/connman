@@ -954,6 +954,8 @@ int __connman_iptables_delete_chain(const char *table_name,
 					const char *chain);
 int __connman_iptables_flush_chain(const char *table_name,
 					const char *chain);
+int __connman_iptables_find_chain(const char *table_name,
+					const char *chain);
 int __connman_iptables_change_policy(const char *table_name,
 					const char *chain,
 					const char *policy);
