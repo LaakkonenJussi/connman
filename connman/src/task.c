@@ -32,6 +32,7 @@
 #include <glib.h>
 
 #include "connman.h"
+#include "../vpn/vpn.h"
 
 struct notify_data {
 	connman_task_notify_t func;
@@ -45,6 +46,7 @@ struct connman_task {
 	GPtrArray *argv;
 	GPtrArray *envp;
 	connman_task_exit_t exit_func;
+	connman_task_setup_t custom_setup_func;
 	void *exit_data;
 	GHashTable *notify;
 };
@@ -93,7 +95,8 @@ static void free_task(gpointer data)
  *
  * Returns: a newly-allocated #connman_task structure
  */
-struct connman_task *connman_task_create(const char *program)
+struct connman_task *connman_task_create(const char *program,
+	connman_task_setup_t custom_task_setup)
 {
 	struct connman_task *task;
 	gint counter;
@@ -115,6 +118,8 @@ struct connman_task *connman_task_create(const char *program)
 
 	str = g_strdup(program);
 	g_ptr_array_add(task->argv, str);
+	
+	task->custom_setup_func = custom_task_setup;
 
 	task->notify = g_hash_table_new_full(g_str_hash, g_str_equal,
 							g_free, g_free);
@@ -277,6 +282,9 @@ static void task_setup(gpointer user_data)
 	sigemptyset(&mask);
 	if (sigprocmask(SIG_SETMASK, &mask, NULL) < 0)
 		connman_error("Failed to clean signal mask");
+	
+	if (task->custom_setup_func)
+		task->custom_setup_func(user_data);
 }
 
 /**
