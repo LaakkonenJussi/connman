@@ -89,6 +89,26 @@ struct vpn_provider {
 	struct connman_ipaddress *prev_ipv6_addr;
 };
 
+static guint connman_property_watch;
+static guint connman_service_watch;
+
+static bool connman_online = false;
+
+static void set_state(const char* new_state)
+{
+	DBG("old state %s new state %s",
+		connman_online ? "online/ready" : "offline/idle", new_state);
+	
+	if (!new_state || !*new_state)
+		return;
+	
+	connman_online = g_ascii_strcasecmp(new_state, "online") == 0 ||
+		g_ascii_strcasecmp(new_state, "ready") == 0 ? true : false;
+	
+	DBG("set state %s connman_online=%s ",
+		new_state, connman_online ? "true" : "false");
+}
+
 static void append_properties(DBusMessageIter *iter,
 				struct vpn_provider *provider);
 
@@ -494,6 +514,12 @@ static DBusMessage *do_connect(DBusConnection *conn, DBusMessage *msg,
 	int err;
 
 	DBG("conn %p provider %p", conn, provider);
+	
+	if (!connman_online) {
+		DBG("Provider %s not started because connman not online/ready",
+			provider->identifier);
+		return __connman_error_failed(msg, ENOLINK);
+	}
 
 	err = __vpn_provider_connect(provider, msg);
 	if (err < 0)
@@ -2749,6 +2775,170 @@ static void remove_unprovisioned_providers(void)
 	g_strfreev(providers);
 }
 
+static gboolean connman_property_changed(DBusConnection *conn,
+				DBusMessage *message,
+				void *user_data)
+{
+	DBusMessageIter iter, value;
+	
+	const char *key;
+	const char *str;
+	
+	const char *signature =	DBUS_TYPE_STRING_AS_STRING
+		DBUS_TYPE_VARIANT_AS_STRING;
+
+	if (!dbus_message_has_signature(message, signature)) {
+		connman_error("vpn connman property signature \"%s\" does not match "
+							"expected \"%s\"",
+			dbus_message_get_signature(message), signature);
+		return TRUE;
+	}
+
+	if (!dbus_message_iter_init(message, &iter))
+		return TRUE;
+
+	dbus_message_iter_get_basic(&iter, &key);
+
+	dbus_message_iter_next(&iter);
+	dbus_message_iter_recurse(&iter, &value);
+
+	DBG("key %s", key);
+
+	if (g_ascii_strcasecmp(key, "State") == 0) {
+		dbus_message_iter_get_basic(&value, &str);
+		set_state(str);
+	}
+	
+	return TRUE;
+}
+
+static void get_connman_state_reply(DBusPendingCall *call, void *user_data)
+{
+	DBusMessage *reply;
+	DBusError error;
+	DBusMessageIter iter, array, dict, value;
+	
+	const char *signature = DBUS_TYPE_ARRAY_AS_STRING
+		DBUS_DICT_ENTRY_BEGIN_CHAR_AS_STRING
+		DBUS_TYPE_STRING_AS_STRING
+		DBUS_TYPE_VARIANT_AS_STRING
+		DBUS_DICT_ENTRY_END_CHAR_AS_STRING;
+
+	const char *key;
+	const char *str;
+
+	DBG("");
+
+	if (!dbus_pending_call_get_completed(call))
+		return;
+
+	reply = dbus_pending_call_steal_reply(call);
+
+	dbus_error_init(&error);
+
+	if (dbus_set_error_from_message(&error, reply)) {
+		connman_error("%s", error.message);
+		dbus_error_free(&error);
+		goto done;
+	}
+
+	if (!dbus_message_has_signature(reply, signature)) {
+		connman_error("vpnd signature \"%s\" does not match "
+							"expected \"%s\"",
+			dbus_message_get_signature(reply), signature);
+		goto done;
+	}
+
+	if (!dbus_message_iter_init(reply, &array))
+		goto done;
+
+	dbus_message_iter_recurse(&array, &dict);
+	
+	while (dbus_message_iter_get_arg_type(&dict) == DBUS_TYPE_DICT_ENTRY) {
+		dbus_message_iter_recurse(&dict, &iter);
+	
+		dbus_message_iter_get_basic(&iter, &key);
+
+		dbus_message_iter_next(&iter);
+		dbus_message_iter_recurse(&iter, &value);
+		
+		if (g_ascii_strcasecmp(key, "State") == 0) {
+			dbus_message_iter_get_basic(&value, &str);
+			
+			DBG("Got initial state %s", str);
+			
+			set_state(str);
+			
+			/* No need to process further */
+			break;
+		}
+		
+		dbus_message_iter_next(&dict);
+	}
+	
+done:
+	dbus_message_unref(reply);
+
+	dbus_pending_call_unref(call);
+}
+
+static bool get_connman_state()
+{
+	const char *path = "/";
+	const char *method = "GetProperties";
+	bool rval = false;
+
+	DBusMessage *msg = NULL;
+	DBusPendingCall *call = NULL;
+	
+	DBG("");
+
+	msg = dbus_message_new_method_call(CONNMAN_SERVICE, path,
+		CONNMAN_MANAGER_INTERFACE, method);
+
+	if (!msg)
+		goto out;
+
+	if (!(rval = g_dbus_send_message_with_reply(connection, msg, 
+		&call, 10000))) {
+		connman_error("Cannot call %s on %s",
+			method, CONNMAN_MANAGER_INTERFACE);
+		goto out;
+	}
+		
+	if (!call) {
+		connman_error("setting pending call failed");
+		goto out;
+	}
+
+	if (!dbus_pending_call_set_notify(call, get_connman_state_reply,
+		NULL, NULL)) {
+		connman_error("setting notify to pending call failed");
+	}
+
+out:
+	dbus_message_unref(msg);
+	return rval;
+}
+
+static void connman_service_watch_connected(DBusConnection *conn,
+				void *user_data)
+{
+	DBG("");
+
+	/* Request state */
+	get_connman_state();
+}
+
+static void connman_service_watch_disconnected(DBusConnection *conn,
+				void *user_data)
+{
+	DBG("");
+
+	/* No connman, set idle state */
+	set_state("idle");
+}
+
 int __vpn_provider_init(bool do_routes)
 {
 	int err;
@@ -2770,6 +2960,21 @@ int __vpn_provider_init(bool do_routes)
 
 	provider_hash = g_hash_table_new_full(g_str_hash, g_str_equal,
 						NULL, unregister_provider);
+
+	connman_service_watch = g_dbus_add_service_watch(connection,
+					CONNMAN_SERVICE,
+					connman_service_watch_connected,
+					connman_service_watch_disconnected,
+					NULL, NULL);
+
+	connman_property_watch = g_dbus_add_signal_watch(connection,
+					CONNMAN_SERVICE, NULL,
+					CONNMAN_MANAGER_INTERFACE,
+					PROPERTY_CHANGED, connman_property_changed,
+					NULL, NULL);
+
+	get_connman_state();
+
 	return 0;
 }
 
@@ -2783,6 +2988,8 @@ void __vpn_provider_cleanup(void)
 
 	g_hash_table_destroy(provider_hash);
 	provider_hash = NULL;
+
+	g_dbus_remove_all_watches(connection);
 
 	dbus_connection_unref(connection);
 }
