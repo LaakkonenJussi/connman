@@ -25,6 +25,17 @@
 
 static GMainLoop *main_loop = NULL;
 
+struct connman_service *__connman_service_get_default()
+{
+	return NULL;
+}
+
+GSList *__connman_service_get_depending_vpn_index(
+	struct connman_service *service)
+{
+	return NULL;
+}
+
 /* Stub getaddrinfo() to return test data */
 int getaddrinfo(const char *node, const char *service,
 		const struct addrinfo *hints,
