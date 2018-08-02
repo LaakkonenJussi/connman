@@ -2867,9 +2867,10 @@ static void dnsproxy_default_changed(struct connman_service *service)
 {
 	bool server_enabled = false;
 	GSList *list;
-	int index;
+	int index, vpn_index;
 
-	DBG("service %p", service);
+	DBG("service %p %s", service,
+		service ? __connman_service_get_ident(service) : "");
 
 	/* DNS has changed, invalidate the cache */
 	cache_invalidate();
@@ -2884,6 +2885,8 @@ static void dnsproxy_default_changed(struct connman_service *service)
 	if (index < 0)
 		return;
 
+	vpn_index = __connman_service_get_depending_vpn_index(service);
+
 	for (list = server_list; list; list = list->next) {
 		struct server_data *data = list->data;
 
@@ -2891,6 +2894,10 @@ static void dnsproxy_default_changed(struct connman_service *service)
 			DBG("Enabling DNS server %s", data->server);
 			data->enabled = true;
 			server_enabled = true;
+		} else if (data->index == vpn_index) {
+			DBG("Enabling DNS server of depending VPN %s",
+				data->server);
+			data->enabled = true;
 		} else {
 			DBG("Disabling DNS server %s", data->server);
 			data->enabled = false;
