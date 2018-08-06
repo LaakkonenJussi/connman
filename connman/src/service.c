@@ -1897,6 +1897,18 @@ static void print_service(struct connman_service *service, void *user_data)
 			state2string(service->state));
 }
 
+static void print_service_list_debug()
+{
+	static struct connman_debug_desc debug_desc CONNMAN_DEBUG_ATTR = {
+		.file = __FILE__,
+		.flags = CONNMAN_DEBUG_FLAG_DEFAULT
+	};
+
+	if (debug_desc.flags && CONNMAN_DEBUG_FLAG_PRINT) {
+		__connman_service_foreach(print_service, NULL);
+	}
+}
+
 static void switch_default_service(struct connman_service *default_service,
 	struct connman_service *downgrade_service);
 
@@ -2023,7 +2035,7 @@ static void default_changed(void)
 	struct connman_service *service = __connman_service_get_default();
 	
 	DBG("");
-	__connman_service_foreach(print_service, NULL);
+	print_service_list_debug();
 
 	if (service == current_default) {
 		DBG("default not changed %p %s",
@@ -2136,7 +2148,7 @@ static void default_changed(void)
 			switch_services(service, current_default);
 		}
 
-		__connman_service_foreach(print_service, NULL);
+		print_service_list_debug();
 
 		return;
 	}
@@ -2206,8 +2218,7 @@ change:
 		if (service->domainname)
 			__connman_utsname_set_domainname(service->domainname);
 
-		__connman_resolver_redo_servers(
-			__connman_service_get_index(service));
+		nameserver_add_all(service, CONNMAN_IPCONFIG_TYPE_ALL);
 
 		/*
 		 * Connect VPN automatically when new default service
