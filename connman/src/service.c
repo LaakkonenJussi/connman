@@ -291,6 +291,7 @@ static struct connman_ipconfig *create_ip6config(struct connman_service *service
 static void vpn_auto_connect(void);
 static bool is_connecting(struct connman_service *service);
 static bool is_connected(struct connman_service *service);
+static bool is_online(struct connman_service *service);
 
 static void switch_default_service(struct connman_service *default_service,
 	struct connman_service *downgrade_service);
@@ -1397,6 +1398,11 @@ static bool is_connected(struct connman_service *service)
 	return is_connected_state(service, service->state);
 }
 
+static bool is_online(struct connman_service *service)
+{
+	return service->state == CONNMAN_SERVICE_STATE_ONLINE;
+}
+
 static bool nameserver_available(struct connman_service *service,
 				enum connman_ipconfig_type type,
 				const char *ns)
@@ -1952,8 +1958,19 @@ static bool service_preferred_over(struct connman_service *a,
 
 static bool allow_service_over_default(struct connman_service *new_service)
 {
-	if (!current_default)
+	/*
+	 * Return immediately if the current default is not any more connected.
+	 * In case the current default is VPN is_connected() will also check if
+	 * the transport service is online.
+	 */
+	if (!current_default || !is_connected(current_default)) {
+		DBG("allowing to set %p %s over %p %s (NULL or not connected)",
+			new_service,
+			new_service ? new_service->identifier : "NULL",
+			current_default,
+			current_default ? current_default->identifier : "NULL");
 		return true;
+	}
 
 	if (current_default->type == CONNMAN_SERVICE_TYPE_VPN &&
 		current_default->depends_on) {
@@ -1977,6 +1994,20 @@ static bool allow_service_over_default(struct connman_service *new_service)
 				current_default->depends_on,
 				__connman_service_type2string(
 					current_default->depends_on->type));
+			return false;
+		} else if (is_online(current_default->depends_on) &&
+			!is_online(new_service)) {
+			DBG("trying to set %p %s (%s) over VPN %p %s"
+				"using %p %s (%s), revert order",
+			new_service,
+			__connman_service_type2string(new_service->type),
+			state2string(new_service->state),
+			current_default,
+			__connman_service_type2string(current_default->type),
+			current_default->depends_on,
+			__connman_service_type2string(
+				current_default->depends_on->type),
+			state2string(current_default->depends_on->state));
 			return false;
 		} else {
 			DBG("trying to set %p %s over VPN using %p %s, "
@@ -2003,6 +2034,16 @@ static bool allow_service_over_default(struct connman_service *new_service)
 			current_default,
 			__connman_service_type2string(current_default->type));
 		return false;
+	}
+	
+	if (is_online(current_default) && !is_online(new_service)) {
+		DBG("trying to set %p %s (%s) over %p %s (%s), revert order",
+			new_service,
+			__connman_service_type2string(new_service->type),
+			state2string(new_service->state),
+			current_default,
+			__connman_service_type2string(current_default->type),
+			state2string(current_default->state));
 	}
 
 	DBG("allowing to set %p %s over %p %s",
@@ -2044,7 +2085,14 @@ static void default_changed(void)
 	if (service == current_default) {
 		DBG("default not changed %p %s",
 			service, service ? service->identifier : "NULL");
-		if (service && service->type != CONNMAN_SERVICE_TYPE_VPN) {
+
+		/*
+		 * Run auto connect for VPNs when the service is connected. In
+		 * case the service is still ready state the delayed connection
+		 * of VPN must be started here.
+		 */
+		if (service && is_connected(service) &&
+			service->type != CONNMAN_SERVICE_TYPE_VPN) {
 			DBG("running vpn_auto_connect");
 			vpn_auto_connect();
 		}
@@ -2225,9 +2273,10 @@ change:
 
 		/*
 		 * Connect VPN automatically when new default service
-		 * is set (unless new default is VPN)
+		 * is set and connected, unless new default is VPN
 		 */
-		if (service->type != CONNMAN_SERVICE_TYPE_VPN) {
+		if (is_connected(service) &&
+			service->type != CONNMAN_SERVICE_TYPE_VPN) {
 			DBG("running vpn_auto_connect");
 			vpn_auto_connect();
 		}
@@ -5348,8 +5397,37 @@ void __connman_service_auto_connect(enum connman_service_connect_reason reason)
 static gboolean run_vpn_auto_connect(gpointer data) {
 	GList *list;
 	bool need_split = false;
+	struct connman_service *service = __connman_service_get_default();
+
+	/*
+	 * If the transport service is not yet online but is connected do not
+	 * stop auto connection or remove the vpn_autoconnect_timeout to keep
+	 * this in the main loop.
+	 */
+	if (service && is_connected(service) &&
+		!is_online(service) &&
+		service->type != CONNMAN_SERVICE_TYPE_VPN) {
+		DBG("service %p %s not online (%s), delaying connect",
+			service, service->identifier,
+			state2string(service->state));
+		return TRUE;
+	}
 
 	vpn_autoconnect_timeout = 0;
+
+	/*
+	 * Stop auto connecting VPN if there is no online transport service or
+	 * if the current default service is a connected VPN (in ready state).
+	 */
+	if (!service || !is_online(service) ||
+		(service->type == CONNMAN_SERVICE_TYPE_VPN &&
+		is_connected(service))) {
+
+		DBG("Stopping, default service %s connected %d",
+			service ? service->identifier : "NULL",
+			service ? is_connected(current_default) : -1);
+		return FALSE;
+	}
 
 	for (list = service_list; list; list = list->next) {
 		struct connman_service *service = list->data;
