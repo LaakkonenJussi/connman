@@ -2096,7 +2096,13 @@ static void default_changed(void)
 		DBG("default not changed %p %s",
 			service, service ? service->identifier : "NULL");
 
-		if (service && service->type != CONNMAN_SERVICE_TYPE_VPN) {
+		/*
+		 * Run auto connect for VPNs when the service is connected. In
+		 * case the service is still ready state the delayed connection
+		 * of VPN must be started here.
+		 */
+		if (service && is_connected(service) &&
+			service->type != CONNMAN_SERVICE_TYPE_VPN) {
 			DBG("running vpn_auto_connect");
 			vpn_auto_connect();
 		}
@@ -2277,9 +2283,10 @@ change:
 
 		/*
 		 * Connect VPN automatically when new default service
-		 * is set (unless new default is VPN)
+		 * is set and connected, unless new default is VPN
 		 */
-		if (service->type != CONNMAN_SERVICE_TYPE_VPN) {
+		if (is_connected(service) &&
+			service->type != CONNMAN_SERVICE_TYPE_VPN) {
 			DBG("running vpn_auto_connect");
 			vpn_auto_connect();
 		}
@@ -5410,8 +5417,39 @@ void __connman_service_auto_connect(enum connman_service_connect_reason reason)
 static gboolean run_vpn_auto_connect(gpointer data) {
 	GList *list;
 	bool need_split = false;
+	int autoconnectable_vpns = 0;
+	struct connman_service *def_service = __connman_service_get_default();
 
 	vpn_autoconnect_timeout = 0;
+
+	DBG("");
+
+	/*
+	 * If the transport service is not yet online but is connected do not
+	 * stop auto connection unless VPN is being as default service.
+	 */
+	if (def_service && is_connected(def_service) &&
+		!is_online(def_service) &&
+		def_service->type != CONNMAN_SERVICE_TYPE_VPN) {
+		DBG("service %p %s not online (%s), delaying connect",
+			def_service, def_service->identifier,
+			state2string(def_service->state));
+		goto out;
+	}
+
+	/*
+	 * Stop auto connecting VPN if there is no online transport service or
+	 * if the current default service is a connected VPN (in ready state).
+	 */
+	if (!def_service || !is_online(def_service) ||
+		(def_service->type == CONNMAN_SERVICE_TYPE_VPN &&
+		is_connected(def_service))) {
+
+		DBG("stopped, default service %s connected %d",
+			def_service ? def_service->identifier : "NULL",
+			def_service ? is_connected(def_service) : -1);
+		return FALSE;
+	}
 
 	for (list = service_list; list; list = list->next) {
 		struct connman_service *service = list->data;
@@ -5438,6 +5476,9 @@ static gboolean run_vpn_auto_connect(gpointer data) {
 				service->do_split_routing ?
 				"split routing" : "");
 
+		// Autoconnect has been set for this service
+		autoconnectable_vpns++;
+
 		res = __connman_service_connect(service,
 				CONNMAN_SERVICE_CONNECT_REASON_AUTO);
 		if (res < 0 && res != -EINPROGRESS)
@@ -5446,6 +5487,18 @@ static gboolean run_vpn_auto_connect(gpointer data) {
 		if (!service->do_split_routing)
 			need_split = true;
 	}
+
+	/*
+	 * If there is no VPN to automatically connect remove this from main
+	 * loop. This will be re-added to main loop when there is a change in
+	 * default service or some else triggers default_service().
+	 */
+	if (!autoconnectable_vpns)
+		return TRUE;
+
+out:
+	vpn_autoconnect_timeout =
+		g_timeout_add_seconds(1, run_vpn_auto_connect, NULL);
 
 	return FALSE;
 }
