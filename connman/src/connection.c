@@ -843,7 +843,18 @@ int __connman_connection_gateway_add(struct connman_service *service,
 	if (type == CONNMAN_IPCONFIG_TYPE_IPV4 &&
 				new_gateway->ipv4_gateway) {
 		add_host_route(AF_INET, index, gateway, service_type);
-		__connman_service_nameserver_add_routes(service,
+
+		/*
+		 * If adding a VPN service and the peer address is a IPv4
+		 * address use it as gateway for the DNS servers. This ensures
+		 * that DNS requests to DNS servers defined by VPN connection
+		 * are going via VPN connection.
+		 */
+		if (service_type == CONNMAN_SERVICE_TYPE_VPN &&
+			connman_inet_check_ipaddress(peer) == AF_INET)
+			__connman_service_nameserver_add_routes(service, peer);
+		else
+			__connman_service_nameserver_add_routes(service,
 					new_gateway->ipv4_gateway->gateway);
 		type4 = CONNMAN_IPCONFIG_TYPE_IPV4;
 	}
@@ -851,7 +862,13 @@ int __connman_connection_gateway_add(struct connman_service *service,
 	if (type == CONNMAN_IPCONFIG_TYPE_IPV6 &&
 				new_gateway->ipv6_gateway) {
 		add_host_route(AF_INET6, index, gateway, service_type);
-		__connman_service_nameserver_add_routes(service,
+
+		/* Same as with IPv4 type before but check that type is IPv6 */
+		if (service_type == CONNMAN_SERVICE_TYPE_VPN &&
+			connman_inet_check_ipaddress(peer) == AF_INET6)
+			__connman_service_nameserver_add_routes(service, peer);
+		else
+			__connman_service_nameserver_add_routes(service,
 					new_gateway->ipv6_gateway->gateway);
 		type6 = CONNMAN_IPCONFIG_TYPE_IPV6;
 	}
