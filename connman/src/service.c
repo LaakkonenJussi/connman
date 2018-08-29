@@ -9184,10 +9184,13 @@ __connman_service_create_from_provider(struct connman_provider *provider)
 	unset_vpn_dependency(service);
 
 	/* Try to load modifiable values from storage. If config does not
-	 * exist set current time as modify time if service is saved as is.
+	 * exist set current time as modify time if service is saved as is and
+	 * set split routing to assign proper order for the service.
 	 */
-	if (__connman_service_load_modifiable(service) != 0)
+	if (__connman_service_load_modifiable(service) != 0) {
 		g_get_current_time(&service->modified);
+		set_split_routing(service, service->do_split_routing);
+	}
 
 	service->favorite = true;
 
