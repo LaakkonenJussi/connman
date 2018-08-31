@@ -50,6 +50,8 @@
 #define ONLINE_CHECK_RETRY_COUNT 12
 
 #define VPN_AUTOCONNECT_TIMEOUT_DEFAULT 1
+#define VPN_AUTOCONNECT_TIMEOUT_STEP 30
+#define VPN_AUTOCONNECT_TIMEOUT_ATTEMPTS_TRESHOLD 270
 
 /* (Some) property names */
 #define PROP_ACCESS                     "Access"
@@ -5407,39 +5409,19 @@ static gboolean run_vpn_auto_connect(gpointer data) {
 	GList *list;
 	bool need_split = false;
 	int autoconnectable_vpns = 0;
-	int keep_in_loop = 0;
-	int delay = VPN_AUTOCONNECT_TIMEOUT_DEFAULT;
+	int attempts = 0;
+	int timeout = VPN_AUTOCONNECT_TIMEOUT_DEFAULT;
 	struct connman_service *def_service;
 
-	DBG("");
-
-	keep_in_loop = GPOINTER_TO_INT(data);
-	delay = keep_in_loop ? keep_in_loop : VPN_AUTOCONNECT_TIMEOUT_DEFAULT;
+	attempts = GPOINTER_TO_INT(data);
 	def_service = __connman_service_get_default();
 
 	/*
-	 * If the transport service is not yet online but is connected do not
-	 * stop auto connection unless VPN is being as default service.
+	 * Stop auto connecting VPN if there is no transport service or the
+	 * transport service is not connected or if the  current default service
+	 * is a connected VPN (in ready state).
 	 */
-	if (def_service && is_connected(def_service) &&
-		!is_online(def_service) &&
-		def_service->type != CONNMAN_SERVICE_TYPE_VPN) {
-		DBG("service %p %s not online (%s), connect delay %ds",
-			def_service, def_service->identifier,
-			state2string(def_service->state), delay);
-
-		/* Not the initial run, keep delay as it is */
-		if (keep_in_loop)
-			return G_SOURCE_CONTINUE;
-
-		goto retry;
-	}
-
-	/*
-	 * Stop auto connecting VPN if there is no online transport service or
-	 * if the current default service is a connected VPN (in ready state).
-	 */
-	if (!def_service || !is_online(def_service) ||
+	if (!def_service || !is_connected(def_service) ||
 		(def_service->type == CONNMAN_SERVICE_TYPE_VPN &&
 		is_connected(def_service))) {
 
@@ -5459,6 +5441,14 @@ static gboolean run_vpn_auto_connect(gpointer data) {
 		if (is_connected(service) || is_connecting(service)) {
 			if (!service->do_split_routing)
 				need_split = true;
+
+			/*
+			 * If the service is connecting it must be accounted
+			 * for to keep the autoconnection in main loop.
+			 */
+			if (is_connecting(service))
+				autoconnectable_vpns++;
+
 			continue;
 		}
 
@@ -5486,25 +5476,30 @@ static gboolean run_vpn_auto_connect(gpointer data) {
 			need_split = true;
 	}
 
-	/* If there is no VPN to automatically connect stop autoconnecting.*/
+	/* Stop if there is no VPN to automatically connect.*/
 	if (!autoconnectable_vpns) {
 		DBG("stopping, no autoconnectable VPNs found");
 		goto out;
 	}
 
-	/* Use current delay */
-	if (keep_in_loop) {
-		DBG("continuing, delay %ds", delay);
-		return G_SOURCE_CONTINUE;
-	}
+	/* Increase the attempt count up to the treshold.*/
+	if (attempts < VPN_AUTOCONNECT_TIMEOUT_ATTEMPTS_TRESHOLD)
+		attempts++;
 
-retry:
+	/*
+	 * Timeout increases with 1s after VPN_AUTOCONNECT_TIMEOUT_STEP amount
+	 * of attempts made. After VPN_AUTOCONNECT_TIMEOUT_ATTEMPTS_TRESHOLD is
+	 * reached the delay does not increase.
+	 */
+	timeout = timeout + (int)(attempts / VPN_AUTOCONNECT_TIMEOUT_STEP);
+
 	/* Re add this to main loop */
 	vpn_autoconnect_timeout =
-		g_timeout_add_seconds(delay, run_vpn_auto_connect,
-			GINT_TO_POINTER(delay));
+		g_timeout_add_seconds(timeout, run_vpn_auto_connect,
+			GINT_TO_POINTER(attempts));
 
-	DBG("re-added to main loop with %ds delay", delay);
+	DBG("re-added to main loop, next VPN autoconnect in %d seconds",
+		timeout);
 
 	return G_SOURCE_REMOVE;
 
@@ -5515,8 +5510,18 @@ out:
 
 static void vpn_auto_connect(void)
 {
-	if (vpn_autoconnect_timeout)
-		return;
+	DBG("");
+
+	/*
+	 * Remove existing autoconnect from main loop to reset the attempt
+	 * counter in order to get VPN connected when there is a network change.
+	 */
+	if (vpn_autoconnect_timeout) {
+		if (!g_source_remove(vpn_autoconnect_timeout)) {
+			DBG("cannot remove VPN autoconnect from main loop");
+			return;
+		}
+	}
 
 	vpn_autoconnect_timeout =
 		g_timeout_add_seconds(0, run_vpn_auto_connect, NULL);
