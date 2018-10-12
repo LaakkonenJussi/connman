@@ -1594,8 +1594,11 @@ static gboolean connection_removed(DBusConnection *conn, DBusMessage *message,
 				void *user_data)
 {
 	const char *path;
+	const char *ident;
 	const char *signature = DBUS_TYPE_OBJECT_PATH_AS_STRING;
+	char *vpn_ident;
 	struct connection_data *data;
+	struct connman_service *service;
 
 	if (!dbus_message_has_signature(message, signature)) {
 		connman_error("vpn removed signature \"%s\" does not match "
@@ -1604,12 +1607,27 @@ static gboolean connection_removed(DBusConnection *conn, DBusMessage *message,
 		return TRUE;
 	}
 
-	dbus_message_get_args(message, NULL, DBUS_TYPE_OBJECT_PATH, &path,
-				DBUS_TYPE_INVALID);
+	if (!dbus_message_get_args(message, NULL, DBUS_TYPE_OBJECT_PATH, &path,
+				DBUS_TYPE_INVALID))
+		return TRUE;
 
-	data = g_hash_table_lookup(vpn_connections, get_ident(path));
-	if (data)
-		remove_connection(conn, path);
+	ident = get_ident(path);
+
+	data = g_hash_table_lookup(vpn_connections, ident);
+
+	if (!data)
+		return TRUE;
+
+	remove_connection(conn, path);
+
+	/* Create ident for VPN in service.c:service_list lookup. */
+	vpn_ident = g_strconcat("vpn_", ident, NULL);
+	service = connman_service_lookup_from_identifier(vpn_ident);
+
+	if (service)
+		connman_service_unref(service);
+	
+	g_free(vpn_ident);
 
 	return TRUE;
 }
