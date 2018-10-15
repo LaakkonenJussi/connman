@@ -408,12 +408,6 @@ static inline char *service_path(const char *ident)
 	return g_strconcat(CONNMAN_PATH, "/service/", ident, NULL);
 }
 
-static void service_remove(struct connman_service *service)
-{
-	service_list = g_list_remove(service_list, service);
-	g_hash_table_remove(service_hash, service->identifier);
-}
-
 static void compare_path(gpointer value, gpointer user_data)
 {
 	struct connman_service *service = value;
@@ -5453,7 +5447,7 @@ bool __connman_service_remove(struct connman_service *service)
 		service_set_new_service(service, true);
 	} else {
 		/* No network for this service, it's gone for good */
-		service_remove(service);
+		connman_service_unref(service);
 	}
 
 	return true;
@@ -5916,13 +5910,7 @@ static void service_free(gpointer user_data)
 	reply_pending(service, ENOENT);
 
 	__connman_notifier_service_remove(service);
-	/* In our fork, service_schedule_removed() is called by
-	 * service_removed() when the service is being removed
-	 * from service_hash table. If we are only doing it here,
-	 * it may be too late (hash table reference may not be the
-	 * last one left), doing it here and there may result in
-	 * double D-Bus notifications which is also wrong. */
-	//service_schedule_removed(service);
+	service_schedule_removed(service);
 
 	__connman_wispr_stop(service);
 
@@ -6126,7 +6114,12 @@ void connman_service_unref_debug(struct connman_service *service,
 	if (__sync_fetch_and_sub(&service->refcount, 1) != 1)
 		return;
 
-	service_free(service);
+	service_list = g_list_remove(service_list, service);
+
+	__connman_service_disconnect(service);
+
+	/* The remove function of service_hash is service_free */
+	g_hash_table_remove(service_hash, service->identifier);
 }
 
 /*
@@ -7940,14 +7933,6 @@ static struct connman_service *service_get(const char *identifier)
 	return service;
 }
 
-static void service_removed(void *data)
-{
-	struct connman_service *service = data;
-
-	service_schedule_removed(service);
-	connman_service_unref(service);
-}
-
 /* Deduce the security type from the service identifier */
 static enum connman_service_security security_from_ident(const char *ident)
 {
@@ -8796,7 +8781,7 @@ void __connman_service_remove_from_network(struct connman_network *network)
 	 * to be done last).
 	 */
 	if (service->new_service) {
-		service_remove(service);
+		connman_service_unref(service);
 	} else {
 		/* We keep it around but it has become unavailable */
 		service_boolean_changed(service, &service_available);
@@ -8993,7 +8978,7 @@ int __connman_service_init(void)
 	connection = connman_dbus_get_connection();
 
 	service_hash = g_hash_table_new_full(g_str_hash, g_str_equal,
-							NULL, service_removed);
+							NULL, service_free);
 
 	services_notify = g_new0(struct _services_notify, 1);
 	services_notify->remove = g_hash_table_new_full(g_str_hash,
