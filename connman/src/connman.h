@@ -982,6 +982,36 @@ int __connman_iptables_init(void);
 void __connman_iptables_cleanup(void);
 int __connman_iptables_commit(const char *table_name);
 
+int __connman_ip6tables_dump(const char *table_name);
+int __connman_ip6tables_new_chain(const char *table_name,
+					const char *chain);
+int __connman_ip6tables_delete_chain(const char *table_name,
+					const char *chain);
+int __connman_ip6tables_flush_chain(const char *table_name,
+					const char *chain);
+int __connman_ip6tables_find_chain(const char *table_name,
+					const char *chain);
+int __connman_ip6tables_change_policy(const char *table_name,
+					const char *chain,
+					const char *policy);
+int __connman_ip6tables_append(const char *table_name,
+			const char *chain,
+			const char *rule_spec);
+int __connman_ip6tables_insert(const char *table_name,
+			const char *chain,
+			const char *rule_spec);
+int __connman_ip6tables_delete(const char *table_name,
+			const char *chain,
+			const char *rule_spec);
+
+int __connman_ip6tables_iterate_chains(const char *table_name,
+				connman_iptables_iterate_chains_cb_t cb,
+				void *user_data);
+
+int __connman_ip6tables_init(void);
+void __connman_ip6tables_cleanup(void);
+int __connman_ip6tables_commit(const char *table_name);
+
 int __connman_dnsproxy_init(void);
 void __connman_dnsproxy_cleanup(void);
 int __connman_dnsproxy_add_listener(int index);
