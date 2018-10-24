@@ -490,6 +490,15 @@ else
 fi
 AC_SUBST(IPTABLES_SAVE)
 
+if (test "${enable_tools}" != "no"); then
+	AC_PATH_PROGS(IP6TABLES_SAVE, [ip6tables-save], [],
+						$PATH:/sbin:/usr/sbin)
+	IP6TABLES_SAVE=$ac_cv_path_IP6TABLES_SAVE
+else
+	IP6TABLES_SAVE=""
+fi
+AC_SUBST(IP6TABLES_SAVE)
+
 AC_ARG_ENABLE(client, AC_HELP_STRING([--disable-client],
 				[disable command line client]),
 					[enable_client=${enableval}])
