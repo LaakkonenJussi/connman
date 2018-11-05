@@ -46,37 +46,54 @@ struct connman_nat {
 static int enable_ip_forward(bool enable)
 {
 	static char value = 0;
-	int f, err = 0;
+	const char *filepaths[] = {
+				"/proc/sys/net/ipv4/ip_forward",
+				"/proc/sys/net/ipv6/conf/all/forwarding",
+				NULL,
+	};
+	int f, err = 0, i, changed_count = 0;
 
-	if ((f = open("/proc/sys/net/ipv4/ip_forward", O_CLOEXEC | O_RDWR)) < 0)
-		return -errno;
-
-	if (!value) {
-		if (read(f, &value, sizeof(value)) < 0)
-			value = 0;
-
-		if (lseek(f, 0, SEEK_SET) < 0)
+	for (i = 0; filepaths[i]; i++) {
+		if ((f = open(filepaths[i], O_CLOEXEC | O_RDWR)) < 0)
 			return -errno;
+
+		if (!value) {
+			if (read(f, &value, sizeof(value)) < 0)
+				value = 0;
+
+			if (lseek(f, 0, SEEK_SET) < 0)
+				return -errno;
+		}
+
+		if (enable) {
+			char allow = '1';
+
+			if (write (f, &allow, sizeof(allow)) < 0)
+				err = -errno;
+		} else {
+			char deny = '0';
+
+			if (value)
+				deny = value;
+
+			if (write(f, &deny, sizeof(deny)) < 0)
+				err = -errno;
+
+			value = 0;
+		}
+
+		close(f);
+
+		if (!err)
+			changed_count++;
 	}
 
-	if (enable) {
-		char allow = '1';
-
-		if (write (f, &allow, sizeof(allow)) < 0)
-			err = -errno;
-	} else {
-		char deny = '0';
-
-		if (value)
-			deny = value;
-
-		if (write(f, &deny, sizeof(deny)) < 0)
-			err = -errno;
-
-		value = 0;
-	}
-
-	close(f);
+	/*
+	 * Try to revert the change if error happened during write and at least
+	 * one change was made. Ignore the result of the reversion.
+	 */
+	if (err && changed_count)
+		enable_ip_forward(!enable);
 
 	return err;
 }
