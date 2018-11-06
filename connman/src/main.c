@@ -94,6 +94,7 @@ static struct {
 	mode_t umask;
 	bool enable_6to4;
 	char *vendor_class_id;
+	bool block_icmp;
 } connman_settings  = {
 	.bg_scan = true,
 	.pref_timeservers = NULL,
@@ -112,6 +113,7 @@ static struct {
 	.umask = DEFAULT_UMASK,
 	.enable_6to4 = false,
 	.vendor_class_id = NULL,
+	.block_icmp = false,
 };
 
 #define CONF_BG_SCAN                    "BackgroundScanning"
@@ -135,6 +137,7 @@ static struct {
 #define CONF_UMASK                      "Umask"
 #define CONF_ENABLE_6TO4                "Enable6to4"
 #define CONF_VENDOR_CLASS_ID            "VendorClassID"
+#define CONF_BLOCK_ICMP                 "BlockICMP"
 
 static const char *supported_options[] = {
 	CONF_BG_SCAN,
@@ -161,6 +164,7 @@ static const char *supported_options[] = {
 	CONF_DISABLE_PLUGINS,
 	CONF_ENABLE_6TO4,
 	CONF_VENDOR_CLASS_ID,
+	CONF_BLOCK_ICMP,
 	NULL
 };
 
@@ -493,6 +497,13 @@ static void parse_config(GKeyFile *config)
 		connman_settings.vendor_class_id = vendor_class_id;
 
 	g_clear_error(&error);
+
+	boolean = __connman_config_get_bool(config, "General",
+					CONF_BLOCK_ICMP, &error);
+	if (!error)
+		connman_settings.block_icmp = boolean;
+
+	g_clear_error(&error);
 }
 
 static int config_init(const char *file)
@@ -722,6 +733,9 @@ bool connman_setting_get_bool(const char *key)
 
 	if (g_str_equal(key, CONF_ENABLE_6TO4))
 		return connman_settings.enable_6to4;
+
+	if (g_str_equal(key, CONF_BLOCK_ICMP))
+		return connman_settings.block_icmp;
 
 	return false;
 }
