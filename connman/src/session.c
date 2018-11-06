@@ -215,6 +215,37 @@ static int init_firewall(void)
 	if (err < 0)
 		goto err;
 
+	if (connman_setting_get_bool("BlockICMP")) {
+		err = __connman_firewall_add_rule(fw, "filter", "INPUT",
+					"-p icmp -m icmp "
+					"--icmp-type 8/0 -j DROP");
+
+		if (err < 0)
+			goto err;
+
+		err = __connman_firewall_add_rule(fw, "filter", "OUTPUT",
+					"-p icmp -m icmp "
+					"--icmp-type 0/0 -j DROP");
+
+		if (err < 0)
+			goto err;
+
+		err = __connman_firewall_add_ipv6_rule(fw, "filter", "INPUT",
+					"-p icmpv6 -m icmpv6 "
+					"--icmpv6-type 128/0 -j DROP");
+
+		if (err < 0)
+			goto err;
+
+		err = __connman_firewall_add_ipv6_rule(fw, "filter", "OUTPUT",
+					"-p icmpv6 -m icmpv6 "
+					"--icmpv6-type 129/0 -j DROP");
+
+		if (err < 0)
+			goto err;
+
+	}
+
 	err = __connman_firewall_enable(fw);
 	if (err < 0)
 		goto err;
@@ -224,6 +255,7 @@ static int init_firewall(void)
 	return 0;
 
 err:
+	DBG("Failed to initialize");
 	__connman_firewall_destroy(fw);
 
 	return err;
