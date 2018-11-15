@@ -50,17 +50,19 @@ struct connman_managed_table {
 struct fw_rule {
 	int id;
 	bool enabled;
+	bool allowed;
 	char *table;
 	char *chain;
 	char *rule_spec;
-	char *rule_if_info;
+	char *ifname;
 };
 
 struct firewall_context {
 	GList *rules;
+	bool enabled;
 };
 
-static GSList *managed_tables;
+static GSList *managed_tables = NULL;
 
 static bool firewall_is_up;
 static unsigned int firewall_rule_id;
@@ -69,6 +71,8 @@ static unsigned int firewall_rule_id;
 #define CONFIGFIREWALLFILE CONFIGDIR "/" FIREWALLFILE
 #define GROUP_GENERAL "General"
 #define GENERAL_FIREWALL_POLICIES 3
+
+static char disabled_char = '%';
 
 struct general_firewall_context {
 	char **policies;
@@ -85,7 +89,7 @@ static struct firewall_context **dynamic_rules = NULL;
  * The dynamic rules that are currently in use. Service name is used as hash
  * value and the struct firewall_context is the data held.
  */
-//static GHashTable *current_dynamic_rules = NULL;
+static GHashTable *current_dynamic_rules = NULL;
 
 static int chain_to_index(const char *chain_name)
 {
@@ -160,24 +164,42 @@ out:
 	return err;
 }
 
+static char *format_new_rule(int chain, const char* ifname, const char* rule)
+{
+	char *new_rule = NULL;
+
+	if (ifname && *ifname && rule && *rule) {
+		switch (chain) {
+		case NF_IP_LOCAL_IN:
+			new_rule = g_strdup_printf("-i %s %s", ifname, rule);
+			break;
+		case NF_IP_FORWARD:
+		case NF_IP_LOCAL_OUT:
+			new_rule = g_strdup_printf("-o %s %s", ifname, rule);
+			break;
+		default:
+			break;
+		}
+	}
+
+	return new_rule;
+}
+
 static int insert_managed_rule(const char *table_name,
 				const char *chain_name,
-				const char *rule_if_info,
+				const char *ifname,
 				const char *rule_spec)
 {
 	struct connman_managed_table *mtable = NULL;
 	GSList *list;
 	char *chain;
-	char *full_rule_spec = NULL;
+	char *full_rule = NULL;
 	int id, err;
 
-	if (rule_if_info)
-		full_rule_spec = g_strdup_printf("%s %s", rule_if_info,
-								rule_spec);
-	else
-		full_rule_spec = g_strdup(rule_spec);
-
 	id = chain_to_index(chain_name);
+
+	full_rule = format_new_rule(id, ifname, rule_spec);
+
 	if (id < 0) {
 		/* This chain is not managed */
 		chain = g_strdup(chain_name);
@@ -213,42 +235,40 @@ static int insert_managed_rule(const char *table_name,
 	chain = g_strdup_printf("%s%s", CHAIN_PREFIX, chain_name);
 
 out:
-	err = __connman_iptables_append(table_name, chain, full_rule_spec);
+	err = __connman_iptables_append(table_name, chain,
+				full_rule ? full_rule : rule_spec);
 
 	g_free(chain);
-	g_free(full_rule_spec);
+	g_free(full_rule);
 
 	return err;
  }
 
 static int delete_managed_rule(const char *table_name,
 				const char *chain_name,
-				const char *rule_if_info,
+				const char *ifname,
 				const char *rule_spec)
  {
 	struct connman_managed_table *mtable = NULL;
 	GSList *list;
 	int id, err;
 	char *managed_chain;
-	char *full_rule_spec = NULL;
-
-	if (rule_if_info)
-		full_rule_spec = g_strdup_printf("%s %s", rule_if_info,
-								rule_spec);
-	else
-		full_rule_spec = g_strdup(rule_spec);
+	char *full_rule = NULL;
 
 	id = chain_to_index(chain_name);
+
+	full_rule = format_new_rule(id, ifname, rule_spec);
+
 	if (id < 0) {
 		/* This chain is not managed */
 		return __connman_iptables_delete(table_name, chain_name,
-							full_rule_spec);
+					full_rule ? full_rule : rule_spec);
 	}
 
 	managed_chain = g_strdup_printf("%s%s", CHAIN_PREFIX, chain_name);
 
 	err = __connman_iptables_delete(table_name, managed_chain,
-					full_rule_spec);
+				full_rule ? full_rule : rule_spec);
 
 	for (list = managed_tables; list; list = list->next) {
 		mtable = list->data;
@@ -275,7 +295,7 @@ static int delete_managed_rule(const char *table_name,
 
  out:
 	g_free(managed_chain);
-	g_free(full_rule_spec);
+	g_free(full_rule);
 
 	return err;
 }
@@ -292,7 +312,7 @@ static void cleanup_fw_rule(gpointer user_data)
 {
 	struct fw_rule *rule = user_data;
 
-	g_free(rule->rule_if_info);
+	g_free(rule->ifname);
 	g_free(rule->rule_spec);
 	g_free(rule->chain);
 	g_free(rule->table);
@@ -321,10 +341,14 @@ static int firewall_enable_rule(struct fw_rule *rule)
 	if (rule->enabled)
 		return -EALREADY;
 
-	DBG("%s %s %s %s", rule->table, rule->chain, rule->rule_if_info,
+	/* If rule is not allowed*/
+	if (!rule->allowed)
+		return -EPERM;
+
+	DBG("%s %s %s %s", rule->table, rule->chain, rule->ifname,
 							rule->rule_spec);
 
-	err = insert_managed_rule(rule->table, rule->chain, rule->rule_if_info,
+	err = insert_managed_rule(rule->table, rule->chain, rule->ifname,
 							rule->rule_spec);
 	if (err < 0) {
 		DBG("cannot insert managed rule %d", err);
@@ -349,7 +373,7 @@ static int firewall_disable_rule(struct fw_rule *rule)
 	if (!rule->enabled)
 		return -EALREADY;
 
-	err = delete_managed_rule(rule->table, rule->chain, rule->rule_if_info,
+	err = delete_managed_rule(rule->table, rule->chain, rule->ifname,
 							rule->rule_spec);
 	if (err < 0) {
 		connman_error("Cannot remove previously installed "
@@ -388,9 +412,21 @@ int __connman_firewall_add_rule(struct firewall_context *ctx,
 
 	rule->id = firewall_rule_id++;
 	rule->enabled = false;
+	rule->allowed = true;
 	rule->table = g_strdup(table);
 	rule->chain = g_strdup(chain);
-	rule->rule_spec = rule_spec;
+
+	/*
+	 * If rule starts with % (disabled_char) it is not allowed to use. The
+	 * actual rule starts after this character.
+	 */
+	if (rule_spec[0] == disabled_char) {
+		rule->allowed = false;
+		rule->rule_spec = g_strdup(&(rule_spec[1]));
+		g_free(rule_spec);
+	} else {
+		rule->rule_spec = rule_spec;
+	}
 
 	ctx->rules = g_list_append(ctx->rules, rule);
 	return rule->id;
@@ -427,6 +463,7 @@ int __connman_firewall_enable_rule(struct firewall_context *ctx, int id)
 	struct fw_rule *rule;
 	GList *list;
 	int err = -ENOENT;
+	int count = 0;
 
 	for (list = g_list_first(ctx->rules); list; list = g_list_next(list)) {
 		rule = list->data;
@@ -434,16 +471,22 @@ int __connman_firewall_enable_rule(struct firewall_context *ctx, int id)
 		if (rule->id == id || id == FW_ALL_RULES) {
 			err = firewall_enable_rule(rule);
 
-			if (err == -EALREADY) {
+			/* Rules that are forced off are silently ignored */
+			if (err == -EPERM)
 				err = 0;
-			} else if (err < 0) {
-				DBG("rule error %d", err);
+			else if (err < 0)
 				break;
-			}
 
 			if (id != FW_ALL_RULES)
 				break;
 		}
+
+		count++;
+	}
+
+	if (!err && id == FW_ALL_RULES) {
+		DBG("firewall enabled");
+		ctx->enabled = true;
 	}
 
 	return err;
@@ -463,10 +506,8 @@ int __connman_firewall_disable_rule(struct firewall_context *ctx, int id)
 		if (rule->id == id || id == FW_ALL_RULES) {
 			e = firewall_disable_rule(rule);
 
-			/*
-			 * Report last error back, already disabled = no error
-			 */
-			if ((e == 0 && err == -ENOENT) || e == -EALREADY)
+			/* Report last error back */
+			if (e == 0 && err == -ENOENT)
 				err = 0;
 			else if (e < 0)
 				err = e;
@@ -474,6 +515,11 @@ int __connman_firewall_disable_rule(struct firewall_context *ctx, int id)
 			if (id != FW_ALL_RULES)
 				break;
 		}
+	}
+
+	if (!err && id == FW_ALL_RULES) {
+		DBG("firewall disabled");
+		ctx->enabled = false;
 	}
 
 	return err;
@@ -596,75 +642,161 @@ static bool has_dynamic_rules_set(enum connman_service_type type)
 	return true;
 }
 
-static int enable_dynamic_rules(struct connman_service *service)
+static void setup_firewall_rule_interface(gpointer data, gpointer user_data)
 {
 	struct fw_rule *rule;
-	enum connman_service_type type;
-	GList *list;
+	struct connman_service *service;
 	char *ifname;
 
-	type = connman_service_get_type(service);
+	rule = data;
+	service = user_data;
 
-	/* No rules set for this type, no error */
-	if (!has_dynamic_rules_set(type)) {
-		DBG("no rules for service %p type %d", service, type);
-		return 0;
-	}
+	/* If rule is already enabled interface info is already set */
+	if (!rule || !service || rule->enabled)
+		return;
 
 	ifname = connman_service_get_interface(service);
 
-	DBG("service %p type %d ifname %s", service, type, ifname);
-
-	/* Go through list and set interface info for each rule */
-	for (list = g_list_first(dynamic_rules[type]->rules); list;
-			list = g_list_next(list)) {
-		rule = list->data;
-
-		/* If rule is already enabled interface info is already set */
-		if (rule->enabled)
-			continue;
-
-		g_free(rule->rule_if_info);
-
-		switch (chain_to_index(rule->chain)) {
-		case NF_IP_LOCAL_IN:
-			rule->rule_if_info = g_strdup_printf("-i %s", ifname);
-			break;
-		case NF_IP_FORWARD:
-		case NF_IP_LOCAL_OUT:
-			rule->rule_if_info = g_strdup_printf("-o %s", ifname);
-			break;
-		default:
-			DBG("Unsupported chain %s in rule %d:%s", rule->chain,
-						rule->id, rule->rule_spec);
-			rule->rule_if_info = NULL;
-		}
-
-		DBG("rule %d %s %s", rule->id, rule->rule_if_info,
-					rule->rule_spec);
+	if (rule->ifname && g_str_equal(rule->ifname, ifname)) {
+		DBG("rule %d ifname %s not changed", rule->id, rule->ifname);
+		g_free(ifname);
+		return;
 	}
 
-	g_free(ifname);
+	g_free(rule->ifname);
+	rule->ifname = ifname;
 
-	return __connman_firewall_enable(dynamic_rules[type]);
+	DBG("rule %d %s %s", rule->id, rule->ifname, rule->rule_spec);
+}
+
+static gpointer copy_fw_rule(gconstpointer src, gpointer data)
+{
+	struct connman_service *service;
+	const struct fw_rule *old;
+	struct fw_rule *new;
+	
+	old = src;
+	service = data;
+
+	if (!old)
+		return NULL;
+
+	new = g_try_new0(struct fw_rule, 1);
+
+	if (!new)
+		return NULL;
+
+	new->id = firewall_rule_id++;
+	new->enabled = false;
+	new->allowed = old->allowed;
+	new->table = g_strdup(old->table);
+	new->chain = g_strdup(old->chain);
+	new->rule_spec = g_strdup(old->rule_spec);
+
+	setup_firewall_rule_interface(new, service);
+
+	return new;
+}
+
+static struct firewall_context *clone_firewall_context(
+						struct firewall_context *ctx,
+						struct connman_service *service)
+{
+	struct firewall_context *clone;
+
+	if (!ctx || !service)
+		return NULL;
+	
+	clone = __connman_firewall_create();
+	
+	if (!clone)
+		return NULL;
+	
+	clone->rules = g_list_copy_deep(ctx->rules, copy_fw_rule, service);
+	
+	return clone;
+}
+
+static int enable_dynamic_rules(struct connman_service *service)
+{
+	struct firewall_context *ctx;
+	enum connman_service_type type;
+	const char *identifier;
+	char *hash;
+
+	DBG("");
+
+	/* This is not set if the configuration has not been loaded */
+	if (!current_dynamic_rules)
+		return 0;
+
+	identifier = connman_service_get_identifier(service);
+	
+	ctx = g_hash_table_lookup(current_dynamic_rules, identifier);
+
+	/* Not found, check if it has dynamic rules configured */
+	if (!ctx) {
+		type = connman_service_get_type(service);
+		
+		/* No rules set for this type */
+		if (!has_dynamic_rules_set(type))
+			return 0;
+
+		/* Create a clone with interface info from service */
+		ctx = clone_firewall_context(dynamic_rules[type], service);
+
+		/* Allocation of ctx failed */
+		if (!ctx)
+			return -ENOMEM;
+
+		hash = g_strdup(identifier);
+
+		/*
+		 * Add a new into hash table, this condition should not be ever
+		 * met. Left for debugging.
+		 */
+		if (!g_hash_table_replace(current_dynamic_rules, hash, ctx))
+			DBG("hash table error, key %s exists", hash);
+		else
+			DBG("added new firewall rules for service %p %s",
+					service, identifier);
+	} else {
+		if (ctx->enabled)
+			return -EALREADY;
+
+		/* Set interface information for each firewall rule */
+		g_list_foreach(ctx->rules, setup_firewall_rule_interface,
+					service);
+
+		DBG("reused firewall for service %p %s", service, identifier);
+	}
+
+	return __connman_firewall_enable(ctx);
 }
 
 static int disable_dynamic_rules(struct connman_service *service)
 {
-	enum connman_service_type type;
+	struct firewall_context *ctx;
+	const char *identifier;
 
-	type = connman_service_get_type(service);
+	DBG("");
 
-	/* No rules set for this type, no error */
-	if (!has_dynamic_rules_set(type)) {
-		DBG("no rules for service %p type %d", service, type);
+	if (!current_dynamic_rules)
 		return 0;
-	}
 
-	DBG("service %p type %d", service, type);
+	identifier = connman_service_get_identifier(service);
 
-	return __connman_firewall_disable_rule(dynamic_rules[type],
-					FW_ALL_RULES);
+	ctx = g_hash_table_lookup(current_dynamic_rules, identifier);
+
+	/* No rules set, no error */
+	if (!ctx)
+		return 0;
+
+	if (!ctx->enabled)
+		return -EALREADY;
+
+	/* Only disable rules, do not remove them to reduce mem fragmentation */
+	return __connman_firewall_disable_rule(ctx, FW_ALL_RULES);
 }
 
 static void service_state_changed(struct connman_service *service,
@@ -688,17 +820,41 @@ static void service_state_changed(struct connman_service *service,
 	case CONNMAN_SERVICE_STATE_FAILURE:
 	case CONNMAN_SERVICE_STATE_DISCONNECT:
 		err = disable_dynamic_rules(service);
-		if (err)
-			DBG("Cannot disable dynamic rules for type %d error %d",
-						type, err);
+
+		if (err == -EALREADY)
+			DBG("dynamic firewall already disabled for service %p",
+						service);
+		else if (err)
+			DBG("cannot disable dynamic rules of service %p "
+						"error %d", service, err);
+
 		break;
 	case CONNMAN_SERVICE_STATE_READY:
 	case CONNMAN_SERVICE_STATE_ONLINE:
 		err = enable_dynamic_rules(service);
-		if (err)
-			DBG("Cannot enable dynamic rules for type %d error %d",
-						type, err);
+
+		if (err == -EALREADY)
+			DBG("dynamic firewall already enabled for service %p",
+						service);
+		else if (err == -EINVAL)
+			DBG("firewall cloning failed for service %p", service);
+		else if (err)
+			DBG("cannot enable dynamic rules of service %p "
+						", error %d", service, err);
 	}
+}
+
+static void service_remove(struct connman_service *service)
+{
+	const char *identifier;
+
+	if (!current_dynamic_rules)
+		return;
+
+	identifier = connman_service_get_identifier(service);
+
+	if (g_hash_table_remove(current_dynamic_rules, identifier))
+		DBG("removed dynamic rules of service %s", identifier);
 }
 
 enum iptables_switch_type {
@@ -1150,7 +1306,8 @@ static int add_general_rules_cb(const char *group, int chain_id, char** rules)
 	if (!general_firewall)
 		return -EINVAL;
 
-	general_firewall->ctx = __connman_firewall_create();
+	if (!general_firewall->ctx)
+		general_firewall->ctx = __connman_firewall_create();
 
 	if (!general_firewall->ctx)
 		return -ENOMEM;
@@ -1159,6 +1316,12 @@ static int add_general_rules_cb(const char *group, int chain_id, char** rules)
 		return 0;
 
 	for (i = 0; rules[i]; i++) {
+
+		if (!g_utf8_validate(rules[i], -1, NULL)) {
+			DBG("skipping rule, not valid UTF8");
+			continue;
+		}
+
 		DBG("processing %s rule chain %s rule %s", GROUP_GENERAL,
 					builtin_chains[chain_id], rules[i]);
 
@@ -1357,9 +1520,9 @@ static bool check_dynamic_rules(GKeyFile *config)
 
 		for (i = 0; keys && keys[i]; i++) {
 			if (!check_config_key(group, keys[i])) {
-				connman_warn("Unknown option %s in group %s "
-							"in %s file", keys[i],
-							group, FIREWALLFILE);
+				connman_warn("Unknown group %s option %s in %s",
+							group, keys[i],
+							FIREWALLFILE);
 				ret = false;
 			}
 		}
@@ -1433,6 +1596,8 @@ static int enable_general_firewall()
 
 		/* No rules defined, no error */
 		return 0; 
+	} else {
+		DBG("%d general rules", g_list_length(general_firewall->ctx->rules));
 	}
 
 	return __connman_firewall_enable(general_firewall->ctx);
@@ -1551,6 +1716,16 @@ static int init_general_firewall(GKeyFile *config)
 	return err;
 }
 
+static void remove_ctx(gpointer user_data)
+{
+	struct firewall_context *ctx = user_data;
+
+	if (ctx->enabled)
+		__connman_firewall_disable_rule(ctx, FW_ALL_RULES);
+
+	__connman_firewall_destroy(ctx);
+}
+
 static int init_dynamic_firewall_rules(const char *file)
 {
 	GKeyFile *config;
@@ -1588,6 +1763,9 @@ static int init_dynamic_firewall_rules(const char *file)
 		goto out;
 	}
 
+	current_dynamic_rules = g_hash_table_new_full(g_str_hash, g_str_equal,
+							g_free, remove_ctx);
+
 	for (type = CONNMAN_SERVICE_TYPE_UNKNOWN;
 			type < MAX_CONNMAN_SERVICE_TYPES ; type++) {
 
@@ -1621,13 +1799,15 @@ static void cleanup_general_firewall()
 	if (!general_firewall->ctx)
 		return;
 
-	err = __connman_firewall_disable_rule(general_firewall->ctx,
-			FW_ALL_RULES);
+	if (general_firewall->ctx->enabled) {
+		err = __connman_firewall_disable_rule(general_firewall->ctx,
+				FW_ALL_RULES);
 
-	if (err)
-		DBG("Cannot disable generic firewall rules");
-
+		if (err)
+			DBG("Cannot disable generic firewall rules");
+	}
 	__connman_firewall_destroy(general_firewall->ctx);
+	general_firewall->ctx = NULL;
 
 	for (i = NF_IP_LOCAL_IN; i < NF_IP_NUMHOOKS - 1; i++) {
 
@@ -1662,31 +1842,33 @@ static void cleanup_general_firewall()
 	}
 
 	g_free(general_firewall->policies);
+	general_firewall->policies = NULL;
+
 	g_free(general_firewall->restore_policies);
+	general_firewall->restore_policies = NULL;
 
 	g_free(general_firewall);
+	general_firewall = NULL;
 }
 
 static void cleanup_dynamic_firewall_rules()
 {
 	enum connman_service_type type;
-	int err;
 
 	DBG("");
+
+	if (current_dynamic_rules)
+		g_hash_table_destroy(current_dynamic_rules);
 
 	if (!dynamic_rules)
 		return;
 
+	/* These rules are never enabled directly */
 	for (type = CONNMAN_SERVICE_TYPE_UNKNOWN + 1;
 			type < MAX_CONNMAN_SERVICE_TYPES ; type++) {
 
 		if (!dynamic_rules[type])
 			continue;
-
-		err = __connman_firewall_disable(dynamic_rules[type]);
-
-		if (err)
-			DBG("Cannot disable type %d dynamic rules", type);
 
 		__connman_firewall_destroy(dynamic_rules[type]);
 		dynamic_rules[type] = NULL;
@@ -1695,11 +1877,13 @@ static void cleanup_dynamic_firewall_rules()
 	cleanup_general_firewall();
 
 	g_free(dynamic_rules);
+	dynamic_rules = NULL;
 }
 
 static struct connman_notifier firewall_notifier = {
 	.name			= "firewall",
 	.service_state_changed	= service_state_changed,
+	.service_remove		= service_remove,
 };
 
 int __connman_firewall_init(void)
@@ -1728,5 +1912,7 @@ void __connman_firewall_cleanup(void)
 	DBG("");
 
 	cleanup_dynamic_firewall_rules();
+
 	g_slist_free_full(managed_tables, cleanup_managed_table);
+	managed_tables = NULL;
 }
