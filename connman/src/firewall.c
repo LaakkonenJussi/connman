@@ -68,7 +68,8 @@ static bool firewall_is_up;
 static unsigned int firewall_rule_id;
 
 #define FIREWALLFILE "firewall.conf"
-#define CONFIGFIREWALLFILE CONFIGDIR "/" FIREWALLFILE
+#define FIREWALLCONFIGFILE CONFIGDIR "/" FIREWALLFILE
+#define FIREWALLCONFIGDIR CONFIGDIR "/firewall.d/"
 #define GROUP_GENERAL "General"
 #define GENERAL_FIREWALL_POLICIES 3
 
@@ -1710,8 +1711,6 @@ static int init_general_firewall(GKeyFile *config)
 
 	if (err)
 		DBG("cannot setup general firewall rules");
-	else
-		err = enable_general_firewall();
 
 	return err;
 }
@@ -1783,6 +1782,78 @@ out:
 		g_key_file_unref(config);
 
 	return ret;
+}
+
+static int init_all_dynamic_firewall_rules(void)
+{
+	GList *filenames = NULL;
+	GList *iter;
+	GError *error = NULL;
+	GDir *dir;
+	const char *filename = NULL;
+	char *filepath = NULL;
+	int err;
+
+	err = init_dynamic_firewall_rules(FIREWALLCONFIGFILE);
+
+	if (g_file_test(FIREWALLCONFIGDIR, G_FILE_TEST_IS_DIR)) {
+		dir = g_dir_open(FIREWALLCONFIGDIR, 0, &error);
+
+		if (!dir) {
+			if (error)
+				DBG("cannot open dir, error: %s",
+							error->message);
+			goto out;
+		}
+
+		DBG("read configs from %s", FIREWALLCONFIGDIR);
+
+		/*
+		 * Ordering of files is not guaranteed with g_dir_open(). Read
+		 * the filenames into sorted GList.
+		 */
+		while ((filename = g_dir_read_name(dir))) {
+			/* Read configs that have firewall.conf suffix */
+			if (!g_str_has_suffix(filename, FIREWALLFILE))
+				continue;
+
+			/*
+			 * Filename is used for sorting the list, no need to
+			 * allocate a new one.
+			 */
+			filenames = g_list_insert_sorted(filenames,
+						(char*)filename,
+						(GCompareFunc)g_strcmp0);
+		}
+
+		for (iter = filenames; iter ; iter = iter->next) {
+			filename = iter->data;
+
+			filepath = g_strconcat(FIREWALLCONFIGDIR, filename,
+						NULL);
+			DBG("reading config %s", filepath);
+
+			/* Allow also symbolic links in configs */
+			if (g_file_test(filepath, G_FILE_TEST_IS_REGULAR)) {
+				if (init_dynamic_firewall_rules(filepath))
+					DBG("invalid firewall config");
+			}
+
+			g_free(filepath);
+		}
+
+		/* Strings in list are owned by GLib, don't free them. */
+		g_list_free(filenames);
+		g_dir_close(dir);
+	} else {
+		DBG("no config dir %s", FIREWALLCONFIGDIR);
+	}
+
+	err = enable_general_firewall();
+
+out:
+	g_clear_error(&error);
+	return err;
 }
 
 static void cleanup_general_firewall()
@@ -1894,7 +1965,7 @@ int __connman_firewall_init(void)
 
 	flush_all_tables();
 
-	err = init_dynamic_firewall_rules(CONFIGFIREWALLFILE);
+	err = init_all_dynamic_firewall_rules();
 
 	if (!err) { 
 		err = connman_notifier_register(&firewall_notifier);
