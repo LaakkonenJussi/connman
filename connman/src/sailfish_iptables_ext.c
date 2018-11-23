@@ -1087,6 +1087,7 @@ static int iptables_parse_rule(const gchar* table_name, gchar* rule)
 			iptables_append_arg(rule_str, arg, false);
 		}
 	}
+	/* TODO separate parsing and adding to own functions */
 
 	// First token contains the mode, prefixed with '-'
 	switch (argv[0][1]) {
@@ -1161,6 +1162,10 @@ static int iptables_restore_table(const char *table_name, const char *fpath)
 		// Chain and policy
 		case ':':
 			if (content_matches) {
+				/*
+				 * Policy is set with iptc functions and commit
+				 * is done within iptables_parse_policy()
+				 */
 				if (iptables_parse_policy(table_name,
 						tokens[i]))
 					ERR("iptables_restore_table() "
@@ -1171,12 +1176,36 @@ static int iptables_restore_table(const char *table_name, const char *fpath)
 		// Rule
 		case '-':
 			if (content_matches) {
-				if (iptables_parse_rule(table_name, tokens[i]))
+				/* If rule is invalid ignore it*/
+				if (iptables_parse_rule(table_name,
+							tokens[i])) {
 					ERR("iptables_restore_table()"
 						"Invalid rule %s",
 						tokens[i]);
-				else
+				} else {
+					/*
+					 * Commit rules one by one to make sure
+					 * rule is set to iptables and no error
+					 * occurs.
+					 */
+					rval = __connman_iptables_commit(
+								AF_INET,
+								table_name);
+
+					/*
+					 * In case commit fails it cannot be
+					 * recovered. Stop processing rules.
+					 */
+					if (rval) {
+						ERR("iptables_restore_table() "
+							"committing rule "
+							"%s failed",
+								tokens[i]);
+						goto err;
+					}
+
 					rules++;
+				}
 			}
 			break;
 		/*
@@ -1195,16 +1224,16 @@ static int iptables_restore_table(const char *table_name, const char *fpath)
 	g_string_free(content,true);
 	
 	if (content_matches) {
-		/* Commit fails if there has not been any changes */
-		if (rules) {
+		if (rules)
 			DBG("Added %d rules to table %s", rules, table_name);
-			rval = __connman_iptables_commit(AF_INET, table_name);
-		}
+		else
+			DBG("No rules were added to table %s", table_name);
 	} else {
+		/* TODO set rval = -1 in case of error ? */
 		ERR("iptables_restore_table() %s",
 			"requested table name does not match file table name");
 	}
-
+err:
 	return rval;
 }
 
