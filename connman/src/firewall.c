@@ -776,38 +776,34 @@ static bool has_dynamic_rules_set(enum connman_service_type type)
 static void setup_firewall_rule_interface(gpointer data, gpointer user_data)
 {
 	struct fw_rule *rule;
-	struct connman_service *service;
 	char *ifname;
 
 	rule = data;
-	service = user_data;
+	ifname = user_data;
 
 	/* If rule is already enabled interface info is already set */
-	if (!rule || !service || rule->enabled)
+	if (!rule || !ifname || rule->enabled)
 		return;
-
-	ifname = connman_service_get_interface(service);
 
 	if (rule->ifname && g_str_equal(rule->ifname, ifname)) {
 		DBG("rule %d ifname %s not changed", rule->id, rule->ifname);
-		g_free(ifname);
 		return;
 	}
 
 	g_free(rule->ifname);
-	rule->ifname = ifname;
+	rule->ifname = g_strdup(ifname);
 
 	DBG("rule %d %s %s", rule->id, rule->ifname, rule->rule_spec);
 }
 
 static gpointer copy_fw_rule(gconstpointer src, gpointer data)
 {
-	struct connman_service *service;
 	const struct fw_rule *old;
 	struct fw_rule *new;
+	char *ifname;
 	
 	old = src;
-	service = data;
+	ifname = data;
 
 	if (!old)
 		return NULL;
@@ -824,18 +820,18 @@ static gpointer copy_fw_rule(gconstpointer src, gpointer data)
 	new->chain = g_strdup(old->chain);
 	new->rule_spec = g_strdup(old->rule_spec);
 
-	setup_firewall_rule_interface(new, service);
+	setup_firewall_rule_interface(new, ifname);
 
 	return new;
 }
 
 static struct firewall_context *clone_firewall_context(
 						struct firewall_context *ctx,
-						struct connman_service *service)
+						char *ifname)
 {
 	struct firewall_context *clone;
 
-	if (!ctx || !service)
+	if (!ctx || !ifname)
 		return NULL;
 	
 	clone = __connman_firewall_create();
@@ -843,7 +839,7 @@ static struct firewall_context *clone_firewall_context(
 	if (!clone)
 		return NULL;
 	
-	clone->rules = g_list_copy_deep(ctx->rules, copy_fw_rule, service);
+	clone->rules = g_list_copy_deep(ctx->rules, copy_fw_rule, ifname);
 	
 	return clone;
 }
@@ -853,6 +849,7 @@ static int enable_dynamic_rules(struct connman_service *service)
 	struct firewall_context *ctx;
 	enum connman_service_type type;
 	const char *identifier;
+	char *ifname = NULL;
 	char *hash;
 
 	DBG("");
@@ -862,7 +859,7 @@ static int enable_dynamic_rules(struct connman_service *service)
 		return 0;
 
 	identifier = connman_service_get_identifier(service);
-	
+
 	ctx = g_hash_table_lookup(current_dynamic_rules, identifier);
 
 	/* Not found, check if it has dynamic rules configured */
@@ -873,12 +870,16 @@ static int enable_dynamic_rules(struct connman_service *service)
 		if (!has_dynamic_rules_set(type))
 			return 0;
 
+		ifname = connman_service_get_interface(service);
+
 		/* Create a clone with interface info from service */
-		ctx = clone_firewall_context(dynamic_rules[type], service);
+		ctx = clone_firewall_context(dynamic_rules[type], ifname);
 
 		/* Allocation of ctx failed */
-		if (!ctx)
+		if (!ctx) {
+			g_free(ifname);
 			return -ENOMEM;
+		}
 
 		hash = g_strdup(identifier);
 
@@ -895,12 +896,16 @@ static int enable_dynamic_rules(struct connman_service *service)
 		if (ctx->enabled)
 			return -EALREADY;
 
+		ifname = connman_service_get_interface(service);
+
 		/* Set interface information for each firewall rule */
 		g_list_foreach(ctx->rules, setup_firewall_rule_interface,
-					service);
+					ifname);
 
 		DBG("reused firewall for service %p %s", service, identifier);
 	}
+
+	g_free(ifname);
 
 	return __connman_firewall_enable(ctx);
 }
@@ -986,6 +991,211 @@ static void service_remove(struct connman_service *service)
 
 	if (g_hash_table_remove(current_dynamic_rules, identifier))
 		DBG("removed dynamic rules of service %s", identifier);
+}
+
+#define DEFAULT_TETHERING_IDENT "tethering_default"
+
+static int add_tethering_rules(struct firewall_context *ctx,
+			enum connman_service_type type, char *ifname)
+{
+	/* Rules to enable with WiFi */
+	const char *tethering_rules_wifi[] = {
+				/* dns all protocols */
+				"-p tcp -m tcp --dport 53 -j ACCEPT",
+				"-p udp -m udp --dport 53 -j ACCEPT",
+				/* mdns udp for future use */
+				//"-p udp -m udp --dport 5353 -j ACCEPT",
+				/* dns using tls, added for future */
+				//"-p tcp -m tcp --dport 853 -j ACCEPT",
+				/* dhcp, to allow act both server and client */
+				"-p udp -m udp --dport 67 -j ACCEPT",
+				"-p udp -m udp --dport 68 -j ACCEPT",
+				/* dhcp failover over tcp for future use */
+				//"-p tcp -m multiport --dports 647,847 -j ACCEPT",
+				NULL
+	};
+	/* Rules only for IPv6 WiFi*/
+	const char *tethering_rules_wifi_v6[] = {
+				/* dhcpv6 */
+				"-p all --dport 547 -j ACCEPT",
+				NULL
+	};
+	const char *tethering_rules[] = { "-j ACCEPT", NULL };
+	int id;
+	int i;
+
+	if (type == CONNMAN_SERVICE_TYPE_WIFI) {
+		/* Add tethering rules for both IPv4 and IPv6 using wifi */
+		for (i = 0; tethering_rules_wifi[i]; i++) {
+			id = __connman_firewall_add_rule(ctx, "filter", "INPUT",
+						tethering_rules_wifi[i]);
+
+			if (id < 0)
+				DBG("cannot add IPv4 rule %s",
+						tethering_rules_wifi[i]);
+
+			id = __connman_firewall_add_ipv6_rule(ctx, "filter",
+						"INPUT",
+						tethering_rules_wifi[i]);
+			if (id < 0)
+				DBG("cannot add IPv6 rule %s",
+							tethering_rules_wifi[i]);
+		}
+
+		/* Amend IPv6 rules */
+		for (i = 0; tethering_rules_wifi_v6[i]; i++) {
+			id = __connman_firewall_add_ipv6_rule(ctx, "filter",
+						"INPUT",
+						tethering_rules_wifi_v6[i]);
+			if (id < 0)
+				DBG("cannot add IPv6 rule %s",
+						tethering_rules_wifi_v6[i]);
+		}
+	} else if (type == CONNMAN_SERVICE_TYPE_GADGET) {
+		/* Add tethering rules for both IPv4 and IPv6 when using usb */
+		for (i = 0; tethering_rules[i]; i++) {
+			id = __connman_firewall_add_rule(ctx, "filter", "INPUT",
+						tethering_rules[i]);
+			if (id < 0)
+				DBG("cannot add IPv4 rule %s",
+							tethering_rules[i]);
+
+			id = __connman_firewall_add_ipv6_rule(ctx, "filter",
+						"INPUT", tethering_rules[i]);
+			if (id < 0)
+				DBG("cannot add IPv6 rule %s",
+							tethering_rules[i]);
+		}
+	}
+
+	g_list_foreach(ctx->rules, setup_firewall_rule_interface,
+					ifname);
+
+	return 0;
+}
+
+static void tethering_changed(struct connman_technology *tech, bool on)
+{
+	struct firewall_context *ctx;
+	enum connman_service_type type;
+	const char *identifier;
+	char *ifname = NULL;
+	char *hash;
+	int err;
+	
+	DBG("technology %p %s", tech, on ? "on" : "off");
+	
+	if (!tech)
+		return;
+	
+	/* This is not set if the configuration has not been loaded */
+	if (!current_dynamic_rules)
+		return;
+
+	type = __connman_technology_get_type(tech);
+	identifier = __connman_technology_get_tethering_ident(tech);
+	
+	/* This is known to happen with usb tethering, no ident exists */
+	if (!identifier)
+		identifier = DEFAULT_TETHERING_IDENT;
+	
+	DBG("tethering ident %s type %s", identifier,
+				__connman_service_type2string(type));
+	
+	ctx = g_hash_table_lookup(current_dynamic_rules, identifier);
+
+	/* Not found, create new. */
+	if (!ctx) {
+		/* If no rules are set and tethering is disabled, return */
+		if (!on)
+			return;
+
+		/*
+		 * Eventually ifname is duplicated for each rule but bridge is
+		 * defined as const in technology.c it is safer to dup the
+		 * ifname and free it accordingly.
+		 */
+		ifname = g_strdup(__connman_tethering_get_bridge());
+
+		/* No dynamic rules set for this type, create new */
+		if (!has_dynamic_rules_set(type)) {
+			ctx = __connman_firewall_create();
+
+			/* Allocation of ctx failed, disable tethering. */
+			if (!ctx) {
+				connman_warn("new firewall cannot be created."
+							"Tethering disabled");
+				/* This generates notification */
+				connman_technology_tethering_notify(tech,
+							FALSE);
+				return;
+			}
+		} else {
+			ctx = clone_firewall_context(dynamic_rules[type],
+						ifname);
+		}
+
+		if (add_tethering_rules(ctx, type, ifname)) {
+			DBG("rules were not added, tethering does not work");
+		}
+
+		hash = g_strdup(identifier);
+
+		/*
+		 * Add a new into hash table, this condition should not be ever
+		 * met. Left for debugging.
+		 */
+		if (!g_hash_table_replace(current_dynamic_rules, hash, ctx))
+			DBG("hash table error, key %s exists", hash);
+		else
+			DBG("added new tethering firewall rules for %p %s %s",
+						tech, identifier, ifname);
+	} else {
+		/*
+		 * If tethering is on and firewall is enabled, return. 
+		 * If tethering is off and firewall is disabled, return.
+		 */
+		if ((on && ctx->enabled) || (!on && !ctx->enabled)) {
+			DBG("tethering firewall already %s for %s",
+						on ? "enabled" : "disabled",
+						identifier);
+			return;
+		}
+
+		/*
+		 * If there is a tethering firewall for this identifier it will
+		 * have the rules set up properly. Just to make sure, update the
+		 * used interface info.
+		 */
+		if (on) {
+			ifname = g_strdup(__connman_tethering_get_bridge());
+
+			/* Set interface information for each firewall rule */
+			g_list_foreach(ctx->rules,
+						setup_firewall_rule_interface,
+						ifname);
+
+			DBG("reused tethering firewall for %p %s %s",
+						tech, identifier, ifname);
+		}
+	}
+
+	g_free(ifname);
+
+	if (on) {
+		err = __connman_firewall_enable(ctx);
+
+		if (err && err != -EALREADY) {
+			DBG("cannot enable firewall, tethering disabled: "
+						"error %d", err);
+			connman_technology_tethering_notify(tech, FALSE);
+		}
+	} else {
+		err = __connman_firewall_disable_rule(ctx, FW_ALL_RULES);
+
+		if (err && err != -EALREADY)
+			DBG("cannot disable firewall: error %d", err);
+	}
 }
 
 enum iptables_switch_type {
@@ -1840,7 +2050,8 @@ static int enable_general_firewall()
 		/* No rules defined, no error */
 		return 0; 
 	} else {
-		DBG("%d general rules", g_list_length(general_firewall->ctx->rules));
+		DBG("%d general rules",
+				g_list_length(general_firewall->ctx->rules));
 	}
 
 	return __connman_firewall_enable(general_firewall->ctx);
@@ -2286,6 +2497,7 @@ static struct connman_notifier firewall_notifier = {
 	.name			= "firewall",
 	.service_state_changed	= service_state_changed,
 	.service_remove		= service_remove,
+	.tethering_changed	= tethering_changed,
 };
 
 int __connman_firewall_init(void)
