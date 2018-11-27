@@ -244,11 +244,15 @@ void connman_technology_tethering_notify(struct connman_technology *technology,
 		__connman_tethering_set_disabled();
 
 	/*
-	 * Notify about tethering having been turned off after it's actually
-	 * been turned off.
+	 * Notify about tethering status. Notifying also when enabled is a
+	 * workaround for some WiFi drivers that report unsupported tethering
+	 * mode with the used WiFi and sending D-Bus message to disable
+	 * tethering that results only in a notification that tethering is off.
+	 * Without this on mode notification the firewall for tethering is not
+	 * enabled. This is a temporary solution and WiFi driver should be
+	 * fixed so this can be re-enabled for off mode only.
 	 */
-	if (!enabled)
-		__connman_notifier_tethering_changed(technology, FALSE);
+	__connman_notifier_tethering_changed(technology, enabled);
 
 }
 
