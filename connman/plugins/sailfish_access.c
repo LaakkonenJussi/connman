@@ -124,6 +124,7 @@ static const DA_ACTION tech_policy_actions [] = {
 static const char *firewall_policy_default =
 	DA_POLICY_VERSION ";"
 	"Reload(*)=deny;"
+	"user(systemd)=allow;"
 	"group(privileged)=allow";
 static const DA_ACTION firewall_policy_actions [] = {
         { "Reload", FIREWALL_ACCESS_RELOAD, 1 },
