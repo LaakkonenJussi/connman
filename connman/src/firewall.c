@@ -1270,6 +1270,9 @@ static bool is_string_hexadecimal(const char *str)
 	return true;
 }
 
+/* Increase this if any of the rules require more options */
+#define IPTABLES_OPTION_COUNT_MAX 2
+
 /*
  * List of supported match option types.
  * - UDP not included as it has no other than port switches
@@ -1495,6 +1498,27 @@ struct iptables_type_options {
 	const int *option_count;
 };
 
+/*
+ * Allocate new wrapper for iptables_type_options to insert into hash table.
+ * Can be free'd with g_free().
+ */
+static struct iptables_type_options *iptables_type_options_new(
+			const struct iptables_type_options *option)
+{
+	struct iptables_type_options *type_options;
+
+	type_options = g_try_new0(struct iptables_type_options, 1);
+
+	if (!type_options)
+		return NULL;
+
+	type_options->type = option->type;
+	type_options->options = option->options;
+	type_options->option_count = option->option_count;
+
+	return type_options;
+}
+
 static const struct iptables_type_options iptables_opts[] = {
 	{IPTABLES_OPTION_PORT, port_options, port_options_count},
 	{IPTABLES_OPTION_MULTIPORT, multiport_options, multiport_options_count},
@@ -1515,29 +1539,133 @@ static const struct iptables_type_options iptables_opts[] = {
 	{IPTABLES_OPTION_DCCP, dccp_options, dccp_options_count},
 };
 
-static enum iptables_match_options_type get_option_type(const char *arg,
-			int *count, int *position, bool multiport)
+static GHashTable *iptables_options = NULL;
+
+static void initialize_iptables_options()
 {
 	enum iptables_match_options_type type;
-	int i;
+	struct iptables_type_options *type_options;
+	const char *opt_names[] = {"port", "multiport", "tcp", "mark",
+				"conntrack", "ttl", "pkttype", "limit",
+				"helper", "ecn", "ah", "esp", "mh", "sctp",
+				"icmp", "ipv6-icmp", "dccp", NULL};
+
+	if (!iptables_options)
+		return;
 
 	for (type = IPTABLES_OPTION_PORT; type < IPTABLES_OPTION_NOT_SUPPORTED;
 				type++) {
-		for (i = 0; iptables_opts[type].options[i]; i++) {
-			if (!g_strcmp0(iptables_opts[type].options[i], arg)) {
-				*count = iptables_opts[type].option_count[i];
-				*position = i;
+		type_options = iptables_type_options_new(&iptables_opts[type]);
 
-				/* Port switches can be used for -m multiport */
-				if (multiport && type == IPTABLES_OPTION_PORT)
-					return IPTABLES_OPTION_MULTIPORT;
+		if (!type_options)
+			continue;
 
-				return type;
-			}
+		g_hash_table_insert(iptables_options, g_strdup(opt_names[type]),
+				type_options);
+	}
+}
+
+static enum iptables_match_options_type validate_option_type(
+			const char *protocol, const char *match,
+			const char *option, int *count, int *position,
+			bool multiport)
+{
+	struct iptables_type_options *type_options;
+	struct protoent *p;
+	enum iptables_match_options_type return_type =
+				IPTABLES_OPTION_NOT_SUPPORTED;
+	GSList *keys = NULL, *iter;
+	const char *key = NULL;
+	int proto_int;
+	int i;
+
+	DBG("");
+
+	if (match) {
+		/* Only port options for udp/udplite */
+		if (!g_strcmp0(match, "udp") || !g_strcmp0(match, "udplite"))
+			keys = g_slist_prepend(keys, "port");
+		/* Use official name of for icmpv6 */
+		else if (!g_strcmp0(match, "icmpv6"))
+			keys = g_slist_prepend(keys, "ipv6-icmp");
+		/*
+		 * Otherwise add the match as search key, cast to char* to avoid
+		 * compiler warning.
+		 */
+		else
+			keys = g_slist_prepend(keys, (char*)match);
+
+		/* Search for match and port for multiport and TCP.*/
+		if (multiport || !g_strcmp0(match, "tcp"))
+			keys = g_slist_prepend(keys, "port");
+	} else if (protocol) { /* If only protocol is given (sctp|dccp) */
+		if (is_string_digits(protocol)) {
+			proto_int = (int)g_ascii_strtoll(protocol, NULL, 10);
+
+			p = getprotobynumber(proto_int);
+		} else {
+			p = getprotobyname(protocol);
 		}
+
+		if (!p)
+			return IPTABLES_OPTION_NOT_SUPPORTED;
+
+		/* SCTP options do not work, search with port option */
+		if (!g_ascii_strcasecmp(p->p_name, "sctp")) {
+			keys = g_slist_prepend(keys, "port");
+		/* DCCP can have both port and protocol options */
+		} else if (!g_ascii_strcasecmp(p->p_name, "dccp")) {
+			keys = g_slist_prepend(keys, p->p_name);
+			keys = g_slist_prepend(keys, "port");
+		}
+	} else {
+		return IPTABLES_OPTION_NOT_SUPPORTED;
 	}
 
-	return IPTABLES_OPTION_NOT_SUPPORTED;
+	DBG("search protocol %s match %s ", protocol, match);
+
+	for (iter = keys; iter; iter = iter->next) {
+		key = iter->data;
+
+		DBG("search key %s", key);
+		type_options = g_hash_table_lookup(iptables_options, key);
+
+		if (!type_options)
+			continue;
+
+		for (i = 0; type_options->options[i]; i++) {
+			if (!g_strcmp0(type_options->options[i], option)) {
+				DBG("found match for option %s type %d "
+					"position %d parameter count %d",
+					option, type_options->type, i,
+					type_options->option_count[i]);
+
+				*count = type_options->option_count[i];
+				*position = i;
+
+				/*
+				 * In case a port option was used with multiport
+				 * return multiport type since port options work
+				 * with multiport as well.
+				 */
+				if (type_options->type ==
+					IPTABLES_OPTION_PORT && multiport)
+					return_type = IPTABLES_OPTION_MULTIPORT;
+				else
+					return_type = type_options->type;
+
+				break;
+			}
+		}
+
+		/* Match was found */
+		if (return_type != IPTABLES_OPTION_NOT_SUPPORTED)
+			break;
+	}
+
+	g_slist_free(keys);
+
+	return return_type;
 }
 
 /*
@@ -2642,7 +2770,8 @@ static bool validate_iptables_rule(int type, const char *group,
 			opt = argv[i++];
 
 			if (!opt) {
-				DBG("trailing '-m' in rule \"%s\"", rule_spec);
+				DBG("trailing '%s' in rule \"%s\"", arg,
+							rule_spec);
 				goto out;
 			}
 
@@ -2707,7 +2836,8 @@ static bool validate_iptables_rule(int type, const char *group,
 			opt = argv[i++];
 
 			if (!opt) {
-				DBG("trailing '-j' in rule \"%s\"", rule_spec);
+				DBG("trailing '%s' in rule \"%s\"", arg,
+							rule_spec);
 				goto out;
 			}
 
@@ -2718,7 +2848,8 @@ static bool validate_iptables_rule(int type, const char *group,
 			opt = argv[i++];
 
 			if (!opt) {
-				DBG("trailing '-p' in rule \"%s\"", rule_spec);
+				DBG("trailing '%s' in rule \"%s\"", arg,
+							rule_spec);
 				goto out;
 			}
 
@@ -2734,7 +2865,9 @@ static bool validate_iptables_rule(int type, const char *group,
 			int option_type_params = 0;
 			int option_type_position = 0;
 			int opt_index;
-			const char *params[2] = {NULL, NULL};
+			const char *params[IPTABLES_OPTION_COUNT_MAX] =
+						{NULL, NULL};
+
 			switch_type = IPTABLES_OPTION;
 
 			/*
@@ -2761,9 +2894,11 @@ static bool validate_iptables_rule(int type, const char *group,
 				DBG("option %s", arg);
 			}
 
-			option_type = get_option_type(arg, &option_type_params,
-						&option_type_position,
-						multiport_used);
+			option_type = validate_option_type(
+				protocol_index ? argv[protocol_index] : NULL,
+				match_index ? argv[match_index] : NULL,
+				arg, &option_type_params,
+				&option_type_position, multiport_used);
 
 			if (option_type == IPTABLES_OPTION_NOT_SUPPORTED) {
 				DBG("%s is not supported", arg);
@@ -2771,9 +2906,9 @@ static bool validate_iptables_rule(int type, const char *group,
 			}
 
 			if (!is_valid_option_for_protocol_match(
-						argv[protocol_index],
-						argv[match_index],
-						option_type)) {
+				protocol_index ? argv[protocol_index] : NULL,
+				match_index ? argv[match_index] : NULL,
+				option_type)) {
 				DBG("option %s does not work with protocol %s "
 						"match %s", arg,
 						argv[protocol_index],
@@ -2782,7 +2917,8 @@ static bool validate_iptables_rule(int type, const char *group,
 			}
 
 			for (opt_index = 0; opt_index < option_type_params &&
-						opt_index < 2; opt_index++) {
+					opt_index < IPTABLES_OPTION_COUNT_MAX;
+					opt_index++) {
 				/* Ignore negations */
 				while (!g_strcmp0(argv[i], "!"))
 					i++;
@@ -4284,6 +4420,10 @@ int __connman_firewall_init(void)
 	flush_all_tables(AF_INET);
 	flush_all_tables(AF_INET6);
 	restore_policies_set = false;
+	
+	iptables_options = g_hash_table_new_full(g_str_hash, g_str_equal,
+				g_free, g_free);
+	initialize_iptables_options();
 
 	err = init_all_dynamic_firewall_rules();
 
@@ -4317,6 +4457,8 @@ int __connman_firewall_init(void)
 		__connman_iptables_iterate_chains(AF_INET6, "filter",
 					firewall_failsafe, "AF_INET6");
 	}
+	
+	
 
 	return 0;
 }
@@ -4379,4 +4521,7 @@ void __connman_firewall_cleanup(void)
 
 	g_slist_free_full(managed_tables, cleanup_managed_table);
 	managed_tables = NULL;
+	
+	g_hash_table_destroy(iptables_options);
+	iptables_options = NULL;
 }

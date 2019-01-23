@@ -1434,15 +1434,17 @@ static const char *general_icmpv6[] = {
 	NULL
 };
 
-#define RULES_OPTIONS4 54 // +1 for chain
-#define RULES_OPTIONS6 51 // +1 for chain
+#define RULES_OPTIONS4 56 // +1 for chain
+#define RULES_OPTIONS6 53 // +1 for chain
 
 static const char *general_options[] = {
 	/* AH and ESP options */
 	"-p ah -m ah --ahspi 12 -j ACCEPT",
 	"-p ah -m ah --ahspi 12:34 -j ACCEPT",
+	"-p 51 -m ah --ahspi 122:334 -j ACCEPT",
 	"-p esp -m esp --espspi 14 -j ACCEPT",
 	"-p esp -m esp --espspi 14:45 -j ACCEPT",
+	"-p 50 -m esp --espspi 14:45 -j ACCEPT",
 	/* ECN options */
 	"-p tcp -m ecn --ecn-tcp-cwr -j ACCEPT",
 	"-p tcp -m ecn --ecn-tcp-ece -j ACCEPT",
@@ -1511,6 +1513,7 @@ static const char *general_options[] = {
 static const char *invalid_general_options[] = {
 	/* AH and ESP options */
 	"-p ah -m ah --ahspi 12-34 -j ACCEPT",
+	"-p 50 -m ah --ahspi 12:34 -j ACCEPT",
 	"-p mh -m ah --ahspi 12 -j ACCEPT",
 	"-p ah -m tcp --ahspi 12:34 -j ACCEPT",
 	"-p ah -m ah --ahspi -j ACCEPT",
@@ -1519,6 +1522,7 @@ static const char *invalid_general_options[] = {
 	"-p ah -m ah --ahspi spi:ips -j ACCEPT",
 	"-p esp -m esp --espspi 14-45 -j ACCEPT",
 	"-p tcp -m esp --espspi 14 -j ACCEPT",
+	"-p 51 -m esp --espspi 14 -j ACCEPT",
 	"-p esp -m udp --espspi 14:45 -j ACCEPT",
 	"-p esp -m esp --espspi -j ACCEPT",
 	"-p esp -m esp --espspi spi -j ACCEPT",
@@ -1591,6 +1595,7 @@ static const char *invalid_general_options[] = {
 				"SYN;ACK,FIN,RST,URG,PSH,ALL,NONE -j DROP",
 	"-m tcp --syn -j ACCEPT",
 	"-p tcp -m tcp --tcp-option option45 -j DROP",
+	"-p 50 -m tcp --tcp-option 45 -j DROP",
 	/* port switches defined twice */
 	"-p tcp -m tcp --dport 34 --destination-port 44 -j ACCEPT",
 	"-p tcp -m tcp --destination-port 44 --dport 34 -j ACCEPT",
@@ -1707,8 +1712,11 @@ static const char *invalid_general_output[] = {
 		"-p tcp -m tcp -m multiport 45:8000 -j ACCEPT",
 		/* Clearly invalid */
 		"-p tcp -m",
-		"-p",
+		"-p  ",
 		"!",
+		"--portocol tcp -j ACCEPT",
+		"-p tcp --motch tcp -j DROP",
+		"--p tcp -m tcp -j LOG",
 		/* Empty port specifiers for multiport*/
 		"-p tcp -m multiport --dport -j ACCEPT",
 		"-p tcp -m multiport --sport -j DROP",
