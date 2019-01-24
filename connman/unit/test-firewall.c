@@ -1434,8 +1434,8 @@ static const char *general_icmpv6[] = {
 	NULL
 };
 
-#define RULES_OPTIONS4 56 // +1 for chain
-#define RULES_OPTIONS6 53 // +1 for chain
+#define RULES_OPTIONS4 61 // +1 for chain
+#define RULES_OPTIONS6 58 // +1 for chain
 
 static const char *general_options[] = {
 	/* AH and ESP options */
@@ -1507,6 +1507,12 @@ static const char *general_options[] = {
 				"SYN,ACK,FIN,RST,URG,PSH,ALL,NONE -j DROP",
 	"-p tcp -m tcp --syn -j ACCEPT",
 	"-p 6 -m tcp --tcp-option 45 -j DROP",
+	/* Long versions of options */
+	"--protocol tcp -m tcp --dport 45 -j ACCEPT",
+	"--protocol tcp --match tcp --dport 55 -j DROP",
+	"-p tcp --match tcp --dport 56 -j LOG",
+	"-p tcp -m tcp --dport 66 --jump QUEUE",
+	"--protocol tcp --match tcp --dport 5555 --jump DROP",
 	NULL
 };
 
@@ -1632,6 +1638,10 @@ static const char *invalid_general_options[] = {
 	"-p tcp -m multiport --ports 44 --port 34 -j ACCEPT",
 	"-p tcp -m multiport --ports 34 --ports 44 -j ACCEPT",
 	"-p tcp -m multiport --port 44 --ports 34 -j ACCEPT",
+	/* Matches without options */
+	"-p tcp -m multiport -j ACCEPT",
+	"-p tcp -m tcp -m multiport -j DROP",
+	"-m tcp -j LOG",
 	NULL
 };
 
@@ -4269,6 +4279,7 @@ int main (int argc, char *argv[])
 {
 	GOptionContext *context;
 	GError *error = NULL;
+	int ret;
 
 	g_test_init(&argc, &argv, NULL);
 
@@ -4288,6 +4299,7 @@ int main (int argc, char *argv[])
 
 	__connman_log_init(argv[0], option_debug, false, false,
 			"Unit Tests Connection Manager", VERSION);
+	__connman_iptables_validate_init();
 
 	g_test_add_func("/firewall/test_basic0", firewall_test_basic0);
 	g_test_add_func("/firewall/test_basic1", firewall_test_basic1);
@@ -4363,7 +4375,11 @@ int main (int argc, char *argv[])
 	g_test_add_func("/firewall/iptables_fail4",
 				firewall_test_iptables_fail4);
 
-	return g_test_run();
+	ret = g_test_run();
+
+	__connman_iptables_validate_cleanup();
+
+	return ret;
 }
 
 /*
