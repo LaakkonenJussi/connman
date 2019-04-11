@@ -1893,8 +1893,45 @@ static struct connman_service *vpn_find_online_transport()
 	return service;
 }
 
-static bool vpn_is_valid_transport(struct connman_service *transport)
+static bool vpn_is_valid_service(struct connection_data *data)
 {
+	struct connman_service *default_service;
+	struct connman_service *vpn;
+	bool default_route;
+
+	default_service = connman_service_get_default();
+	vpn = connman_service_lookup_from_identifier(data->ident);
+	default_route = connman_provider_is_default_route(data->provider);
+
+	if (!default_service)
+		return false;
+
+	/*
+	 * In case the VPN is used as default route the VPN must be as default
+	 * service in order for the VPN connection to remain.
+	 */
+	if (default_route && (default_service == vpn))
+		return true;
+
+	/*
+	 * In case VPN is not as default route it should not be used as default
+	 * service.
+	 */
+	if (!default_route && (default_service != vpn))
+		return true;
+
+	return false;
+}
+
+static bool vpn_is_valid_transport(struct connection_data *data)
+{
+	struct connman_service *transport;
+
+	if (!data)
+		return false;
+
+	transport = connman_service_lookup_from_identifier(data->service_ident);
+
 	if (transport) {
 		struct connman_service *online;
 
@@ -1902,8 +1939,15 @@ static bool vpn_is_valid_transport(struct connman_service *transport)
 		case CONNMAN_SERVICE_STATE_READY:
 			online = vpn_find_online_transport();
 
-			/* Stay connected if there are no online services */
-			if (!online)
+			/*
+			 * Stay connected if there are no online services and
+			 * this VPN is still a valid service. This check is
+			 * required when changing between different network
+			 * types to prevent unnecessary disconnect and messing
+			 * up service ordering causing routing tables to be
+			 * invalid.
+			 */
+			if (!online && vpn_is_valid_service(data))
 				return true;
 
 			DBG("%s is ready, %s is online, disconnecting",
