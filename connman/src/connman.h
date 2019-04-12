@@ -677,7 +677,6 @@ void __connman_ipv6pd_cleanup(void);
 
 #include <connman/provider.h>
 
-bool __connman_provider_is_default_route(struct connman_provider *provider);
 bool __connman_provider_check_routes(struct connman_provider *provider);
 int __connman_provider_append_user_route(struct connman_provider *provider,
 			int family, const char *network, const char *netmask);

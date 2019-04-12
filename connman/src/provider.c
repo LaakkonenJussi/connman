@@ -456,7 +456,7 @@ const char *connman_provider_get_string(struct connman_provider *provider,
 	return NULL;
 }
 
-bool __connman_provider_is_default_route(struct connman_provider *provider)
+bool connman_provider_is_default_route(struct connman_provider *provider)
 {
 	const char* default_route = NULL;
 

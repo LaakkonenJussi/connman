@@ -3496,10 +3496,8 @@ bool __connman_service_is_default_route(struct connman_service *service)
 {
 	if (!service)
 		return true;
-	
-	DBG("");
-	
-	return __connman_provider_is_default_route(service->provider);
+
+	return connman_provider_is_default_route(service->provider);
 }
 
 const char *connman_service_get_proxy_autoconfig(struct connman_service *service)

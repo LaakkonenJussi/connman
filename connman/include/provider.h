@@ -145,6 +145,7 @@ int connman_provider_driver_register(struct connman_provider_driver *driver);
 void connman_provider_driver_unregister(struct connman_provider_driver *driver);
 void connman_provider_set_driver(struct connman_provider *provider,
 				struct connman_provider_driver *driver);
+bool connman_provider_is_default_route(struct connman_provider *provider);
 
 #ifdef __cplusplus
 }
