@@ -4858,7 +4858,8 @@ static void preferred_tech_add_by_type(gpointer data, gpointer user_data)
 	struct preferred_tech_data *tech_data = user_data;
 
 	/* Ignore unavailable services (without the network) */
-	if (service->type == tech_data->type && is_available(service)) {
+	if (service->type == tech_data->type && (is_available(service) ||
+				is_connected(service))) {
 		tech_data->preferred_list =
 			g_list_append(tech_data->preferred_list, service);
 
