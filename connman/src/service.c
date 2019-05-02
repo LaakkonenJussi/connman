@@ -302,7 +302,7 @@ static bool is_connected(struct connman_service *service);
 static void switch_default_service(struct connman_service *default_service,
 	struct connman_service *downgrade_service);
 
-static GList* preferred_tech_list_get(void);
+static GList* preferred_tech_list_get(bool include_connected);
 
 static void stats_init(struct connman_service *service);
 static void service_send_initial_stats(const char *counter);
@@ -4848,6 +4848,7 @@ void __connman_service_set_active_session(bool enable, GSList *list)
 struct preferred_tech_data {
 	GList *preferred_list;
 	enum connman_service_type type;
+	bool include_connected;
 };
 
 static void preferred_tech_add_by_type(gpointer data, gpointer user_data)
@@ -4855,8 +4856,18 @@ static void preferred_tech_add_by_type(gpointer data, gpointer user_data)
 	struct connman_service *service = data;
 	struct preferred_tech_data *tech_data = user_data;
 
-	/* Ignore unavailable services (without the network) */
-	if (service->type == tech_data->type && is_available(service)) {
+	if (service->type == tech_data->type) {
+		/*
+		 * Ignore unavailable services (without the network) if all
+		 * connected are not to be included.
+		 */
+		if (!tech_data->include_connected && !is_available(service))
+				return;
+
+		/* When connected are required include only connected */
+		if (tech_data->include_connected && !is_connected(service))
+			return;
+
 		tech_data->preferred_list =
 			g_list_append(tech_data->preferred_list, service);
 
@@ -4865,7 +4876,7 @@ static void preferred_tech_add_by_type(gpointer data, gpointer user_data)
 	}
 }
 
-static GList *preferred_tech_list_get(void)
+static GList *preferred_tech_list_get(bool include_connected)
 {
 	unsigned int *tech_array;
 	struct preferred_tech_data tech_data = { 0, };
@@ -4891,6 +4902,8 @@ static GList *preferred_tech_list_get(void)
 			}
 		}
 	}
+
+	tech_data.include_connected = include_connected;
 
 	for (i = 0; tech_array[i] != 0; i += 1) {
 		tech_data.type = tech_array[i];
@@ -5065,7 +5078,7 @@ static gboolean run_auto_connect(gpointer data)
 	if (autoconnect_paused)
 		return FALSE;
 
-	preferred_tech = preferred_tech_list_get();
+	preferred_tech = preferred_tech_list_get(false);
 	if (preferred_tech) {
 		autoconnecting = auto_connect_service(preferred_tech, reason,
 							true);
@@ -6226,8 +6239,7 @@ static gint service_preferred_over(struct connman_service *a,
 				b->type == CONNMAN_SERVICE_TYPE_VPN)
 		return 0;
 
-	preferred_list = preferred_tech_list_get();
-
+	preferred_list = preferred_tech_list_get(true);
 	if (!preferred_list)
 		return 0;
 
