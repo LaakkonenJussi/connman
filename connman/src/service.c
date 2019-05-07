@@ -3496,9 +3496,7 @@ bool __connman_service_is_default_route(struct connman_service *service)
 {
 	if (!service)
 		return true;
-	
-	DBG("");
-	
+
 	return __connman_provider_is_default_route(service->provider);
 }
 
@@ -6220,6 +6218,14 @@ static gint service_preferred_over(struct connman_service *a,
 	if (!(a && b) || (a->type == b->type))
 		return 0;
 
+	/*
+	 * VPNs are not in the preferred tech list as they rely on other
+	 * services as transport
+	 */
+	if (a->type == CONNMAN_SERVICE_TYPE_VPN ||
+				b->type == CONNMAN_SERVICE_TYPE_VPN)
+		return 0;
+
 	preferred_list = preferred_tech_list_get();
 
 	if (!preferred_list)
@@ -6232,10 +6238,6 @@ static gint service_preferred_over(struct connman_service *a,
 		a, a->identifier, position_a, b, b->identifier, position_b);
 
 	g_list_free(preferred_list);
-
-	/* Not found, which means that the service is not available. */
-	if (position_a == -1 || position_b == -1)
-		return 0;
 
 	if (position_b < position_a)
 		return -1;
