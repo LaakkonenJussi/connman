@@ -621,39 +621,29 @@ static void developer_mode_newlink(unsigned short type, int index,
 {
 	struct connman_device *device;
 
-	DBG("index %d change %u", index, change);
-
 	/*
 	 * Device must be up and running. Also L1 must be set up since with
 	 * usb tethering, both usb interface and tethering (bridge) interfaces
 	 * are up but only tethering has IP address set
 	 */
 	if ((flags & (IFF_UP | IFF_RUNNING | IFF_LOWER_UP)) !=
-				(IFF_UP | IFF_RUNNING | IFF_LOWER_UP)) {
-		DBG("device %d not up/running/ready yet", index);
+				(IFF_UP | IFF_RUNNING | IFF_LOWER_UP))
 		return;
-	}
 
 	device = connman_device_find_by_index(index);
 
-	if (!device) {
-		DBG("no device for index %d", index);
+	if (!device || !check_device(device))
 		return;
-	}
 
-	if (!check_device(device)) {
-		DBG("not supported device %p", device);
-		return;
-	}
+	DBG("index %d change %u", index, change);
 
 	switch (pending_devices_add(device)) {
 	case 0:
+		DBG("device %p index %d added", device, index);
 		break;
 	case -EINVAL:
 	case -ENOENT:
 	case -EEXIST:
-		/* fallthrough */
-		DBG("no notification for device %p", device); 
 	default:
 		return;
 	}
@@ -676,15 +666,8 @@ static void developer_mode_dellink(unsigned short type, int index,
 	DBG("index %d change %u", index, change);
 
 	device = connman_device_find_by_index(index);
-	if (!device) {
-		DBG("no device for index %d", index);
+	if (!device || !check_device(device))
 		return;
-	}
-
-	if (!check_device(device)) {
-		DBG("not supported device %p", device);
-		return;
-	}
 
 	/*
 	 * If this is a non-managed device the notify is sent if interface
