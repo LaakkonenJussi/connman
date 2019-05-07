@@ -209,7 +209,7 @@ static void pending_devices_remove1(gpointer user_data)
 {
 	struct connman_device *device = user_data;
 
-	DBG("");
+	DBG("device %p", device);
 
 	if (device)
 		connman_device_unref(device);
@@ -219,13 +219,10 @@ static bool pending_devices_remove(struct connman_device *device)
 {
 	const char *interface;
 
-	DBG("");
-
 	if (!pending_devices || !device)
 		return false;
 
 	interface = connman_device_get_string(device, "Interface");
-
 	if (!interface) {
 		DBG("no interface for device %p", device);
 		return false;
@@ -237,11 +234,23 @@ static bool pending_devices_remove(struct connman_device *device)
 	return g_hash_table_remove(pending_devices, interface);
 }
 
-static int pending_devices_add(struct connman_device *device)
+static bool pending_devices_exists(struct connman_device *device)
 {
 	const char *interface;
 
-	DBG("");
+	if (!device)
+		return false;
+
+	interface = connman_device_get_string(device, "Interface");
+	if (!interface)
+		return false;
+
+	return g_hash_table_contains(pending_devices, interface);
+}
+
+static int pending_devices_add(struct connman_device *device)
+{
+	const char *interface;
 
 	if (!pending_devices) {
 		DBG("hash table is not set");
@@ -254,18 +263,16 @@ static int pending_devices_add(struct connman_device *device)
 		return -ENOENT;
 	}
 
-	DBG("add device %d %s %s", connman_device_get_index(device),
-				connman_device_get_ident(device), interface);
-
 	/* Interfaces are unique, second notification should not replace old */
-	if (g_hash_table_contains(pending_devices, interface)) {
-		DBG("interface %s already exists", interface);
+	if (pending_devices_exists(device))
 		return -EEXIST;
-	}
+
+	DBG("adding device %p %d %s %s", device,
+				connman_device_get_index(device),
+				connman_device_get_ident(device), interface);
 
 	return g_hash_table_replace(pending_devices, g_strdup(interface),
 				connman_device_ref(device)) ? 0 : -EEXIST;
-
 }
 
 static struct connman_device *pending_devices_find_by_interface(
@@ -290,10 +297,7 @@ static void usb_moded_disconnect(DBusConnection *conn, void *user_data)
 
 static void send_notify(struct connman_device *device, bool on)
 {
-	if (!is_developer_mode_device(device)) {
-		DBG("not developer mode device %p", device);
-		return;
-	}
+	DBG("device %p notify %s", device, on ? "on" : "off");
 
 	connman_device_status_notify(device, on);
 
@@ -472,7 +476,7 @@ done:
 		dbus_message_unref(reply);
 }
 
-static int usb_mode_query_state()
+static int usb_moded_query_state()
 {
 	DBusMessage *msg = NULL;
 	gint rval = -EINVAL;
@@ -577,10 +581,8 @@ static gboolean usb_moded_signal(DBusConnection *conn, DBusMessage *message,
 	return TRUE;
 }
 
-static int check_usb_moded_status(struct connman_device *device)
+static int usb_moded_status_check()
 {
-	DBG("%p", device);
-
 	switch (usb_moded_status) {
 	/*
 	 * If the mode was not set query mode from usb moded. In case of failure
@@ -591,7 +593,7 @@ static int check_usb_moded_status(struct connman_device *device)
 	 */
 	case USB_MODED_NOT_SET:
 		DBG("querying mode");
-		return usb_mode_query_state();
+		return usb_moded_query_state();
 	case USB_MODED_DEVELOPER_MODE:
 		DBG("in developer mode"); // Ok mode, continue
 		return USB_MODED_DEVELOPER_MODE;
@@ -621,39 +623,36 @@ static void developer_mode_newlink(unsigned short type, int index,
 {
 	struct connman_device *device;
 
-	DBG("index %d change %u", index, change);
-
-	/*
-	 * Device must be up and running. Also L1 must be set up since with
-	 * usb tethering, both usb interface and tethering (bridge) interfaces
-	 * are up but only tethering has IP address set
-	 */
-	if ((flags & (IFF_UP | IFF_RUNNING | IFF_LOWER_UP)) !=
-				(IFF_UP | IFF_RUNNING | IFF_LOWER_UP)) {
-		DBG("device %d not up/running/ready yet", index);
+	/* Ignore register and unregister events and changes without flags. */
+	if (!flags)
 		return;
-	}
+
+	/* Device must be up and running. */
+	if ((flags & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING))
+		return;
 
 	device = connman_device_find_by_index(index);
-
-	if (!device) {
-		DBG("no device for index %d", index);
+	if (!device || !check_device(device))
 		return;
-	}
 
-	if (!check_device(device)) {
-		DBG("not supported device %p", device);
-		return;
-	}
+	/*
+	 * TODO check IFF_LOWER_UP here, and remove notify from below along
+	 * other checks. Also implement notified boolean and add new device
+	 * struct to hold the notify status and device to notify only once.
+	 * Idea is to first add device that is up and next netlink even triggers
+	 * the notify if it is developer mode device
+	 */
+	if (pending_devices_exists(device))
+		return; 
+
+	DBG("index %d flags %d change %u", index, flags, change);
 
 	switch (pending_devices_add(device)) {
 	case 0:
 		break;
+	case -EEXIST:
 	case -EINVAL:
 	case -ENOENT:
-	case -EEXIST:
-		/* fallthrough */
-		DBG("no notification for device %p", device); 
 	default:
 		return;
 	}
@@ -661,10 +660,12 @@ static void developer_mode_newlink(unsigned short type, int index,
 	connman_device_set_managed(device, false);
 
 	/*
-	 * Status check is necessary only when enabling. Notify if in developer
-	 * mode. Interface is up requires that query is made.
+	 * Status check is necessary only when enabling. Send notify if usb
+	 * moded has been set in developer mode and this device is a developer
+	 * mode device.
 	 */
-	if (check_usb_moded_status(device) == USB_MODED_DEVELOPER_MODE)
+	if (usb_moded_status_check() == USB_MODED_DEVELOPER_MODE &&
+				is_developer_mode_device(device))
 		send_notify(device, true);
 }
 
@@ -676,21 +677,13 @@ static void developer_mode_dellink(unsigned short type, int index,
 	DBG("index %d change %u", index, change);
 
 	device = connman_device_find_by_index(index);
-	if (!device) {
-		DBG("no device for index %d", index);
+	if (!device || !check_device(device) ||
+				!pending_devices_exists(device))
 		return;
-	}
 
-	if (!check_device(device)) {
-		DBG("not supported device %p", device);
-		return;
-	}
-
-	/*
-	 * If this is a non-managed device the notify is sent if interface
-	 * matches
-	 */
-	if (!connman_device_get_managed(device))
+	/* Send notify if this is a non-managed developer mode device. */
+	if (!connman_device_get_managed(device) &&
+				is_developer_mode_device(device))
 		send_notify(device, false);
 
 	/* Interface down, remove device, not needed anymore */
