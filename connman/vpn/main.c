@@ -172,6 +172,59 @@ unsigned int connman_timeout_input_request(void)
 	return __vpn_settings_get_timeout_inputreq();
 }
 
+static bool set_user_dir(const char *root)
+{
+	DBG("");
+	int err;
+
+	if (!root || !*root)
+		return false;
+
+	err = __connman_storage_set_user_root(root, STORAGE_DIR_TYPE_VPN,
+				vpn_provider_unload_providers,
+				vpn_provider_load_providers,
+				NULL, NULL);
+	if (err) {
+		DBG("cannot change user VPN root to %s error %s", root,
+					strerror(-err));
+		return false;
+	}
+
+	err = __connman_storage_create_dir(USER_VPN_STORAGEDIR,
+				__vpn_settings_get_storage_dir_permissions(),
+				STORAGE_DIR_TYPE_VPN);
+	if (err) {
+		DBG("cannot create user VPN storage dir in %s error %s", root,
+					strerror(-err));
+		__connman_storage_set_user_root(NULL, STORAGE_DIR_TYPE_VPN,
+					vpn_provider_unload_providers,
+					vpn_provider_load_providers,
+					NULL, NULL);
+		return false;
+	}
+
+	return true;
+}
+
+static DBusMessage *change_user(DBusConnection *conn,
+					DBusMessage *msg, void *data)
+{
+	DBG("conn %p", conn);
+
+	// TODO Add D-Bus access control
+	// TODO Get path from D-Bus MSG
+
+	if (!set_user_dir("/home/nemo/.local/share/system"))
+		return __connman_error_failed(msg, -EINVAL);
+
+	return g_dbus_create_reply(msg, DBUS_TYPE_INVALID);
+}
+
+static const GDBusMethodTable storage_methods[] = {
+	{ GDBUS_ASYNC_METHOD("ChangeUser", NULL, NULL, change_user) },
+	{ },
+};
+
 int main(int argc, char *argv[])
 {
 	GOptionContext *context;
@@ -223,17 +276,15 @@ int main(int argc, char *argv[])
 			__vpn_settings_get_storage_dir_permissions(),
 			__vpn_settings_get_storage_file_permissions());
 
-	if (g_mkdir_with_parents(VPN_STATEDIR,
-			__vpn_settings_get_storage_dir_permissions()) < 0) {
-		if (errno != EEXIST)
-			perror("Failed to create state directory");
-	}
+	if (__connman_storage_create_dir(VPN_STATEDIR,
+				__vpn_settings_get_storage_dir_permissions(),
+				STORAGE_DIR_TYPE_STATE))
+		perror("Failed to create state directory");
 
-	if (g_mkdir_with_parents(VPN_STORAGEDIR,
-			__vpn_settings_get_storage_dir_permissions()) < 0) {
-		if (errno != EEXIST)
-			perror("Failed to create VPN storage directory");
-	}
+	if (__connman_storage_create_dir(VPN_STORAGEDIR,
+				__vpn_settings_get_storage_dir_permissions(),
+				STORAGE_DIR_TYPE_VPN))
+		perror("Failed to create VPN storage directory");
 
 	umask(__vpn_settings_get_umask());
 
@@ -254,6 +305,10 @@ int main(int argc, char *argv[])
 	}
 
 	g_dbus_set_disconnect_function(conn, disconnect_callback, NULL, NULL);
+	
+	if (!g_dbus_register_interface(conn, "/", VPN_SERVICE ".Storage",
+				storage_methods, NULL, NULL, NULL, NULL))
+		DBG("cannot register storage/user changer method call");
 
 	__connman_dbus_init(conn);
 	__connman_agent_init();
