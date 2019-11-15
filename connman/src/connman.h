@@ -270,12 +270,31 @@ int __connman_resolver_redo_servers(int index);
 
 #define STORAGEDIR connman_storage_dir()
 #define VPN_STORAGEDIR connman_storage_vpn_dir()
+#define USER_STORAGEDIR connman_storage_user_dir()
+#define USER_VPN_STORAGEDIR connman_storage_user_vpn_dir()
 #define STORAGE_DIR_MODE __connman_storage_dir_mode()
 #define STORAGE_FILE_MODE __connman_storage_file_mode()
+
+enum storage_dir_type {
+	STORAGE_DIR_TYPE_MAIN	= 0x0001,
+	STORAGE_DIR_TYPE_VPN	= 0x0002,
+	STORAGE_DIR_TYPE_USER	= 0x0004,
+	STORAGE_DIR_TYPE_STATE	= 0x0008,
+};
+
+typedef void (*connman_storage_unload_cb_t) (char **items, int len);
+typedef void (*connman_storage_load_cb_t) (void);
 
 int __connman_storage_dir_mode(void);
 int __connman_storage_file_mode(void);
 int __connman_storage_init(const char *root, int dir_mode, int file_mode);
+int __connman_storage_create_dir(const char *dir, mode_t permissions,
+						enum storage_dir_type type);
+void __connman_storage_use_system_dirs(bool use_system);
+int __connman_storage_set_user_root(const char *root,
+					enum storage_dir_type type,
+					connman_storage_unload_cb_t unload_cb,
+					connman_storage_load_cb_t load_cb);
 void __connman_storage_cleanup(void);
 GKeyFile *__connman_storage_open_global(void);
 GKeyFile *__connman_storage_load_global(void);
@@ -703,6 +722,8 @@ int __connman_provider_init(void);
 
 int __connman_service_init(void);
 void __connman_service_cleanup(void);
+void __connman_service_unload_services(gchar **services, int len);
+void __connman_service_load_services();
 int __connman_service_load_modifiable(struct connman_service *service);
 
 void __connman_service_list_struct(DBusMessageIter *iter);
