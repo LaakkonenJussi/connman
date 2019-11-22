@@ -458,8 +458,12 @@ static inline char *service_path(const char *ident)
 
 static void service_remove(struct connman_service *service)
 {
+	DBG("removing %s", service->identifier);
 	service_list = g_list_remove(service_list, service);
-	g_hash_table_remove(service_hash, service->identifier);
+	if (g_hash_table_remove(service_hash, service->identifier))
+		DBG("removed from hash table");
+	else
+		DBG("cannot remove from hash table");
 }
 
 static void compare_path(gpointer value, gpointer user_data)
@@ -8368,10 +8372,13 @@ static gboolean load_wifi_services(gpointer unused)
 
 	load_wifi_services_id = 0;
 
+	DBG("");
+
 	if (services) {
 		int i;
 
 		for (i = 0; services[i]; i++) {
+			DBG("%d:%s", i, services[i]);
 			const char *ident = services[i];
 			const enum connman_service_type type =
 				__connman_service_string2type(ident);
@@ -8379,6 +8386,8 @@ static gboolean load_wifi_services(gpointer unused)
 			if (type == CONNMAN_SERVICE_TYPE_WIFI &&
 				!g_hash_table_contains(service_hash, ident)) {
 				load_wifi_service(ident);
+			} else if (g_hash_table_contains(service_hash, ident)) {
+				DBG("is in hash table, not loaded");
 			}
 		}
 
@@ -9288,6 +9297,55 @@ static struct connman_agent_driver agent_driver = {
 	.context_unref	= agent_context_unref,
 };
 
+void __connman_service_unload_services(gchar **services, int len)
+{
+	struct connman_service *service;
+	int i;
+
+	DBG("services %d/%p", len, services);
+
+	if (!services)
+		return;
+
+	for (i = 0; i < len && services[i]; i++) {
+		service = connman_service_lookup_from_identifier(services[i]);
+		if (!service)
+			continue;
+
+		if (connman_service_get_type(service) !=
+					CONNMAN_SERVICE_TYPE_WIFI)
+			continue;
+
+		DBG("unloading service %s", services[i]);
+
+		__connman_service_remove_from_network(
+				__connman_service_get_network(service));
+
+		if (!__connman_service_remove(service)) {
+			DBG("cannot unload service %s", services[i]);
+		} else {
+			DBG("unloaded service %s", services[i]);
+		}
+	}
+
+}
+
+void __connman_service_load_services(void)
+{
+	remove_unprovisioned_services();
+
+	if (load_wifi_services_id) {
+		g_source_remove(load_wifi_services_id);
+		load_wifi_services_id = 0;
+	}
+
+	/*
+	 * wifi services have to be loaded after plugins are initialized
+	 * (e.g. access control plugin). This function is called too early.
+	 */
+	load_wifi_services_id = g_idle_add(load_wifi_services, NULL);
+}
+
 int __connman_service_init(void)
 {
 	int err;
@@ -9311,13 +9369,7 @@ int __connman_service_init(void)
 			g_str_equal, g_free, NULL);
 	services_notify->add = g_hash_table_new(g_str_hash, g_str_equal);
 
-	remove_unprovisioned_services();
-
-	/*
-	 * wifi services have to be loaded after plugins are initialized
-	 * (e.g. access control plugin). This function is called too early.
-	 */
-	load_wifi_services_id = g_idle_add(load_wifi_services, NULL);
+	__connman_service_load_services();
 
 	return 0;
 }

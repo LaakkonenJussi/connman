@@ -726,7 +726,7 @@ int __connman_provider_init(void);
 int __connman_service_init(void);
 void __connman_service_cleanup(void);
 void __connman_service_unload_services(gchar **services, int len);
-void __connman_service_load_services();
+void __connman_service_load_services(void);
 int __connman_service_load_modifiable(struct connman_service *service);
 
 void __connman_service_list_struct(DBusMessageIter *iter);
