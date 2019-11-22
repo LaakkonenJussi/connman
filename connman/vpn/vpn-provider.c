@@ -1369,6 +1369,8 @@ static int vpn_provider_save(struct vpn_provider *provider)
 	return 0;
 }
 
+
+
 struct vpn_provider *__vpn_provider_lookup(const char *identifier)
 {
 	struct vpn_provider *provider = NULL;
@@ -2426,6 +2428,8 @@ static void provider_create_all_from_type(const char *provider_type)
 
 		if (!provider_create_from_keyfile(keyfile, id))
 			DBG("could not create provider");
+		else
+			DBG("created id %s", id);
 
 		g_free(type);
 		g_key_file_unref(keyfile);
@@ -3418,6 +3422,61 @@ static void remove_unprovisioned_providers(void)
 	}
 
 	g_strfreev(providers);
+}
+
+void vpn_provider_unload_providers(char **providers, int len)
+{
+	struct vpn_provider *provider;
+	char *identifier;
+	int i;
+
+	DBG("providers %d/%p", len, providers);
+
+	if (!providers) {
+		DBG("no providers");
+		return;
+	}
+
+	for (i = 0; i < len; i++) {
+		if (!providers[i] || strncmp(providers[i], "provider_", 9))
+			continue;
+		
+		DBG("%d:%s",i,providers[i]);
+
+		identifier = providers[i] + 9;
+		provider = __vpn_provider_lookup(identifier);
+		if (!provider) {
+			DBG("%s -> %s not found", providers[i], identifier);
+			continue;
+		}
+
+		if (__vpn_provider_delete(provider))
+			DBG("cannot unload provider %s", providers[i]);
+		else
+			DBG("unload provider %s", providers[i]);
+	}
+
+	DBG("out");
+}
+
+static void load_providers_for_driver(gpointer data, gpointer user_data)
+{
+	struct vpn_provider_driver *driver = data;
+
+	DBG("");
+
+	if (!driver)
+		return;
+
+	DBG("loading driver %p name %s", driver, driver->name);
+	provider_create_all_from_type(driver->name); 
+}
+
+void vpn_provider_load_providers()
+{
+	DBG("");
+	g_slist_foreach(driver_list, load_providers_for_driver, NULL);
+	remove_unprovisioned_providers();
 }
 
 static gboolean connman_property_changed(DBusConnection *conn,

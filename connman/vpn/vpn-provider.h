@@ -119,6 +119,9 @@ int vpn_provider_append_route(struct vpn_provider *provider,
 const char *vpn_provider_get_driver_name(struct vpn_provider *provider);
 const char *vpn_provider_get_save_group(struct vpn_provider *provider);
 
+void vpn_provider_unload_providers(char **providers, int len);
+void vpn_provider_load_providers();
+
 const char *vpn_provider_get_name(struct vpn_provider *provider);
 const char *vpn_provider_get_host(struct vpn_provider *provider);
 const char *vpn_provider_get_path(struct vpn_provider *provider);
