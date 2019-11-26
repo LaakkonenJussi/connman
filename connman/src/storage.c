@@ -250,9 +250,12 @@ static const char *storagedir_for(const char *name)
 	} else if (is_service_wifi_dir_name(name) && USER_STORAGEDIR) {
 		DBG("user WiFi %s", USER_STORAGEDIR);
 		return USER_STORAGEDIR;
+	} else if (service_id_is_valid(name)) {
+		DBG("system main %s", STORAGEDIR);
+		return STORAGEDIR;
 	}
-
-	DBG("system main %s", STORAGEDIR);
+	
+	DBG("service %s is not valid", name);
 	return STORAGEDIR;
 }
 
@@ -271,13 +274,18 @@ static void storage_subdir_free(gpointer data)
 	struct storage_subdir *subdir = data;
 	DBG("%s", subdir->name);
 
-	if ((USER_STORAGEDIR && is_service_wifi_dir_name(subdir->name)) ||
-				(USER_VPN_STORAGEDIR &&
-				is_vpn_dir(subdir->name)))
+	if (is_service_wifi_dir_name(subdir->name) && USER_STORAGEDIR) {
+		DBG("removing WiFi %s from user subdirs", subdir->name);
 		storage.user_subdirs = g_list_remove(storage.user_subdirs,
 					subdir);
-	else
+	} else if (is_vpn_dir(subdir->name) && USER_VPN_STORAGEDIR) {
+		DBG("removing VPN %s from user subdirs", subdir->name);
+		storage.user_subdirs = g_list_remove(storage.user_subdirs,
+					subdir);
+	} else {
+		DBG("removing service %s from system subdirs", subdir->name);
 		storage.subdirs = g_list_remove(storage.subdirs, subdir);
+	}
 
 	g_free(subdir->name);
 	g_free(subdir);
@@ -722,7 +730,9 @@ GKeyFile *__connman_storage_load_global(void)
 	gchar *pathname;
 	GKeyFile *keyfile = NULL;
 
-	pathname = g_strdup_printf("%s/%s", STORAGEDIR, SETTINGS);
+	pathname = g_strdup_printf("%s/%s",
+				USER_STORAGEDIR ? USER_STORAGEDIR : STORAGEDIR,
+				SETTINGS);
 	if (!pathname)
 		return NULL;
 
@@ -738,7 +748,9 @@ int __connman_storage_save_global(GKeyFile *keyfile)
 	gchar *pathname;
 	int ret;
 
-	pathname = g_strdup_printf("%s/%s", STORAGEDIR, SETTINGS);
+	pathname = g_strdup_printf("%s/%s",
+				USER_STORAGEDIR ? USER_STORAGEDIR : STORAGEDIR,
+				SETTINGS);
 	if (!pathname)
 		return -ENOMEM;
 
@@ -753,7 +765,9 @@ void __connman_storage_delete_global(void)
 {
 	gchar *pathname;
 
-	pathname = g_strdup_printf("%s/%s", STORAGEDIR, SETTINGS);
+	pathname = g_strdup_printf("%s/%s",
+				USER_STORAGEDIR ? USER_STORAGEDIR : STORAGEDIR,
+				SETTINGS);
 	if (!pathname)
 		return;
 
@@ -839,22 +853,28 @@ static gchar **__connman_storage_get_system_services(int *len)
 
 	for (sum = 0, l = storage.subdirs; l; l = l->next) {
 		struct storage_subdir *subdir = l->data;
-		keep = false;
+		keep = true;
 
-		if (USER_STORAGEDIR && !is_service_wifi_dir_name(subdir->name))
-			keep = true;
+		if (is_service_wifi_dir_name(subdir->name) && USER_STORAGEDIR)
+			keep = false;
 
-		if (USER_VPN_STORAGEDIR && !is_vpn_dir_name(subdir->name))
-			keep = true;
+		if (is_vpn_dir_name(subdir->name) && USER_VPN_STORAGEDIR)
+			keep = false;
 
 		if (!keep) {
-			DBG("dont count WiFi %s with user storage",
+			DBG("dont count system WiFi/VPN %s with user storage",
 						subdir->name);
 			continue;
 		}
 
-		if (is_service_dir_name(subdir->name) && subdir->has_settings)
+		if (is_service_dir_name(subdir->name) && subdir->has_settings) {
 			sum++;
+			DBG("count service %s", subdir->name);
+		} else {
+			DBG("non-service %s - %s settings", subdir->name,
+						subdir->has_settings ?
+						"has" : "no");
+		}
 	}
 
 	result = g_try_new0(gchar *, sum + 1);
@@ -863,13 +883,13 @@ static gchar **__connman_storage_get_system_services(int *len)
 
 	for (pos = 0, l = storage.subdirs; l; l = l->next) {
 		struct storage_subdir *subdir = l->data;
-		keep = false;
+		keep = true;
 
-		if (USER_STORAGEDIR && !is_service_wifi_dir_name(subdir->name))
-			keep = true;
+		if (is_service_wifi_dir_name(subdir->name) && USER_STORAGEDIR)
+			keep = false;
 
-		if (USER_VPN_STORAGEDIR && !is_vpn_dir_name(subdir->name))
-			keep = true;
+		if (is_vpn_dir_name(subdir->name) && USER_VPN_STORAGEDIR)
+			keep = false;
 
 		if (!keep) {
 			DBG("ignore system WiFi/VPN %s with user storage",
@@ -877,8 +897,14 @@ static gchar **__connman_storage_get_system_services(int *len)
 			continue;
 		}
 
-		if (is_service_dir_name(subdir->name) && subdir->has_settings)
+		if (is_service_dir_name(subdir->name) && subdir->has_settings) {
 			result[pos++] = g_strdup(subdir->name);
+			DBG("keep service %s", subdir->name);
+		} else {
+			DBG("non-service %s - %s settings", subdir->name,
+						subdir->has_settings ?
+						"has" : "no");
+		}
 	}
 
 	*len = sum;
@@ -890,7 +916,7 @@ static gchar **__connman_storage_get_user_services(gchar **list, int *len)
 	GList *l;
 	int sum;
 	int pos;
-	bool keep = false;
+	bool keep;
 
 	DBG("");
 
@@ -915,6 +941,8 @@ static gchar **__connman_storage_get_user_services(gchar **list, int *len)
 			DBG("dont count non-WiFi/VPN %s with user storage",
 						subdir->name);
 			continue;
+		} else {
+			DBG("count WiFi/VPN service %s", subdir->name);
 		}
 
 		if (is_service_dir_name(subdir->name) && subdir->has_settings)
@@ -940,6 +968,8 @@ static gchar **__connman_storage_get_user_services(gchar **list, int *len)
 			DBG("ignore non-WiFi/VPN %s with user storage",
 						subdir->name);
 			continue;
+		} else {
+			DBG("keep WiFi/VPN service %s", subdir->name);
 		}
 
 		if (is_service_dir_name(subdir->name) && subdir->has_settings)
@@ -1254,12 +1284,16 @@ static gchar **__connman_storage_get_system_providers(int *len)
 	}
 
 	result = g_try_new0(gchar *, sum + 1);
+	if (!result)
+		return NULL;
 
 	for (pos = 0, l = storage.subdirs; l; l = l->next) {
 		struct storage_subdir *subdir = l->data;
 		if (is_provider_dir_name(subdir->name) && subdir->has_settings)
 			result[pos++] = g_strdup(subdir->name);
 	}
+
+	DBG("%d system providers", sum);
 
 	*len = sum;
 	return result;
@@ -1378,7 +1412,9 @@ static char* build_filename(const char *dir, enum storage_dir_type type)
 int __connman_storage_set_user_root(const char *root,
 					enum storage_dir_type type,
 					connman_storage_unload_cb_t unload_cb,
-					connman_storage_load_cb_t load_cb)
+					connman_storage_load_cb_t load_cb,
+					connman_storage_setup_cb_t pre_cb,
+					connman_storage_setup_cb_t post_cb)
 {
 	gchar **items;
 	char *path;
@@ -1417,12 +1453,25 @@ int __connman_storage_set_user_root(const char *root,
 			items = __connman_storage_get_user_services(NULL,
 									&len);
 			if (items) {
+				if (pre_cb && !pre_cb())
+					DBG("main user preparations failed");
+
 				if (unload_cb)
 					unload_cb(items, len);
 
 				g_strfreev(items);
 				len = 0;
 			}
+
+			if (user_storage_dir)
+				storage_dir_cleanup(user_storage_dir,
+							STORAGE_DIR_TYPE_MAIN |
+							STORAGE_DIR_TYPE_USER);
+
+			if (user_vpn_storage_dir)
+				storage_dir_cleanup(user_vpn_storage_dir,
+							STORAGE_DIR_TYPE_VPN |
+							STORAGE_DIR_TYPE_USER);
 
 			g_free(user_storage_dir);
 			g_free(user_vpn_storage_dir);
@@ -1438,10 +1487,18 @@ int __connman_storage_set_user_root(const char *root,
 
 		items = __connman_storage_get_system_services(&len);
 		if (items) {
+			if (pre_cb && !pre_cb())
+				DBG("main system preparations failed");
+
 			if (unload_cb)
 				unload_cb(items, len);
 
 			g_strfreev(items);
+
+			storage_dir_cleanup(storage_dir,
+						STORAGE_DIR_TYPE_MAIN);
+			storage_dir_cleanup(vpn_storage_dir,
+						STORAGE_DIR_TYPE_VPN);
 		}
 
 		user_storage_dir = path;
@@ -1449,6 +1506,9 @@ int __connman_storage_set_user_root(const char *root,
 
 		if (load_cb)
 			load_cb();
+
+		if (post_cb && !post_cb())
+			DBG("main post setup failed");
 
 		break;
 	case STORAGE_DIR_TYPE_VPN:
@@ -1465,12 +1525,20 @@ int __connman_storage_set_user_root(const char *root,
 			items = __connman_storage_get_user_providers(NULL,
 						&len);
 			if (items) {
+				if (pre_cb && !pre_cb())
+					DBG("VPN user preparations failed");
+
 				if (unload_cb)
 					unload_cb(items, len);
 
 				g_strfreev(items);
 				len = 0;
 			}
+
+			if (user_vpn_storage_dir)
+				storage_dir_cleanup(user_vpn_storage_dir,
+							STORAGE_DIR_TYPE_VPN |
+							STORAGE_DIR_TYPE_USER);
 
 			g_free(user_storage_dir);
 		}
@@ -1483,16 +1551,25 @@ int __connman_storage_set_user_root(const char *root,
 
 		items = __connman_storage_get_system_providers(&len);
 		if (items) {
+			if (pre_cb && !pre_cb())
+				DBG("VPN system preparations failed");
+
 			if (unload_cb)
 				unload_cb(items, len);
 
 			g_strfreev(items);
+
+			storage_dir_cleanup(vpn_storage_dir,
+						STORAGE_DIR_TYPE_VPN);
 		}
 
 		user_vpn_storage_dir = path;
 
 		if (load_cb)
 			load_cb();
+
+		if (post_cb && !post_cb())
+			DBG("VPN post setup failed");
 
 		break;
 	case STORAGE_DIR_TYPE_USER:

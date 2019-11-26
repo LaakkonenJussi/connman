@@ -284,6 +284,7 @@ enum storage_dir_type {
 
 typedef void (*connman_storage_unload_cb_t) (char **items, int len);
 typedef void (*connman_storage_load_cb_t) (void);
+typedef bool (*connman_storage_setup_cb_t) (void);
 
 int __connman_storage_dir_mode(void);
 int __connman_storage_file_mode(void);
@@ -294,7 +295,9 @@ void __connman_storage_use_system_dirs(bool use_system);
 int __connman_storage_set_user_root(const char *root,
 					enum storage_dir_type type,
 					connman_storage_unload_cb_t unload_cb,
-					connman_storage_load_cb_t load_cb);
+					connman_storage_load_cb_t load_cb,
+					connman_storage_setup_cb_t pre_cb,
+					connman_storage_setup_cb_t post_cb);
 void __connman_storage_cleanup(void);
 GKeyFile *__connman_storage_open_global(void);
 GKeyFile *__connman_storage_load_global(void);
