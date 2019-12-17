@@ -172,13 +172,10 @@ unsigned int connman_timeout_input_request(void)
 	return __vpn_settings_get_timeout_inputreq();
 }
 
-static bool set_user_dir(const char *root)
+static int set_user_dir(const char *root)
 {
 	DBG("");
 	int err;
-
-	if (!root || !*root)
-		return false;
 
 	err = __connman_storage_set_user_root(root, STORAGE_DIR_TYPE_VPN,
 				vpn_provider_unload_providers,
@@ -187,7 +184,7 @@ static bool set_user_dir(const char *root)
 	if (err) {
 		DBG("cannot change user VPN root to %s error %s", root,
 					strerror(-err));
-		return false;
+		return err;
 	}
 
 	err = __connman_storage_create_dir(USER_VPN_STORAGEDIR,
@@ -200,22 +197,40 @@ static bool set_user_dir(const char *root)
 					vpn_provider_unload_providers,
 					vpn_provider_load_providers,
 					NULL, NULL);
-		return false;
+		return err;
 	}
 
-	return true;
+	return 0;
 }
 
 static DBusMessage *change_user(DBusConnection *conn,
 					DBusMessage *msg, void *data)
 {
+	const char *user;
+	char *path = NULL;
+	int err;
+
 	DBG("conn %p", conn);
 
 	// TODO Add D-Bus access control
-	// TODO Get path from D-Bus MSG
 
-	if (!set_user_dir("/home/nemo/.local/share/system"))
-		return __connman_error_failed(msg, -EINVAL);
+	dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &user,
+				DBUS_TYPE_INVALID);
+
+	/*
+	 * Empty string or setting user as root causes user dirs to be
+	 * removed from use.
+	 */
+	if (*user && g_strcmp0(user, "root"))
+		path = g_build_filename("/home", user, ".local/share/system",
+					NULL);
+
+	err = set_user_dir(path);
+
+	g_free(path);
+
+	if (err)
+		return __connman_error_failed(msg, -err);
 
 	return g_dbus_create_reply(msg, DBUS_TYPE_INVALID);
 }
