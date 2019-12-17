@@ -1477,32 +1477,31 @@ int __connman_storage_set_user_root(const char *root,
 			g_free(user_vpn_storage_dir);
 		}
 
-		if (!root) {
+		if (root) {
+			items = __connman_storage_get_system_services(&len);
+			if (items) {
+				if (pre_cb && !pre_cb())
+					DBG("main system preparations failed");
+
+				if (unload_cb)
+					unload_cb(items, len);
+
+				g_strfreev(items);
+
+				storage_dir_cleanup(storage_dir,
+							STORAGE_DIR_TYPE_MAIN);
+				storage_dir_cleanup(vpn_storage_dir,
+							STORAGE_DIR_TYPE_VPN);
+			}
+
+			user_storage_dir = path;
+			user_vpn_storage_dir = vpn_path;
+		} else {
 			DBG("unset user main and VPN storage dir, "
 						"use system dir");
 			user_storage_dir = NULL;
 			user_vpn_storage_dir = NULL;
-			break;
 		}
-
-		items = __connman_storage_get_system_services(&len);
-		if (items) {
-			if (pre_cb && !pre_cb())
-				DBG("main system preparations failed");
-
-			if (unload_cb)
-				unload_cb(items, len);
-
-			g_strfreev(items);
-
-			storage_dir_cleanup(storage_dir,
-						STORAGE_DIR_TYPE_MAIN);
-			storage_dir_cleanup(vpn_storage_dir,
-						STORAGE_DIR_TYPE_VPN);
-		}
-
-		user_storage_dir = path;
-		user_vpn_storage_dir = vpn_path;
 
 		if (load_cb)
 			load_cb();
@@ -1535,35 +1534,33 @@ int __connman_storage_set_user_root(const char *root,
 				len = 0;
 			}
 
-			if (user_vpn_storage_dir)
-				storage_dir_cleanup(user_vpn_storage_dir,
-							STORAGE_DIR_TYPE_VPN |
-							STORAGE_DIR_TYPE_USER);
+			storage_dir_cleanup(user_vpn_storage_dir,
+						STORAGE_DIR_TYPE_VPN |
+						STORAGE_DIR_TYPE_USER);
 
-			g_free(user_storage_dir);
+			g_free(user_vpn_storage_dir);
 		}
 
-		if (!root) {
+		if (root) {
+			items = __connman_storage_get_system_providers(&len);
+			if (items) {
+				if (pre_cb && !pre_cb())
+					DBG("VPN system preparations failed");
+
+				if (unload_cb)
+					unload_cb(items, len);
+
+				g_strfreev(items);
+
+				storage_dir_cleanup(vpn_storage_dir,
+							STORAGE_DIR_TYPE_VPN);
+			}
+
+			user_vpn_storage_dir = path;
+		} else {
 			DBG("unset user vpn storage dir and use system dir");
 			user_vpn_storage_dir = NULL;
-			break;
 		}
-
-		items = __connman_storage_get_system_providers(&len);
-		if (items) {
-			if (pre_cb && !pre_cb())
-				DBG("VPN system preparations failed");
-
-			if (unload_cb)
-				unload_cb(items, len);
-
-			g_strfreev(items);
-
-			storage_dir_cleanup(vpn_storage_dir,
-						STORAGE_DIR_TYPE_VPN);
-		}
-
-		user_vpn_storage_dir = path;
 
 		if (load_cb)
 			load_cb();
