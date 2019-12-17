@@ -821,14 +821,11 @@ const char *__connman_setting_get_fallback_device_type(const char *interface)
 			interface);
 }
 
-static bool set_user_dir(const char *root)
+static int set_user_dir(const char *root)
 {
 	int err;
 
 	DBG("");
-
-	if (!root || !*root)
-		return false;
 
 	/* This sets both main and VPN! */
 	err = __connman_storage_set_user_root(root, STORAGE_DIR_TYPE_MAIN,
@@ -839,7 +836,7 @@ static bool set_user_dir(const char *root)
 	if (err) {
 		DBG("cannot change user root to %s error %s", root,
 					strerror(-err));
-		return false;
+		return err;
 	}
 
 	err = __connman_storage_create_dir(USER_STORAGEDIR,
@@ -860,7 +857,7 @@ static bool set_user_dir(const char *root)
 		goto err;
 	}
 
-	return true;
+	return 0;
 
 err:
 	__connman_storage_set_user_root(NULL, STORAGE_DIR_TYPE_MAIN,
@@ -869,77 +866,128 @@ err:
 				__connman_technology_disable_all,
 				__connman_technology_enable_from_config);
 
-	return false;
+	return err;
 }
+
+struct change_user_data {
+	DBusConnection *connection;
+	DBusMessage *pending;
+	char *path;
+};
 
 static void change_user_reply(DBusPendingCall *call, void *user_data)
 {
+	struct change_user_data *data;
 	DBusMessage *reply;
 	DBusError error;
+	int err = 0;
 
-	if (!dbus_pending_call_get_completed(call))
-		return;
+	data = user_data;
 
 	reply = dbus_pending_call_steal_reply(call);
 	if (!reply) {
 		DBG("no reply received");
-		return;
+		err = -ETIMEDOUT;
+		goto err;
 	}
-	
+
 	dbus_error_init(&error);
 
 	if (dbus_set_error_from_message(&error, reply)) {
 		if (g_str_has_suffix(error.name, ".InvalidArguments")) {
 			DBG("Cannot change user root for VPN");
+			err = -EINVAL;
 		} else {
 			DBG("unknown error %s", error.name);
+			err = -ENOENT;
 		}
+
 		dbus_error_free(&error);
 	}
 
 	dbus_message_unref(reply);
 	dbus_pending_call_unref(call);
+
+	if (err)
+		goto err;
+
+	if (!data)
+		return;
+
+	err = set_user_dir(data->path);
+	if (err)
+		goto err;
+
+	g_dbus_send_reply(data->connection, data->pending, DBUS_TYPE_INVALID);
+
+	goto out;
+
+err:
+	if (!data)
+		return;
+
+	reply = __connman_error_failed(data->pending, -err);
+	g_dbus_send_message(data->connection, reply);
+
+out:
+	g_free(data->path);
 }
 
 static DBusMessage *change_user(DBusConnection *conn,
 					DBusMessage *msg, void *data)
 {
+	struct change_user_data user_data;
 	DBusPendingCall *call;
-	DBusMessage *message;
+	DBusMessage *vpn_msg;
+	const char *user;
+	char *path = NULL;
 
 	DBG("conn %p", conn);
 
 	// TODO Add D-Bus access control
-	// TODO Get path from D-Bus MSG
 
-	if (!set_user_dir("/home/nemo/.local/share/system"))
-		return __connman_error_failed(msg, -EINVAL);
+	dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &user,
+				DBUS_TYPE_INVALID);
 
-	message = dbus_message_new_method_call(VPN_SERVICE, "/",
+	/*
+	 * Empty string or setting user as root causes user dirs to be
+	 * removed from use.
+	 */
+	if (*user && g_strcmp0(user, "root"))
+		path = g_build_filename("/home", user, ".local/share/system",
+					NULL);
+
+	vpn_msg = dbus_message_new_method_call(VPN_SERVICE, "/",
 					VPN_SERVICE ".Storage", "ChangeUser");
-	if (!message)
-		return __connman_error_failed(msg, -ENOMEM);
-	
-	// TODO Add path and use_system to msg, or just copy it
+	if (!vpn_msg)
+		return __connman_error_failed(msg, ENOMEM);
 
-	if (!dbus_connection_send_with_reply(conn, message, &call,
+	if (!dbus_message_append_args(vpn_msg, DBUS_TYPE_STRING, &user,
+				DBUS_TYPE_INVALID))
+		return __connman_error_failed(msg, EINVAL);
+
+	if (!dbus_connection_send_with_reply(conn, vpn_msg, &call,
 				DBUS_TIMEOUT)) {
 		connman_error("Unable to call %s.%s()",
 			VPN_SERVICE ".Storage", "ChangeUser");
-		dbus_message_unref(message);
-		return __connman_error_failed(msg, -EACCES);
+		dbus_message_unref(vpn_msg);
+		return __connman_error_failed(msg, EACCES);
 	}
 
 	if (!call) {
-		dbus_message_unref(message);
-		return __connman_error_failed(msg, -EINVAL);
+		dbus_message_unref(vpn_msg);
+		return __connman_error_failed(msg, EINVAL);
 	}
 
-	dbus_pending_call_set_notify(call, change_user_reply, data, NULL);
+	user_data.connection = conn;
+	user_data.pending = msg;
+	user_data.path = path;
 
-	dbus_message_unref(message);
+	dbus_pending_call_set_notify(call, change_user_reply, &user_data, NULL);
 
-	return g_dbus_create_reply(msg, DBUS_TYPE_INVALID);
+	dbus_message_unref(vpn_msg);
+
+	return NULL;
 }
 
 static const GDBusMethodTable storage_methods[] = {
