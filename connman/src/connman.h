@@ -581,6 +581,8 @@ int __connman_technology_set_offlinemode(bool offlinemode);
 bool __connman_technology_get_offlinemode(void);
 void __connman_technology_set_connected(enum connman_service_type type,
 					bool connected);
+bool __connman_technology_disable_all(void);
+bool __connman_technology_enable_from_config(void);
 
 int __connman_technology_add_rfkill(unsigned int index,
 					enum connman_service_type type,

@@ -1708,6 +1708,142 @@ void __connman_technology_set_connected(enum connman_service_type type,
 			DBUS_TYPE_BOOLEAN, &val);
 }
 
+bool __connman_technology_disable_all()
+{
+	GSList *list;
+	GKeyFile *keyfile;
+	GError *error = NULL;
+	bool value;
+	int err;
+
+	keyfile = __connman_storage_load_global();
+	if (!keyfile)
+		return false;
+
+	for (list = technology_list; list; list = list->next) {
+		struct connman_technology *technology = list->data;
+
+		if (!technology->enabled)
+			continue;
+
+		DBG("disabling enabled technology %p/%s", technology,
+					get_name(technology->type));
+
+		err = technology_disable(technology);
+		if (!err) {
+			if (__connman_technology_disabled(
+						technology->type))
+				DBG("already disabled");
+		}
+
+		if (err != -EBUSY)
+			technology->enable_persistent = false;
+
+		DBG("result %s", err ? strerror(-err) : "ok");
+	}
+
+	g_key_file_unref(keyfile);
+
+	return true;
+}
+
+bool __connman_technology_enable_from_config()
+{
+	GSList *list;
+	GKeyFile *keyfile;
+	GError *error = NULL;
+	const char *identifier;
+	bool offlinemode = false;
+	bool value;
+	int err;
+
+	keyfile = __connman_storage_load_global();
+	if (!keyfile)
+		return false;
+
+	offlinemode = g_key_file_get_boolean(keyfile, "global",
+				"OfflineMode", &error);
+	if (error) {
+		offlinemode = false;
+		g_clear_error(&error);
+	}
+
+	DBG("offlinemode %s", offlinemode ? "true" : "false");
+
+	/*
+	 * If new mode is online but in offline mode, set new mode to
+	 * avoid setting offline override without actual need when a
+	 * technology is enabled.
+	 */
+	if (!offlinemode && global_offlinemode) {
+		DBG("in offline mode, set to online");
+		__connman_technology_set_offlinemode(offlinemode);
+	}
+
+	for (list = technology_list; list; list = list->next) {
+		struct connman_technology *technology = list->data;
+
+		identifier = get_name(technology->type);
+		if (!identifier)
+			continue;
+
+		value = g_key_file_get_boolean(keyfile, identifier,
+					"Enable", &error);
+		if (error) {
+			value = false;
+			g_clear_error(&error);
+		}
+
+		DBG("technology %p/%s set as %s", technology,
+					get_name(technology->type),
+					value ? "enabled" : "disabled");
+
+		if (!value) {
+			if (!technology->enabled)
+				continue;
+
+			err = technology_disable(technology);
+			if (!err) {
+				if (__connman_technology_disabled(
+							technology->type))
+					DBG("already disabled");
+			}
+
+			DBG("enabled %p/%s set as false, disable result %s",
+						technology,
+						get_name(technology->type),
+						err ? strerror(-err) : "ok");
+		} else {
+			/* Don't enable in offline mode */
+			if (offlinemode) {
+				DBG("skip, offlinemode %s enabled %s",
+						offlinemode ? "true" : "false",
+						technology->enabled ? "true" : "false");
+				continue;
+			}
+
+			err = technology_enable(technology);
+			if (err == -EALREADY)
+				__connman_technology_enabled(technology->type);
+
+			DBG("tech %p/%s set as true, enable result %s",
+						technology,
+						get_name(technology->type),
+						err ? strerror(-err) : "ok");
+		}
+
+		if (err != -EBUSY)
+			technology->enable_persistent = value;
+	}
+
+	DBG("setting offline mode %s", offlinemode ? "true" : "false");
+		__connman_technology_set_offlinemode(offlinemode);
+
+	g_key_file_unref(keyfile);
+
+	return true;
+}
+
 static bool technology_apply_rfkill_change(struct connman_technology *technology,
 						bool softblock,
 						bool hardblock,
