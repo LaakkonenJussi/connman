@@ -207,7 +207,7 @@ static DBusMessage *change_user(DBusConnection *conn,
 					DBusMessage *msg, void *data)
 {
 	const char *user;
-	char *path = NULL;
+	const char *path;
 	int err;
 
 	DBG("conn %p", conn);
@@ -215,15 +215,16 @@ static DBusMessage *change_user(DBusConnection *conn,
 	// TODO Add D-Bus access control
 
 	dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &user,
-				DBUS_TYPE_INVALID);
+				DBUS_TYPE_STRING, &path, DBUS_TYPE_INVALID);
 
 	/*
 	 * Empty string or setting user as root causes user dirs to be
 	 * removed from use.
 	 */
-	if (*user && g_strcmp0(user, "root"))
-		path = g_build_filename("/home", user, ".local/share/system",
-					NULL);
+	if (!*user || !g_strcmp0(user, "root")) {
+		user = NULL;
+		path = NULL;
+	}
 
 	err = set_user_dir(path);
 
