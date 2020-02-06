@@ -877,9 +877,7 @@ static gchar **__connman_storage_get_system_services(int *len)
 		}
 	}
 
-	result = g_try_new0(gchar *, sum + 1);
-	if (!result)
-		return NULL;
+	result = g_new0(gchar *, sum + 1);
 
 	for (pos = 0, l = storage.subdirs; l; l = l->next) {
 		struct storage_subdir *subdir = l->data;
@@ -952,7 +950,7 @@ static gchar **__connman_storage_get_user_services(gchar **list, int *len)
 	if (!list)
 		list = g_new0(gchar *, sum + 1);
 	else
-		list = g_try_realloc(list, sizeof(gchar *) * (*len + sum + 1));
+		list = g_realloc(list, sizeof(gchar *) * (*len + sum + 1));
 
 	for (pos = *len, l = storage.user_subdirs; l; l = l->next) {
 		struct storage_subdir *subdir = l->data;
@@ -1100,7 +1098,7 @@ bool __connman_storage_remove_service(const char *service_id)
 	DIR *dir;
 
 	if (storage.only_unload) {
-		struct storage_subdir key = { .name = (gchar*)service_id };
+		struct storage_subdir key = { .name = (gchar*) service_id };
 		GList *pos;
 
 		DBG("Unload service %s", service_id);
@@ -1200,7 +1198,7 @@ static bool remove_all(const char *id)
 	bool removed;
 
 	if (storage.only_unload) {
-		struct storage_subdir key = { .name = (gchar*)id };
+		struct storage_subdir key = { .name = (gchar*) id };
 		GList *pos;
 
 		DBG("Unload provider %s", id);
@@ -1283,9 +1281,7 @@ static gchar **__connman_storage_get_system_providers(int *len)
 			sum++;
 	}
 
-	result = g_try_new0(gchar *, sum + 1);
-	if (!result)
-		return NULL;
+	result = g_new0(gchar *, sum + 1);
 
 	for (pos = 0, l = storage.subdirs; l; l = l->next) {
 		struct storage_subdir *subdir = l->data;
@@ -1323,7 +1319,7 @@ static gchar **__connman_storage_get_user_providers(gchar **list, int *len)
 	if (!list)
 		list = g_new0(gchar *, sum + 1);
 	else
-		list = g_try_realloc(list, sizeof(gchar *) * (*len + sum + 1));
+		list = g_realloc(list, sizeof(gchar *) * (*len + sum + 1));
 
 	for (pos = *len, l = storage.user_subdirs; l; l = l->next) {
 		struct storage_subdir *subdir = l->data;
