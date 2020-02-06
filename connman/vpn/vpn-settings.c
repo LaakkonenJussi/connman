@@ -47,6 +47,8 @@ static struct {
 	char *binary_user;
 	char *binary_group;
 	char **binary_supplementary_groups;
+	char *binary_user_override;
+	char **system_binary_users;
 } connman_vpn_settings  = {
 	.timeout_inputreq		= DEFAULT_INPUT_REQUEST_TIMEOUT,
 	.fs_identity 			= NULL,
@@ -58,6 +60,8 @@ static struct {
 	.binary_user			= NULL,
 	.binary_group			= NULL,
 	.binary_supplementary_groups	= NULL,
+	.binary_user_override		= NULL,
+	.system_binary_users		= NULL,
 };
 
 struct vpn_plugin_data {
@@ -102,12 +106,52 @@ mode_t __vpn_settings_get_umask()
 	return connman_vpn_settings.umask;
 }
 
+void __vpn_settings_set_binary_user_override(const char *username)
+{
+	if (connman_vpn_settings.binary_user_override)
+		g_free(connman_vpn_settings.binary_user_override);
+
+	connman_vpn_settings.binary_user_override = g_strdup(username);
+}
+
+static bool is_system_user(const char *username)
+{
+	int i;
+
+	/* The username is not set = override should not be used. */
+	if (!username)
+		return true;
+
+	if (!connman_vpn_settings.system_binary_users)
+		return !g_strcmp0(username, "root");
+
+	for (i = 0; connman_vpn_settings.system_binary_users[i]; i++) {
+		if (!g_strcmp0(connman_vpn_settings.system_binary_users[i],
+					username))
+			return true;
+	}
+
+	return false;
+}
+
 const char *vpn_settings_get_binary_user(struct vpn_plugin_data *data)
 {
-	if (data && data->binary_user)
-		return data->binary_user;
+	const char *binary_user;
 
-	return connman_vpn_settings.binary_user;
+	if (data && data->binary_user)
+		binary_user = data->binary_user;
+	else
+		binary_user = connman_vpn_settings.binary_user;
+
+	/*
+	 * Use overridden user instead configured one if set, but don't
+	 * override configured  system user.
+	 */
+	if (connman_vpn_settings.binary_user_override &&
+				!is_system_user(binary_user))
+		binary_user = connman_vpn_settings.binary_user_override;
+
+	return binary_user;
 }
 
 const char *vpn_settings_get_binary_group(struct vpn_plugin_data *data)
@@ -215,6 +259,9 @@ static void parse_config(GKeyFile *config, const char *file)
 	connman_vpn_settings.binary_supplementary_groups = get_string_list(
 						config, VPN_GROUP,
 						"SupplementaryGroups");
+	connman_vpn_settings.system_binary_users = get_string_list(
+						config, VPN_GROUP,
+						"SystemBinaryUsers");
 }
 
 struct vpn_plugin_data *vpn_settings_get_vpn_plugin_config(const char *name)
@@ -334,6 +381,7 @@ void __vpn_settings_cleanup()
 	g_free(connman_vpn_settings.binary_user);
 	g_free(connman_vpn_settings.binary_group);
 	g_strfreev(connman_vpn_settings.binary_supplementary_groups);
+	g_free(connman_vpn_settings.binary_user_override);
 
 	if (plugin_hash) {
 		g_hash_table_destroy(plugin_hash);
