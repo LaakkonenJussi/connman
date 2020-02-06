@@ -897,10 +897,13 @@ static void change_user_reply(DBusPendingCall *call, void *user_data)
 	if (dbus_set_error_from_message(&error, reply)) {
 		if (g_str_has_suffix(error.name, ".InvalidArguments")) {
 			DBG("Cannot change user root for VPN");
-			err = -EINVAL;
+			err = EINVAL;
+		} else if (g_str_has_suffix(error.name, ".AlreadyEnabled")) {
+			DBG("User is already active");
+			err = EALREADY;
 		} else {
 			DBG("unknown error %s", error.name);
-			err = -ENOENT;
+			err = ENOENT;
 		}
 
 		dbus_error_free(&error);
@@ -927,7 +930,18 @@ err:
 	if (!data)
 		return;
 
-	reply = __connman_error_failed(data->pending, -err);
+	switch (err) {
+	case EINVAL:
+		reply = __connman_error_invalid_arguments(data->pending);
+		break;
+	case EALREADY:
+		reply = __connman_error_already_enabled(data->pending);
+		break;
+	case ENOENT:
+		reply = __connman_error_not_found(data->pending);
+		break;
+	}
+
 	g_dbus_send_message(data->connection, reply);
 
 out:
@@ -948,8 +962,9 @@ static DBusMessage *change_user(DBusConnection *conn,
 
 	// TODO Add D-Bus access control
 
-	dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &user,
-				DBUS_TYPE_INVALID);
+	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &user,
+				DBUS_TYPE_INVALID))
+		return __connman_error_invalid_arguments(msg);
 
 	/*
 	 * Stated in the manual pages of getpwnam(): "If one wants to check
