@@ -35,6 +35,7 @@
 #include <net/if.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <pwd.h>
 
 #include <gdbus.h>
 #include <gweb/gweb.h>
@@ -937,6 +938,7 @@ static DBusMessage *change_user(DBusConnection *conn,
 					DBusMessage *msg, void *data)
 {
 	struct change_user_data user_data;
+	struct passwd *pwd;
 	DBusPendingCall *call;
 	DBusMessage *vpn_msg;
 	const char *user;
@@ -950,11 +952,24 @@ static DBusMessage *change_user(DBusConnection *conn,
 				DBUS_TYPE_INVALID);
 
 	/*
+	 * Stated in the manual pages of getpwnam(): "If one wants to check
+	 * errno after the call, it should be set to zero before the call".
+	 */
+	errno = 0;
+	pwd = getpwnam(user);
+	if (!pwd) {
+		if (!errno)
+			return __connman_error_invalid_arguments(msg);
+		else
+			return __connman_error_failed(msg, errno);
+	}
+
+	/*
 	 * Empty string or setting user as root causes user dirs to be
 	 * removed from use.
 	 */
 	if (*user && g_strcmp0(user, "root"))
-		path = g_build_filename("/home", user, ".local/share/system",
+		path = g_build_filename(pwd->pw_dir, ".local/share/system",
 					NULL);
 
 	vpn_msg = dbus_message_new_method_call(VPN_SERVICE, "/",
@@ -963,7 +978,7 @@ static DBusMessage *change_user(DBusConnection *conn,
 		return __connman_error_failed(msg, ENOMEM);
 
 	if (!dbus_message_append_args(vpn_msg, DBUS_TYPE_STRING, &user,
-				DBUS_TYPE_INVALID))
+				DBUS_TYPE_STRING, &path, DBUS_TYPE_INVALID))
 		return __connman_error_failed(msg, EINVAL);
 
 	if (!dbus_connection_send_with_reply(conn, vpn_msg, &call,
@@ -983,7 +998,8 @@ static DBusMessage *change_user(DBusConnection *conn,
 	user_data.pending = msg;
 	user_data.path = path;
 
-	dbus_pending_call_set_notify(call, change_user_reply, &user_data, NULL);
+	dbus_pending_call_set_notify(call, change_user_reply, &user_data,
+				NULL);
 
 	dbus_message_unref(vpn_msg);
 
