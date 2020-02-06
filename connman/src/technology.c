@@ -1712,8 +1712,6 @@ bool __connman_technology_disable_all()
 {
 	GSList *list;
 	GKeyFile *keyfile;
-	GError *error = NULL;
-	bool value;
 	int err;
 
 	keyfile = __connman_storage_load_global();
@@ -1818,7 +1816,8 @@ bool __connman_technology_enable_from_config()
 			if (offlinemode) {
 				DBG("skip, offlinemode %s enabled %s",
 						offlinemode ? "true" : "false",
-						technology->enabled ? "true" : "false");
+						technology->enabled ? "true" :
+						"false");
 				continue;
 			}
 
@@ -1837,7 +1836,7 @@ bool __connman_technology_enable_from_config()
 	}
 
 	DBG("setting offline mode %s", offlinemode ? "true" : "false");
-		__connman_technology_set_offlinemode(offlinemode);
+	__connman_technology_set_offlinemode(offlinemode);
 
 	g_key_file_unref(keyfile);
 
