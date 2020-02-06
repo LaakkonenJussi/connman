@@ -214,8 +214,9 @@ static DBusMessage *change_user(DBusConnection *conn,
 
 	// TODO Add D-Bus access control
 
-	dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &user,
-				DBUS_TYPE_STRING, &path, DBUS_TYPE_INVALID);
+	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &user,
+				DBUS_TYPE_STRING, &path, DBUS_TYPE_INVALID))
+		return __connman_error_invalid_arguments(msg);
 
 	/*
 	 * Empty string or setting user as root causes user dirs to be
@@ -227,11 +228,14 @@ static DBusMessage *change_user(DBusConnection *conn,
 	}
 
 	err = set_user_dir(path);
-
-	g_free(path);
-
-	if (err)
+	switch (err) {
+	case 0:
+		break;
+	case -EALREADY:
+		return __connman_error_already_enabled(msg);
+	default:
 		return __connman_error_failed(msg, -err);
+	}
 
 	__vpn_settings_set_binary_user_override(user);
 
