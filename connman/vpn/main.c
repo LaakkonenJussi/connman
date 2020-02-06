@@ -232,6 +232,8 @@ static DBusMessage *change_user(DBusConnection *conn,
 	if (err)
 		return __connman_error_failed(msg, -err);
 
+	__vpn_settings_set_binary_user_override(user);
+
 	return g_dbus_create_reply(msg, DBUS_TYPE_INVALID);
 }
 
