@@ -321,6 +321,8 @@ struct connman_storage_callbacks {
 				bool default_access);
 };
 
+typedef void (*connman_storage_change_user_result_cb_t)(int err);
+
 mode_t __connman_storage_dir_mode(void);
 mode_t __connman_storage_file_mode(void);
 int __connman_storage_init(const char *root, mode_t dir_mode,
@@ -328,6 +330,8 @@ int __connman_storage_init(const char *root, mode_t dir_mode,
 int __connman_storage_create_dir(const char *dir, mode_t permissions);
 int __connman_storage_register_dbus(enum connman_storage_dir_type type,
 				struct connman_storage_callbacks *callbacks);
+int __connman_storage_change_user(uid_t uid,
+			connman_storage_change_user_result_cb_t cb);
 void __connman_storage_cleanup(void);
 GKeyFile *__connman_storage_open_global(void);
 GKeyFile *__connman_storage_load_global(void);

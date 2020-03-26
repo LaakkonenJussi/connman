@@ -1941,6 +1941,7 @@ err:
 
 struct change_user_data {
 	DBusMessage *pending;
+	connman_storage_change_user_result_cb_t result_cb;
 	char *user;
 	char *path;
 };
@@ -1993,11 +1994,16 @@ static void change_user_reply(DBusPendingCall *call, void *user_data)
 	if (cbs && cbs->finalize)
 		cbs->finalize(data->user);
 
-	g_dbus_send_reply(connection, data->pending, DBUS_TYPE_INVALID);
+	if (data->pending)
+		g_dbus_send_reply(connection, data->pending,
+					DBUS_TYPE_INVALID);
 
 	goto out;
 
 err:
+	if (!data->pending)
+		goto out;
+
 	switch (-err) {
 	case EINVAL:
 		reply = __connman_error_invalid_arguments(data->pending);
@@ -2018,7 +2024,12 @@ err:
 	g_dbus_send_message(connection, reply);
 
 out:
-	dbus_message_unref(data->pending);
+	if (data->result_cb)
+		data->result_cb(err);
+
+	if (data->pending)
+		dbus_message_unref(data->pending);
+
 	g_free(data->user);
 	g_free(data->path);
 	g_free(data);
@@ -2200,6 +2211,69 @@ static DBusMessage *change_user_vpn(DBusConnection *conn,
 		cbs->finalize(pwd->pw_name);
 
 	return g_dbus_create_reply(msg, DBUS_TYPE_INVALID);
+}
+
+int __connman_storage_change_user(uid_t uid,
+			connman_storage_change_user_result_cb_t cb)
+{
+	struct change_user_data *user_data;
+	struct passwd *pwd;
+	DBusPendingCall *call;
+	DBusMessage *vpn_msg;
+	char *path = NULL;
+	dbus_uint32_t dbus_uid;
+	int err;
+	bool system_user;
+
+	/* No error set = invalid user */
+	pwd = check_user(uid, &err, &system_user);
+	if (!pwd)
+		return err ? -err : -EINVAL;
+
+	dbus_uid = uid;
+
+	vpn_msg = dbus_message_new_method_call(VPN_SERVICE, VPN_STORAGE_PATH,
+					VPN_STORAGE_INTERFACE,
+					VPN_STORAGE_CHANGE_USER);
+	if (!vpn_msg)
+		return -ENOMEM;
+
+	if (!dbus_message_append_args(vpn_msg, DBUS_TYPE_UINT32, &dbus_uid,
+				DBUS_TYPE_INVALID)) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	if (!dbus_connection_send_with_reply(connection, vpn_msg, &call,
+				DBUS_TIMEOUT_USE_DEFAULT)) {
+		connman_error("Unable to call %s.%s()", VPN_STORAGE_INTERFACE,
+					VPN_STORAGE_CHANGE_USER);
+		err = -EPERM;
+		goto out;
+	}
+
+	if (!call) {
+		err = -ECANCELED;
+		goto out;
+	}
+
+	user_data = g_new0(struct change_user_data, 1);
+	user_data->result_cb = cb;
+	user_data->user = g_strdup(pwd->pw_name);
+	user_data->path = system_user ? NULL :
+				g_build_filename(pwd->pw_dir,
+				DEFAULT_USER_STORAGE, NULL);
+
+	DBG("path \"%s\"", path);
+
+	dbus_pending_call_set_notify(call, change_user_reply, user_data, NULL);
+
+	err = -EINPROGRESS;
+
+out:
+	dbus_message_unref(vpn_msg);
+
+	return err;
 }
 
 static const GDBusMethodTable storage_methods[] = {
