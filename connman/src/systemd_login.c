@@ -35,21 +35,236 @@
 
 #define DEFAULT_SEAT "seat0"
 
+enum sl_state {
+	SL_IDLE = 0,
+	SL_SD_INITIALIZED,
+	SL_CONNECTED,
+	SL_INITIAL_STATUS_CHECK,
+	SL_STATUS_CHECK,
+	SL_WAITING_USER_CHANGE_REPLY,
+	SL_WAITING_USER_CHANGE_REPLY_AND_DELAYED,
+};
+
 enum sd_session_state {
+	/* Invalid and for handling future states, which are ignored. */
 	SD_SESSION_UNDEF,
+	/*
+	 * user logged in, but not active, i.e. has no session in the
+	 *foreground
+	 */
 	SD_SESSION_ONLINE,
+	/*
+	 * user logged in, and has at least one active session, i.e. one
+	 * session in the foreground.
+	 */
 	SD_SESSION_ACTIVE,
+	/*
+	 * user not logged in, and not lingering, but some processes are still
+	 * around.
+	 */
 	SD_SESSION_CLOSING,
+	/* user not logged in at all */
+	SD_SESSION_OFFLINE,
+	/* user not logged in, but some user services running */
+	SD_SESSION_LINGERING,
+	/*
+	 * non-documented state - apparently preceeds session active state.
+	 * https://github.com/systemd/systemd/blob/master/src/login/
+	 * logind-user.c#L878
+	 */
+	SD_SESSION_OPENING,
 };
 
 struct systemd_login_data {
+	enum sl_state state;
+	enum sl_state old_state;
 	uid_t active_uid;
 	sd_login_monitor *login_monitor;
 	GIOChannel *iochannel_in;
 	guint iochannel_in_id;
+	guint restore_connection_id;
+	guint delayed_status_check_id;
+	bool prepare_only;
+	int pending_replies;
 };
 
 struct systemd_login_data *login_data = NULL;
+
+static const char *state2string(enum sl_state state)
+{
+	switch (state) {
+	case SL_IDLE:
+		return "idle";
+	case SL_SD_INITIALIZED:
+		return "initialized";
+	case SL_CONNECTED:
+		return "connected";
+	case SL_INITIAL_STATUS_CHECK:
+		return "initial status check";
+	case SL_STATUS_CHECK:
+		return "status check";
+	case SL_WAITING_USER_CHANGE_REPLY:
+		return "waiting reply";
+	case SL_WAITING_USER_CHANGE_REPLY_AND_DELAYED:
+		return "waiting reply and delayed";
+	}
+
+	return "invalid state";
+}
+
+static bool change_state(struct systemd_login_data *login_data,
+			enum sl_state new_state)
+{
+	enum sl_state old_state;
+
+	if (!login_data)
+		return false;
+
+	old_state = login_data->old_state;
+
+	switch (login_data->state) {
+	case SL_IDLE:
+		switch (new_state) {
+		case SL_IDLE:
+			/* fall through */
+		case SL_SD_INITIALIZED:
+			break;
+		default:
+			goto err;
+		}
+
+		break;
+	case SL_SD_INITIALIZED:
+		switch (new_state) {
+		case SL_IDLE:
+			if (old_state != SL_CONNECTED)
+				goto err;
+
+			break;
+		case SL_CONNECTED:
+			/* fall through */
+		case SL_INITIAL_STATUS_CHECK:
+			if (old_state != SL_IDLE)
+				goto err;
+
+			break;
+		default:
+			goto err;
+		}
+
+		break;
+	case SL_CONNECTED:
+		switch (new_state) {
+		case SL_SD_INITIALIZED:
+			/* fall through */
+		case SL_STATUS_CHECK:
+			break;
+		default:
+			goto err;
+		}
+
+		break;
+	case SL_INITIAL_STATUS_CHECK:
+		switch (new_state) {
+		case SL_SD_INITIALIZED:
+			break;
+		case SL_WAITING_USER_CHANGE_REPLY:
+			if (old_state != SL_SD_INITIALIZED)
+				goto err;
+
+			break;
+		default:
+			goto err;
+		}
+
+		break;
+	case SL_STATUS_CHECK:
+		switch (new_state) {
+		case SL_CONNECTED:
+			break;
+		case SL_WAITING_USER_CHANGE_REPLY:
+			if (old_state != SL_CONNECTED)
+				goto err;
+
+			break;
+		default:
+			goto err;
+		}
+
+		break;
+	case SL_WAITING_USER_CHANGE_REPLY:
+		switch (new_state) {
+		case SL_SD_INITIALIZED:
+			if (old_state != SL_INITIAL_STATUS_CHECK)
+				goto err;
+
+			break;
+		case SL_CONNECTED:
+			/*
+			 * While waiting for reply connection may have been
+			 * established if in initial status check state.
+			 */
+			if (old_state != SL_INITIAL_STATUS_CHECK &&
+						old_state != SL_STATUS_CHECK)
+				goto err;
+
+			break;
+		case SL_WAITING_USER_CHANGE_REPLY_AND_DELAYED:
+			if (old_state != SL_INITIAL_STATUS_CHECK &&
+						old_state != SL_STATUS_CHECK)
+				goto err;
+
+			break;
+		default:
+			goto err;
+		}
+
+		break;
+	case SL_WAITING_USER_CHANGE_REPLY_AND_DELAYED:
+		switch (new_state) {
+		case SL_SD_INITIALIZED:
+			if (old_state != SL_WAITING_USER_CHANGE_REPLY)
+				goto err;
+
+			break;
+		case SL_CONNECTED:
+			if (old_state != SL_WAITING_USER_CHANGE_REPLY)
+				goto err;
+
+			break;
+		case SL_STATUS_CHECK:
+			if (old_state != SL_WAITING_USER_CHANGE_REPLY)
+				goto err;
+
+			break;
+		default:
+			goto err;
+		}
+
+		break;
+	}
+
+	DBG("state %d:%-26s -> %d:%s", login_data->state,
+				state2string(login_data->state), new_state,
+				state2string(new_state));
+
+	login_data->old_state = login_data->state;
+	login_data->state = new_state;
+
+	return true;
+
+err:
+	DBG("invalid state change %d:%-26s -> %d:%s (old state %d:%s)",
+				login_data->state,
+				state2string(login_data->state), new_state,
+				state2string(new_state), old_state,
+				state2string(old_state));
+
+	login_data->old_state = login_data->state;
+	login_data->state = new_state;
+
+	return false;
+}
 
 static enum sd_session_state get_session_state(const char *state)
 {
@@ -61,6 +276,17 @@ static enum sd_session_state get_session_state(const char *state)
 
 	if (!g_strcmp0(state, "closing"))
 		return SD_SESSION_CLOSING;
+
+	if (!g_strcmp0(state, "offline"))
+		return SD_SESSION_OFFLINE;
+
+	if (!g_strcmp0(state, "lingering"))
+		return SD_SESSION_LINGERING;
+
+	if (!g_strcmp0(state, "opening"))
+		return SD_SESSION_OPENING;
+
+	DBG("unknown state %s return %d", state, SD_SESSION_UNDEF);
 
 	return SD_SESSION_UNDEF;
 }
@@ -74,7 +300,39 @@ static bool get_session_uid_and_state(uid_t *uid,
 	int err;
 	int i;
 	bool ignore_session = false;
-	
+
+	/* Test for simpler solution
+	char *session;
+
+	*uid = 0;
+	*session_state = SD_SESSION_UNDEF;
+
+	err = sd_seat_get_active(DEFAULT_SEAT, &session, uid);
+	if (err) {
+		DBG("failed to get active session and user for seat %s",
+					DEFAULT_SEAT);
+		return false;
+	}
+
+	if (sd_session_is_remote(session) == 1) {
+		DBG("ignore remote session %s", session);
+		return false;
+	}
+
+	err = sd_uid_get_state(*uid, &state);
+	if (err) {
+		DBG("cannot get state for uid %d session %s", *uid, session);
+		return false;
+	}
+
+	*session_state = get_session_state(state);
+
+	g_free(session);
+	g_free(state);
+
+	return *session_state == SD_SESSION_UNDEF && *uid == 0 ? false : true;
+	*/
+
 	err = sd_get_sessions(&sessions);
 	if (err < 1 || !sessions) {
 		DBG("failed to get sessions");
@@ -117,6 +375,9 @@ static bool get_session_uid_and_state(uid_t *uid,
 			DBG("failed to get session %s uid", sessions[i]);
 			continue;
 		}
+
+		/* Found session with DEFAULT_SEAT, uid and state set, stop */
+		break;
 	}
 
 	g_strfreev(sessions);
@@ -124,68 +385,376 @@ static bool get_session_uid_and_state(uid_t *uid,
 	return *session_state == SD_SESSION_UNDEF && *uid == 0 ? false : true;
 }
 
-static void user_change_result_cb(int err)
+static bool is_conn_open(struct systemd_login_data *login_data)
 {
-	if (err)
-		DBG("user change not successful %d:%s", err, strerror(-err));
+	if (!login_data)
+		return false;
 
-	DBG("user changed");
+	return login_data->prepare_only && !login_data->iochannel_in_id;
+}
+
+static void user_change_result_cb(uid_t uid, int err, void *user_data)
+{
+	struct systemd_login_data *login_data = user_data;
+
+	if (login_data->state != SL_WAITING_USER_CHANGE_REPLY &&
+				login_data->state !=
+				SL_WAITING_USER_CHANGE_REPLY_AND_DELAYED)
+		DBG("invalid state %s", state2string(login_data->state));
+
+	if (!login_data->pending_replies)
+		connman_warn("not expecting a reply on user change result");
+	else
+		login_data->pending_replies--;
+
+	DBG("pending_replies %d", login_data->pending_replies);
+
+	/*
+	 * In case there is an error the user change is not done and the
+	 * active uid should be changed what is reported back. Usually
+	 * storage reverts back to using root as user. Just report the error.
+	 */
+	if (err && err != -EINPROGRESS)
+		connman_warn("user change to %d not successful %d:%s",
+						login_data->active_uid, err,
+						strerror(-err));
+
+	if (uid != login_data->active_uid) {
+		DBG("changed to different user %d than requested (%d)", uid,
+					login_data->active_uid);
+		login_data->active_uid = uid;
+	}
+
+	if (login_data->prepare_only && err == -EINPROGRESS) {
+		DBG("user change to %d is pending for reply", uid);
+	} else {
+		DBG("user changed to %d", uid);
+		change_state(login_data, is_conn_open(login_data) ?
+					SL_SD_INITIALIZED : SL_CONNECTED);
+	}
 }
 
 static int check_session_status(struct systemd_login_data *login_data)
 {
 	enum sd_session_state state;
 	uid_t uid;
+	int err = 0;
 
-	DBG("");
+	if (login_data->state != SL_SD_INITIALIZED &&
+				login_data->state != SL_CONNECTED) {
+		DBG("invalid state %d:%s", login_data->state,
+					state2string(login_data->state));
+		return -EINVAL;
+	}
+
+	change_state(login_data, is_conn_open(login_data) ?
+				SL_INITIAL_STATUS_CHECK : SL_STATUS_CHECK);
 
 	if (!get_session_uid_and_state(&uid, &state)) {
-		DBG("failed %d %d", uid, state);
-		return false;
+		DBG("failed to get uid %d and state %d", uid, state);
+		return -ENOENT;
 	}
 
 	switch (state) {
 	case SD_SESSION_ACTIVE:
-		if (uid != login_data->active_uid) {
-			DBG("user active changed, change to uid %d", uid);
-			__connman_storage_change_user(uid,
-						user_change_result_cb);
-		} else {
-			DBG("active user not changed, state active");
-		}
+		if (uid == login_data->active_uid)
+			goto out;
 
-		break;
+		DBG("user active changed, change to uid %d", uid);
+		login_data->active_uid = uid;
+		change_state(login_data, SL_WAITING_USER_CHANGE_REPLY);
+		login_data->pending_replies = login_data->prepare_only ? 2 : 1;
+
+		err = __connman_storage_change_user(uid, user_change_result_cb,
+					login_data, login_data->prepare_only);
+		goto reply;
 	case SD_SESSION_ONLINE:
-		if (uid != login_data->active_uid) {
-			DBG("user changed, change to uid %d", uid);
-			__connman_storage_change_user(uid,
-						user_change_result_cb);
-		} else {
-			DBG("active user not changed, state online");
-		}
+		if (uid == login_data->active_uid)
+			DBG("user %d left foreground, wait for logout", uid);
 
-		break;
+		goto out;
 	case SD_SESSION_CLOSING:
 		DBG("logout, go to root");
-		__connman_storage_change_user(0, user_change_result_cb);
 
-		break;
+		login_data->active_uid = 0;
+		change_state(login_data, SL_WAITING_USER_CHANGE_REPLY);
+		login_data->pending_replies = login_data->prepare_only ? 2 : 1;
+
+		err = __connman_storage_change_user(0, user_change_result_cb,
+					login_data, login_data->prepare_only);
+		goto reply;
+	case SD_SESSION_OFFLINE:
+		DBG("user %d is offline", uid);
+		goto out;
+	case SD_SESSION_LINGERING:
+		DBG("user %d is lingering", uid);
+		goto out;
+	case SD_SESSION_OPENING:
+		DBG("user %d is opening session", uid);
+		goto out;
 	case SD_SESSION_UNDEF:
 		DBG("unsupported status");
-		break;
+		err = -EINVAL;
+		goto out;
 	}
 
-	if (uid != login_data->active_uid) {
-		DBG("active user %d -> user %d", login_data->active_uid, uid);
-		login_data->active_uid = uid;
+reply:
+	if (err && err != -EINPROGRESS)
+		goto out;
+
+	return err;
+
+out:
+	change_state(login_data, is_conn_open(login_data) ?
+				SL_SD_INITIALIZED : SL_CONNECTED);
+	return err;
+}
+
+static int init_sd_login_monitor(struct systemd_login_data *login_data)
+{
+	int err;
+
+	if (login_data->state > SL_IDLE) {
+		DBG("invalid state %s", state2string(login_data->state));
+		return -EINVAL;
 	}
 
-	return true;
+	if (login_data->login_monitor)
+		return -EALREADY;
+
+	err = sd_login_monitor_new("session", &login_data->login_monitor);
+	if (err < 0) {
+		DBG("cannot initialize systemd login monitor (%s)",
+					strerror(-err));
+		login_data->login_monitor = NULL;
+		err = -ECONNABORTED;
+	}
+
+	change_state(login_data, SL_SD_INITIALIZED);
+
+	return err;
+}
+
+static void close_sd_login_monitor(struct systemd_login_data *login_data)
+{
+	if (login_data->state > SL_SD_INITIALIZED) {
+		DBG("invalid state %s", state2string(login_data->state));
+		return;
+	}
+
+	if (!login_data || !login_data->login_monitor)
+		return;
+
+	/* sd_login_monitor_unref returns NULL according to API header. */
+	login_data->login_monitor =
+			sd_login_monitor_unref(login_data->login_monitor);
+
+	change_state(login_data, SL_IDLE);
+}
+
+#define RESTORE_CONNETION_TIMEOUT 250
+
+static int init_io_channel(struct systemd_login_data *login_data);
+static void close_io_channel(struct systemd_login_data *login_data);
+
+static gboolean restore_connection(gpointer user_data)
+{
+	struct systemd_login_data *login_data = user_data;
+	int err;
+
+	if (login_data->state < SL_SD_INITIALIZED) {
+		DBG("invalid state %d:%s", login_data->state,
+					state2string(login_data->state));
+		return G_SOURCE_CONTINUE;
+	}
+
+	if (login_data->login_monitor)
+		close_sd_login_monitor(login_data);
+
+	err = init_sd_login_monitor(login_data);
+	if (err)
+		return G_SOURCE_CONTINUE; /* Try again later */
+
+	err = init_io_channel(login_data);
+	if (err) {
+		close_io_channel(login_data);
+		return G_SOURCE_CONTINUE; /* Try again later */
+	}
+
+	login_data->restore_connection_id = 0;
+	return G_SOURCE_REMOVE;
+}
+
+static void clean_restore_connection(gpointer user_data)
+{
+	struct systemd_login_data *login_data = user_data;
+
+	if (login_data->restore_connection_id) {
+		g_source_remove(login_data->restore_connection_id);
+		login_data->restore_connection_id = 0;
+	}
+}
+
+static gboolean delayed_status_check(gpointer user_data)
+{
+	struct systemd_login_data *login_data = user_data;
+	int err;
+
+	if (login_data->state == SL_WAITING_USER_CHANGE_REPLY_AND_DELAYED) {
+		DBG("reply pending, continue");
+		return G_SOURCE_CONTINUE;
+	}
+
+	if (login_data->state != SL_CONNECTED) {
+		DBG("invalid state %d:%s", login_data->state,
+					state2string(login_data->state));
+		return G_SOURCE_CONTINUE;
+	}
+
+	DBG("check session status");
+
+	login_data->prepare_only = false;
+
+	err = check_session_status(login_data);
+	if (err && err != -EINPROGRESS)
+		DBG("failed to check session status: %d:%s", err,
+					strerror(-err));
+
+	login_data->delayed_status_check_id = 0;
+	return G_SOURCE_REMOVE;
+}
+
+static void clean_delayed_status_check(gpointer user_data)
+{
+	struct systemd_login_data *login_data = user_data;
+
+	DBG("");
+
+	if (login_data->delayed_status_check_id) {
+		g_source_remove(login_data->delayed_status_check_id);
+		login_data->delayed_status_check_id = 0;
+	}
+}
+
+#define DELAYED_STATUS_CHECK_TIMEOUT 100
+
+static int do_session_status_check(struct systemd_login_data *login_data)
+{
+	switch (login_data->state) {
+	case SL_IDLE:
+		/* fall through */
+	case SL_SD_INITIALIZED:
+		DBG("invalid state %d:%s", login_data->state,
+					state2string(login_data->state));
+		return -ENOTCONN;
+	case SL_CONNECTED:
+		DBG("check session status");
+
+		login_data->prepare_only = false;
+
+		return check_session_status(login_data);
+	case SL_INITIAL_STATUS_CHECK:
+		/* fall through */
+	case SL_STATUS_CHECK:
+		return -EINPROGRESS;
+	case SL_WAITING_USER_CHANGE_REPLY:
+		if (login_data->delayed_status_check_id) {
+			DBG("delayed_status_check_id exists");
+			return -EINPROGRESS;
+		}
+
+		DBG("user change is pending, delay status check");
+
+		login_data->delayed_status_check_id = g_timeout_add_full(
+					G_PRIORITY_DEFAULT,
+					DELAYED_STATUS_CHECK_TIMEOUT,
+					delayed_status_check, login_data,
+					clean_delayed_status_check);
+
+		change_state(login_data,
+				SL_WAITING_USER_CHANGE_REPLY_AND_DELAYED);
+
+		return -EINPROGRESS;
+	case SL_WAITING_USER_CHANGE_REPLY_AND_DELAYED:
+		return -EINPROGRESS;
+	}
+
+	return 0;
+}
+
+static gboolean io_channel_cb(GIOChannel *source, GIOCondition condition,
+			gpointer user_data)
+{
+	struct systemd_login_data *login_data = user_data;
+	int err;
+
+	if (login_data->state < SL_CONNECTED) {
+		DBG("invalid state %d:%s", login_data->state,
+					state2string(login_data->state));
+		return -EINVAL;
+	}
+
+	if (condition && G_IO_IN) {
+		err = do_session_status_check(login_data);
+		if (err && err != -EINPROGRESS)
+			DBG("failed to check session status");
+
+		if (sd_login_monitor_flush(login_data->login_monitor))
+			DBG("failed to flush login monitor");
+
+	} else if (condition && G_IO_ERR) {
+		DBG("iochannel error, closing");
+		close_io_channel(login_data);
+		login_data->restore_connection_id = g_timeout_add_full(
+					G_PRIORITY_DEFAULT,
+					RESTORE_CONNETION_TIMEOUT,
+					restore_connection, login_data,
+					clean_restore_connection);
+		return G_SOURCE_REMOVE;
+	}
+
+	return G_SOURCE_CONTINUE;
+}
+
+static int init_io_channel(struct systemd_login_data *login_data)
+{
+	int fd;
+
+	if (login_data->state < SL_SD_INITIALIZED) {
+		DBG("invalid state %d:%s", login_data->state,
+					state2string(login_data->state));
+		return -EINVAL;
+	}
+
+	if (!login_data || !login_data->login_monitor)
+		return -EINVAL;
+
+	if (login_data->iochannel_in_id)
+		return -EALREADY;
+
+	fd = sd_login_monitor_get_fd(login_data->login_monitor);
+	if (fd < 0)
+		return -ECONNABORTED;
+
+	login_data->iochannel_in = g_io_channel_unix_new(fd);
+	login_data->iochannel_in_id = g_io_add_watch(login_data->iochannel_in,
+				G_IO_IN | G_IO_ERR, (GIOFunc)io_channel_cb,
+				login_data);
+
+	/* user_change_result_cb() will set to SL_CONNECTED after completed */
+	if (login_data->state != SL_WAITING_USER_CHANGE_REPLY)
+		change_state(login_data, SL_CONNECTED);
+
+	return 0;
 }
 
 static void close_io_channel(struct systemd_login_data *login_data)
 {
 	DBG("");
+
+	if (login_data->state < SL_CONNECTED)
+		DBG("invalid state %d:%s", login_data->state,
+					state2string(login_data->state));
 
 	if (login_data->iochannel_in_id) {
 		g_source_remove(login_data->iochannel_in_id);
@@ -197,33 +766,13 @@ static void close_io_channel(struct systemd_login_data *login_data)
 		g_io_channel_unref(login_data->iochannel_in);
 		login_data->iochannel_in = NULL;
 	}
-}
 
-static gboolean io_channel_cb(GIOChannel *source, GIOCondition condition,
-			gpointer user_data)
-{
-	struct systemd_login_data *login_data = user_data;
-
-	if (condition && G_IO_IN) {
-		if (!check_session_status(login_data))
-			DBG("failed to check session status");
-		
-		if (sd_login_monitor_flush(login_data->login_monitor))
-			DBG("failed to flush login monitor");
-
-	} else if (condition && G_IO_ERR) {
-		DBG("iochannel error, closing");
-		close_io_channel(login_data);
-		return G_SOURCE_REMOVE;
-	}
-
-	return G_SOURCE_CONTINUE;
+	change_state(login_data, SL_SD_INITIALIZED);
 }
 
 int __systemd_login_init()
 {
 	int err;
-	int fd;
 
 	DBG("");
 
@@ -232,23 +781,38 @@ int __systemd_login_init()
 	
 	login_data = g_new0(struct systemd_login_data, 1);
 
-	err = sd_login_monitor_new("session", &login_data->login_monitor);
-	if (err < 0) {
-		DBG("cannot initialize systemd login monitor (%s)",
-					strerror(-err));
-		login_data->login_monitor = NULL;
-		return -ECONNABORTED;
+	err = init_sd_login_monitor(login_data);
+	if (err) {
+		DBG("cannot initialize login monitor, startup delayed");
+		goto delayed;
 	}
 
-	check_session_status(login_data);
+	/*
+	 * With early, initial call do only preparing steps for user change
+	 * since everything is not initialized yet. Both connmand and vpnd
+	 * will return replies in this case.
+	 */
+	login_data->prepare_only = true;
 
-	fd = sd_login_monitor_get_fd(login_data->login_monitor);
-	login_data->iochannel_in = g_io_channel_unix_new(fd);
-	login_data->iochannel_in_id = g_io_add_watch(login_data->iochannel_in,
-				G_IO_IN | G_IO_ERR, (GIOFunc)io_channel_cb,
-				login_data);
+	err = check_session_status(login_data);
+	if (err && err != -EINPROGRESS)
+		DBG("failed to get initial user login status");
+
+	err = init_io_channel(login_data);
+	if (err) {
+		DBG("failed to initialize io channel, startup delayed");
+		goto delayed;
+	}
 
 	return 0;
+
+delayed:
+	login_data->restore_connection_id = g_timeout_add_full(
+					G_PRIORITY_DEFAULT,
+					RESTORE_CONNETION_TIMEOUT,
+					restore_connection, login_data,
+					clean_restore_connection);
+	return -EINPROGRESS;
 }
 
 void __systemd_login_cleanup()
@@ -258,12 +822,11 @@ void __systemd_login_cleanup()
 	if (!login_data)
 		return;
 
-	close_io_channel(login_data);
+	clean_restore_connection(login_data);
+	clean_delayed_status_check(login_data);
 
-	if (sd_login_monitor_unref(login_data->login_monitor))
-		DBG("cannot unref login monitor");
-	else
-		login_data->login_monitor = NULL;
+	close_io_channel(login_data);
+	close_sd_login_monitor(login_data);
 	
 	g_free(login_data);
 	login_data = NULL;
