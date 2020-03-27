@@ -1561,7 +1561,7 @@ static char* build_filename(const char *dir,
 }
 
 static int change_storage_dir(const char *root,
-					enum connman_storage_dir_type type)
+			enum connman_storage_dir_type type, bool prepare_only)
 {
 	gchar **items;
 	char *path;
@@ -1654,11 +1654,11 @@ static int change_storage_dir(const char *root,
 		if (root) {
 			DBG("change user dir to %s vpn %s", path, vpn_path);
 
-			if (cbs && cbs->pre && !cbs->pre())
+			if (!prepare_only && cbs && cbs->pre && !cbs->pre())
 				DBG("main system preparations failed");
 
 			/* Nothing to unload if storage isn't initialized */
-			if (storage.initialized) {
+			if (!prepare_only && storage.initialized) {
 				DBG("unload system services");
 
 				items = __connman_storage_get_system_services(
@@ -1699,6 +1699,15 @@ static int change_storage_dir(const char *root,
 			storage_dir_cleanup(vpn_storage_dir,
 						STORAGE_DIR_TYPE_VPN);
 		}
+
+		/*
+		 * If requested only to prepare technology setup and service
+		 * loading will be done by the component initialization using
+		 * the user set here in storage. Thus, load and post cb's are
+		 * skipped.
+		 */
+		if (prepare_only)
+			break;
 
 		DBG("load services");
 
@@ -1882,7 +1891,8 @@ out:
 	return pwd;
 }
 
-static int set_user_dir(const char *root, enum connman_storage_dir_type type)
+static int set_user_dir(const char *root, enum connman_storage_dir_type type,
+			bool prepare_only)
 {
 	const char *dir;
 	int err;
@@ -1890,7 +1900,7 @@ static int set_user_dir(const char *root, enum connman_storage_dir_type type)
 	DBG("");
 
 	/* This sets both main and VPN! */
-	err = change_storage_dir(root, type);
+	err = change_storage_dir(root, type, prepare_only);
 	if (err) {
 		DBG("cannot change dir root to %s error %s", root,
 					strerror(-err));
@@ -1934,7 +1944,7 @@ static int set_user_dir(const char *root, enum connman_storage_dir_type type)
 	return 0;
 
 err:
-	change_storage_dir(NULL, type);
+	change_storage_dir(NULL, type, prepare_only);
 
 	return err;
 }
@@ -1942,6 +1952,9 @@ err:
 struct change_user_data {
 	DBusMessage *pending;
 	connman_storage_change_user_result_cb_t result_cb;
+	void *user_cb_data;
+	uid_t uid;
+	bool prepare_only;
 	char *user;
 	char *path;
 };
@@ -1987,9 +2000,13 @@ static void change_user_reply(DBusPendingCall *call, void *user_data)
 	if (err)
 		goto err;
 
-	err = set_user_dir(data->path, STORAGE_DIR_TYPE_MAIN);
-	if (err)
-		goto err;
+	/* Preparations are done prior to D-Bus message to vpnd */
+	if (!data->prepare_only) {
+		err = set_user_dir(data->path, STORAGE_DIR_TYPE_MAIN,
+					data->prepare_only);
+		if (err)
+			goto err;
+	}
 
 	if (cbs && cbs->finalize)
 		cbs->finalize(data->user);
@@ -2001,6 +2018,12 @@ static void change_user_reply(DBusPendingCall *call, void *user_data)
 	goto out;
 
 err:
+	/* When preparing revert to root user if vpnd fails to change user. */
+	if (data->prepare_only) {
+		set_user_dir(NULL, STORAGE_DIR_TYPE_MAIN, false);
+		data->uid = 0;
+	}
+
 	if (!data->pending)
 		goto out;
 
@@ -2025,7 +2048,7 @@ err:
 
 out:
 	if (data->result_cb)
-		data->result_cb(err);
+		data->result_cb(data->uid, err, data->user_cb_data);
 
 	if (data->pending)
 		dbus_message_unref(data->pending);
@@ -2117,8 +2140,10 @@ static DBusMessage *change_user(DBusConnection *conn,
 	}
 
 	user_data = g_new0(struct change_user_data, 1);
+	user_data->uid = (uid_t)uid;
 	user_data->pending = dbus_message_ref(msg);
 	user_data->user = g_strdup(pwd->pw_name);
+	user_data->prepare_only = false;
 
 	/*
 	 * Setting user as root causes user dirs to be removed from use. No
@@ -2189,7 +2214,7 @@ static DBusMessage *change_user_vpn(DBusConnection *conn,
 
 	DBG("path \"%s\"", path);
 
-	err = set_user_dir(path, STORAGE_DIR_TYPE_VPN);
+	err = set_user_dir(path, STORAGE_DIR_TYPE_VPN, false);
 	switch (err) {
 	case 0:
 		break;
@@ -2214,7 +2239,8 @@ static DBusMessage *change_user_vpn(DBusConnection *conn,
 }
 
 int __connman_storage_change_user(uid_t uid,
-			connman_storage_change_user_result_cb_t cb)
+			connman_storage_change_user_result_cb_t cb,
+			void *user_cb_data, bool prepare_only)
 {
 	struct change_user_data *user_data;
 	struct passwd *pwd;
@@ -2231,6 +2257,33 @@ int __connman_storage_change_user(uid_t uid,
 		return err ? -err : -EINVAL;
 
 	dbus_uid = uid;
+
+	user_data = g_new0(struct change_user_data, 1);
+	user_data->result_cb = cb;
+	user_data->user_cb_data = user_cb_data;
+	user_data->uid = uid;
+	user_data->user = g_strdup(pwd->pw_name);
+	user_data->path = system_user ? NULL :
+				g_build_filename(pwd->pw_dir,
+				DEFAULT_USER_STORAGE, NULL);
+	user_data->prepare_only = prepare_only;
+
+	DBG("path \"%s\"", path);
+
+	/* Use reverse order in preparation, set connmand paths before
+	 * communicating with vpnd. vpnd is initialized by systemd and has
+	 * initialized all when the message is processed. But connmand has
+	 * not initialized technology, service and device.
+	 */
+	if (user_data->prepare_only) {
+		int err_set_dir = set_user_dir(user_data->path,
+					STORAGE_DIR_TYPE_MAIN,
+					user_data->prepare_only);
+		if (err_set_dir) {
+			err = err_set_dir;
+			goto prepareout;
+		}
+	}
 
 	vpn_msg = dbus_message_new_method_call(VPN_SERVICE, VPN_STORAGE_PATH,
 					VPN_STORAGE_INTERFACE,
@@ -2257,21 +2310,27 @@ int __connman_storage_change_user(uid_t uid,
 		goto out;
 	}
 
-	user_data = g_new0(struct change_user_data, 1);
-	user_data->result_cb = cb;
-	user_data->user = g_strdup(pwd->pw_name);
-	user_data->path = system_user ? NULL :
-				g_build_filename(pwd->pw_dir,
-				DEFAULT_USER_STORAGE, NULL);
-
-	DBG("path \"%s\"", path);
-
 	dbus_pending_call_set_notify(call, change_user_reply, user_data, NULL);
 
 	err = -EINPROGRESS;
 
 out:
 	dbus_message_unref(vpn_msg);
+
+prepareout:
+	if (prepare_only) {
+		/* If sending of D-Bus message fails or the setup of user dir
+		 * is not successful revert back to root user in connmand.
+		 */
+		if (err != -EINPROGRESS) {
+			set_user_dir(NULL, STORAGE_DIR_TYPE_MAIN, false);
+			uid = 0;
+		}
+
+		/* Inform the caller twice when preparing */
+		if (user_data->result_cb)
+			user_data->result_cb(uid, err, user_cb_data);
+	}
 
 	return err;
 }
