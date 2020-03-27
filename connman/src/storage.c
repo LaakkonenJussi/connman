@@ -996,6 +996,7 @@ static gchar **__connman_storage_get_user_services(gchar **list, int *len)
 	GList *l;
 	int sum;
 	int pos;
+	int count;
 
 	DBG("");
 
@@ -1015,7 +1016,7 @@ static gchar **__connman_storage_get_user_services(gchar **list, int *len)
 	else
 		list = g_realloc(list, sizeof(gchar *) * (*len + sum + 1));
 
-	for (pos = *len, l = storage.user_subdirs; l; l = l->next) {
+	for (pos = *len, count = 0, l = storage.user_subdirs; l; l = l->next) {
 		struct storage_subdir *subdir = l->data;
 
 		if (!is_user_dir(subdir->name)) {
@@ -1028,6 +1029,7 @@ static gchar **__connman_storage_get_user_services(gchar **list, int *len)
 					subdir->has_settings) {
 			DBG("keep WiFi/VPN service %s", subdir->name);
 			list[pos++] = g_strdup(subdir->name);
+			count++;
 		} else {
 			DBG("non-service %s - %s settings", subdir->name,
 						subdir->has_settings ?
@@ -1035,14 +1037,14 @@ static gchar **__connman_storage_get_user_services(gchar **list, int *len)
 		}
 	}
 
-	DBG("%d user services", pos);
+	DBG("%d user services", count);
 
-	/* Set list to correct size */
-	if (sum != pos)
-		list = g_realloc(list, sizeof(gchar *) * (*len + pos + 1));
+	/* Set list to correct size if all in the user subdirs are not added */
+	if (sum != count)
+		list = g_realloc(list, sizeof(gchar *) * (pos + 1));
 
 	list[pos] = NULL;
-	*len += pos;
+	*len = pos;
 
 	return list;
 }
@@ -1452,6 +1454,7 @@ static gchar **__connman_storage_get_user_providers(gchar **list, int *len)
 	GList *l;
 	int sum;
 	int pos;
+	int count;
 
 	DBG("list %p len %d", list, *len);
 
@@ -1471,20 +1474,23 @@ static gchar **__connman_storage_get_user_providers(gchar **list, int *len)
 	else
 		list = g_realloc(list, sizeof(gchar *) * (*len + sum + 1));
 
-	for (pos = *len, l = storage.user_subdirs; l; l = l->next) {
+	for (pos = *len, count = 0, l = storage.user_subdirs; l; l = l->next) {
 		struct storage_subdir *subdir = l->data;
-		if (is_provider_dir_name(subdir->name) && subdir->has_settings)
+		if (is_provider_dir_name(subdir->name) &&
+					subdir->has_settings) {
 			list[pos++] = g_strdup(subdir->name);
+			count++;
+		}
 	}
 
-	DBG("%d user providers ", pos);
+	DBG("%d user providers ", count);
 
-	/* Set list to correct size */
-	if (pos != sum)
-		list = g_realloc(list, sizeof(gchar *) * (*len + pos + 1));
+	/* Set list to correct size if all in user subdirs are not added */
+	if (sum != count)
+		list = g_realloc(list, sizeof(gchar *) * (pos + 1));
 
 	list[pos] = NULL;
-	*len += pos;
+	*len = pos;
 
 	return list;
 }
