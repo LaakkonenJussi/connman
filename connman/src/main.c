@@ -115,7 +115,7 @@ static struct {
 	.enable_6to4 = false,
 	.vendor_class_id = NULL,
 	.fallback_device_types = NULL,
-	.enable_login_manager = true,
+	.enable_login_manager = false,
 };
 
 #define CONF_BG_SCAN                    "BackgroundScanning"
