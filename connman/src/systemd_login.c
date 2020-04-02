@@ -120,13 +120,16 @@ static bool change_state(struct systemd_login_data *login_data,
 	if (!login_data)
 		return false;
 
+	if (login_data->state == new_state) {
+		DBG("no change");
+		return true;
+	}
+
 	old_state = login_data->old_state;
 
 	switch (login_data->state) {
 	case SL_IDLE:
 		switch (new_state) {
-		case SL_IDLE:
-			/* fall through */
 		case SL_SD_INITIALIZED:
 			break;
 		default:
@@ -142,7 +145,11 @@ static bool change_state(struct systemd_login_data *login_data,
 
 			break;
 		case SL_CONNECTED:
-			/* fall through */
+			if (old_state != SL_INITIAL_STATUS_CHECK &&
+					old_state != SL_IDLE)
+				goto err;
+
+			break;
 		case SL_INITIAL_STATUS_CHECK:
 			if (old_state != SL_IDLE)
 				goto err;
@@ -299,8 +306,6 @@ static enum sd_session_state get_session_state(const char *state)
 	return SD_SESSION_UNDEF;
 }
 
-#define USE_SIMPLE_SD_ACTIVE_CHECK
-
 static bool get_session_uid_and_state(uid_t *uid,
 			enum sd_session_state *session_state)
 {
@@ -451,6 +456,8 @@ static int check_session_status(struct systemd_login_data *login_data)
 	uid_t uid;
 	int err = 0;
 
+	DBG("");
+
 	if (login_data->state != SL_SD_INITIALIZED &&
 				login_data->state != SL_CONNECTED) {
 		DBG("invalid state %d:%s", login_data->state,
@@ -463,7 +470,8 @@ static int check_session_status(struct systemd_login_data *login_data)
 
 	if (!get_session_uid_and_state(&uid, &state)) {
 		DBG("failed to get uid %d and/or state %d", uid, state);
-		return -ENOENT;
+		err = -ENOENT;
+		goto out;
 	}
 
 	switch (state) {
@@ -477,8 +485,10 @@ static int check_session_status(struct systemd_login_data *login_data)
 		DBG("user %d is opening session", uid);
 		goto out;
 	case SD_SESSION_ACTIVE:
-		if (uid == login_data->active_uid)
+		if (uid == login_data->active_uid) {
+			DBG("user %d already active", uid);
 			goto out;
+		}
 
 		DBG("active user changed, change to uid %d", uid);
 		login_data->active_uid = uid;
@@ -487,6 +497,7 @@ static int check_session_status(struct systemd_login_data *login_data)
 		if (uid == login_data->active_uid)
 			DBG("user %d left foreground, wait for logout", uid);
 
+		DBG("uid %d is online", uid);
 		goto out;
 	case SD_SESSION_CLOSING:
 		DBG("logout, go to root");
