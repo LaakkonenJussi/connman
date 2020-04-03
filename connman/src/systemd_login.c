@@ -801,8 +801,13 @@ static gboolean io_channel_cb(GIOChannel *source, GIOCondition condition,
 
 	} else if (condition && G_IO_ERR) {
 		DBG("iochannel error, closing");
+
+		/* Clean the id to avoid double removal before closing */
+		login_data->iochannel_in_id= 0;
 		close_io_channel(login_data);
+
 		init_restore_sd_connection(login_data);
+
 		return G_SOURCE_REMOVE;
 	}
 
