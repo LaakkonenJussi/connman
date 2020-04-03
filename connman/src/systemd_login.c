@@ -175,12 +175,11 @@ struct systemd_login_data {
 	enum sl_state old_state;
 	uid_t active_uid;
 	sd_login_monitor *login_monitor;
-	GIOChannel *iochannel_in;
 	guint iochannel_in_id;
 	guint restore_sd_connection_id;
 	guint delayed_status_check_id;
 	bool prepare_only;
-	int pending_replies;
+	unsigned int pending_replies;
 };
 
 struct systemd_login_data *login_data = NULL;
@@ -419,7 +418,7 @@ static bool get_session_uid_and_state(uid_t *uid,
 {
 #ifdef USE_SIMPLE_SD_ACTIVE_CHECK
 	char *session;
-	char *state;
+	char *state = NULL;
 	int err;
 
 	DBG("simple");
@@ -431,23 +430,24 @@ static bool get_session_uid_and_state(uid_t *uid,
 	if (err) {
 		connman_warn("failed to get active session and/or user for "
 					" seat %s", DEFAULT_SEAT);
-		return false;
+		goto out;
 	}
 
 	if (sd_session_is_remote(session) == 1) {
 		DBG("ignore remote session %s", session);
-		return false;
+		goto out;
 	}
 
 	err = sd_uid_get_state(*uid, &state);
 	if (err) {
 		connman_warn("failed to get state for uid %d session %s",
 					*uid, session);
-		return false;
+		goto out;
 	}
 
 	*session_state = get_session_state(state);
 
+out:
 	g_free(session);
 	g_free(state);
 
@@ -462,14 +462,14 @@ static bool get_session_uid_and_state(uid_t *uid,
 
 	DBG("check sessions");
 
+	*uid = 0;
+	*session_state = SD_SESSION_UNDEF;
+
 	err = sd_get_sessions(&sessions);
 	if (err < 1 || !sessions) {
 		connman_warn("failed to get systemd logind sessions");
-		return false;
+		goto out;
 	}
-
-	*uid = 0;
-	*session_state = SD_SESSION_UNDEF;
 
 	/*
 	 * This assumes that there is only one real session with the
@@ -511,9 +511,10 @@ static bool get_session_uid_and_state(uid_t *uid,
 		break;
 	}
 
+out:
 	g_strfreev(sessions);
 
-	return *session_state == SD_SESSION_UNDEF && *uid == 0 ? false : true;
+	return *session_state != SD_SESSION_UNDEF && *uid != 0;
 #endif
 }
 
@@ -810,6 +811,7 @@ static gboolean io_channel_cb(GIOChannel *source, GIOCondition condition,
 
 static int init_io_channel(struct systemd_login_data *login_data)
 {
+	GIOChannel *io_channel_in;
 	int fd;
 
 	DBG("");
@@ -836,10 +838,9 @@ static int init_io_channel(struct systemd_login_data *login_data)
 		return -ECONNABORTED;
 	}
 
-	login_data->iochannel_in = g_io_channel_unix_new(fd);
-	login_data->iochannel_in_id = g_io_add_watch(login_data->iochannel_in,
-				G_IO_IN | G_IO_ERR, (GIOFunc)io_channel_cb,
-				login_data);
+	io_channel_in = g_io_channel_unix_new(fd);
+	login_data->iochannel_in_id = g_io_add_watch(io_channel_in,
+				G_IO_IN | G_IO_ERR, io_channel_cb, login_data);
 
 	/* user_change_result_cb() will set to SL_CONNECTED after completed */
 	if (login_data->state != SL_WAITING_USER_CHANGE_REPLY)
@@ -864,12 +865,6 @@ static void close_io_channel(struct systemd_login_data *login_data)
 	if (login_data->iochannel_in_id) {
 		g_source_remove(login_data->iochannel_in_id);
 		login_data->iochannel_in_id = 0;
-	}
-
-	if (login_data->iochannel_in) {
-		g_io_channel_shutdown(login_data->iochannel_in, FALSE, NULL);
-		g_io_channel_unref(login_data->iochannel_in);
-		login_data->iochannel_in = NULL;
 	}
 
 	change_state(login_data, SL_SD_INITIALIZED, true);
@@ -909,6 +904,9 @@ static void close_sd_login_monitor(struct systemd_login_data *login_data)
 {
 	DBG("");
 
+	if (!login_data || !login_data->login_monitor)
+		return;
+
 	/* When closing ignore the state and go to idle */
 	if (login_data->state > SL_SD_INITIALIZED)
 		DBG("invalid state %d:%s", login_data->state,
@@ -916,9 +914,6 @@ static void close_sd_login_monitor(struct systemd_login_data *login_data)
 
 	if (!change_state(login_data, SL_IDLE, false))
 		DBG("invalid state change");
-
-	if (!login_data || !login_data->login_monitor)
-		return;
 
 	/* sd_login_monitor_unref returns NULL according to C API. */
 	login_data->login_monitor =
