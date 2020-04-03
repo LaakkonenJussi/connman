@@ -65,6 +65,101 @@ enum sd_session_state {
 	SD_SESSION_CLOSING,
 };
 
+/*
+ * The state machine used here contains 7 different states:
+ *  0. idle (SL_IDLE),
+ *  1. systemd initialized (SL_SD_INITIALIZED)
+ *  2. connected (SL_CONNECTED)
+ *  3. initial status check (SL_INITIAL_STATUS_CHECK)
+ *  4. status check (SL_STATUS_CHECK)
+ *  5. waiting for user change reply (SL_WAITING_USER_CHANGE_REPLY)
+ *  6. waiting for user change reply with a delayed status check
+ *     (SL_WAITING_USER_CHANGE_REPLY_AND_DELAYED)
+ *
+ * The initial status check (3.) is always done at initialization and only in
+ * initialization. Depending on the current active user id (uid) the state is
+ * changed either back to systemd initialized (1.) or to waiting for user
+ * change reply (5.).
+ *
+ * If the initial status check (3.) completes without any change before the
+ * GIOChannel listener for the systemd login fd is created state is changed
+ * back to initialized. After this the state is changed to connected (2.) if
+ * the systemd login fd listener can be created. If not, the change to
+ * connected state (2.) is delayed until the listener is established. State
+ * changes back to idle (0.) when re-establishing the listener in order to make
+ * sure that the systemd login connection is working.
+ *
+ * If there is a uid change while waiting for a reply to initial request (5.)
+ * the listener for the systemd login fd has been created using GIOChannel. The
+ * state transfer depends on this, and if there is activity in the fd while
+ * waiting for reply (5.) state is transferred to waiting for reply with a
+ * delayed status check (6.). There can be only one delayed status check as
+ * the most recent status of the user will be retrieved with the check and
+ * further status checks are not necessary.
+ *
+ * After the systemd login fd listener is created and in connected state the
+ * events on the fd will trigger a change to status check state (4.) and if
+ * there is a change on the uid state is transferred to waiting for reply (5.).
+ * In this state, similarly when transferring from initial status check (3.)
+ * other fd events create a delayed status check and state is changed (to 6.).
+ * Either without change to uid or after a reply state is changed back to
+ * connected (2.).
+ *
+ * The key difference between initial status check (3.) and status check (4.)
+ * is that initial status check (3.) will get 2 replies and change to connmand
+ * active uid is immident, and a reply from connman-vpnd is expected. The
+ * initial status check (3.) does only preparation for connmand since at the
+ * time of the check the other components normally involved in the user change
+ * are not initialized yet. The regular status check (4.) will behave as if the
+ * user change would have become via D-Bus API. One reply is expected and after
+ * this the state changes back to connected (2.).
+ *
+ * The following depicts the state transition diagram with additional
+ * clarifications on certain state changes:
+ *
+ *      |===================|
+ *      |                   |
+ *      |    0. SL_IDLE     |
+ *      |                   |
+ *      |===================|
+ *           ^         |
+ *          / \        |
+ *           |        \ /
+ *           |         v
+ *      |======================|  [initialized]  |============================|
+ *      |                      |---------------->|                            |
+ *      | 1. SL_SD_INITIALIZED |                 | 3. SL_INITIAL_STATUS_CHECK |
+ *      |                      |    [!change]    |                            |
+ *      |======================|<----------------|============================|
+ *           ^      |      ^                                 |
+ *          / \     |     / \                                |
+ *           |      |      |   [reply && !fd listener]       | [change]
+ *           |      |      \-------------------------\       |
+ *           |     \ /                               |      \ /
+ *           |      v                                |       v
+ *      |===================|                |================================|
+ *      |                   | [reply &&      |                                |
+ *  /-->|  2. SL_CONNECTED  |  fd listener ] | 5.SL_WAITING_USER_CHANGE_REPLY |
+ *  |   |                   |<---------------|                                |
+ *  |   |===================|                |================================|
+ *  |           ^      |                            ^       |
+ *  |          / \     |                           / \      |
+ *  | [!change] |      | [fd triggered]             |       | [!reply &&
+ *  |           |     \ /                           |       |  new fd trigger]
+ *  |           |      v                            |       |
+ *  |   |====================|                      |       |
+ *  |   |                    |       [change]       |       |
+ *  |   | 4. SL_STATUS_CHECK |-----------------------/      |
+ *  |   |                    |                              |
+ *  |   |====================|                             \ /
+ *  |                                                       v
+ *  |                           |=============================================|
+ *  |          [reply]          |                                             |
+ *  \---------------------------| 6. SL_WAITING_USER_CHANGE_REPLY_AND_DELAYED |
+ *                              |                                             |
+ *                              |=============================================|
+*/
+
 enum sl_state {
 	SL_IDLE = 0,
 	SL_SD_INITIALIZED,
