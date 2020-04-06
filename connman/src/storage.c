@@ -943,8 +943,8 @@ static gchar **__connman_storage_get_system_services(int *len)
 {
 	gchar **result = NULL;
 	GList *l;
-	int sum;
-	int pos = 0;
+	unsigned int subdir_count;
+	unsigned int pos = 0;
 
 	DBG("");
 
@@ -955,11 +955,11 @@ static gchar **__connman_storage_get_system_services(int *len)
 			return NULL;
 	}
 
-	sum = g_list_length(storage.subdirs);
-	if (!sum)
+	subdir_count = g_list_length(storage.subdirs);
+	if (!subdir_count)
 		goto out;
 
-	result = g_new0(gchar *, sum + 1);
+	result = g_new0(gchar *, subdir_count + 1);
 
 	for (pos = 0, l = storage.subdirs; l; l = l->next) {
 		struct storage_subdir *subdir = l->data;
@@ -983,7 +983,7 @@ static gchar **__connman_storage_get_system_services(int *len)
 	DBG("%d system services", pos);
 
 	/* Set the list to correct size */
-	if (sum != pos)
+	if (subdir_count != pos)
 		result = g_realloc(result, sizeof(gchar *) * (pos + 1));
 
 out:
@@ -994,9 +994,9 @@ out:
 static gchar **__connman_storage_get_user_services(gchar **list, int *len)
 {
 	GList *l;
-	int sum;
-	int pos;
-	int count;
+	unsigned int subdir_count;
+	unsigned int pos;
+	unsigned int count;
 
 	DBG("");
 
@@ -1007,14 +1007,14 @@ static gchar **__connman_storage_get_user_services(gchar **list, int *len)
 			return list;
 	}
 
-	sum = g_list_length(storage.user_subdirs);
-	if (!sum)
+	subdir_count = g_list_length(storage.user_subdirs);
+	if (!subdir_count)
 		return list;
 
 	if (!list)
-		list = g_new0(gchar *, sum + 1);
+		list = g_new0(gchar *, subdir_count + 1);
 	else
-		list = g_realloc(list, sizeof(gchar *) * (*len + sum + 1));
+		list = g_renew(gchar *, list, *len + subdir_count + 1);
 
 	for (pos = *len, count = 0, l = storage.user_subdirs; l; l = l->next) {
 		struct storage_subdir *subdir = l->data;
@@ -1040,8 +1040,8 @@ static gchar **__connman_storage_get_user_services(gchar **list, int *len)
 	DBG("%d user services", count);
 
 	/* Set list to correct size if all in the user subdirs are not added */
-	if (sum != count)
-		list = g_realloc(list, sizeof(gchar *) * (pos + 1));
+	if (subdir_count != count)
+		list = g_renew(gchar *, list, pos + 1);
 
 	list[pos] = NULL;
 	*len = pos;
@@ -1411,8 +1411,8 @@ static gchar **__connman_storage_get_system_providers(int *len)
 {
 	gchar **result = NULL;
 	GList *l;
-	int sum;
-	int pos = 0;
+	unsigned int subdir_count;
+	unsigned int pos = 0;
 
 	DBG("");
 
@@ -1428,11 +1428,11 @@ static gchar **__connman_storage_get_system_providers(int *len)
 			return NULL;
 	}
 
-	sum = g_list_length(storage.subdirs);
-	if (!sum)
+	subdir_count = g_list_length(storage.subdirs);
+	if (!subdir_count)
 		goto out;
 
-	result = g_new0(gchar *, sum + 1);
+	result = g_new0(gchar *, subdir_count + 1);
 
 	for (pos = 0, l = storage.subdirs; l; l = l->next) {
 		struct storage_subdir *subdir = l->data;
@@ -1441,8 +1441,8 @@ static gchar **__connman_storage_get_system_providers(int *len)
 	}
 
 	/* Set the list to correct size */
-	if (sum != pos)
-		result = g_realloc(result, sizeof(gchar *) * (pos + 1));
+	if (subdir_count != pos)
+		result = g_renew(gchar *, result, pos + 1);
 
 out:
 	*len = pos;
@@ -1452,9 +1452,9 @@ out:
 static gchar **__connman_storage_get_user_providers(gchar **list, int *len)
 {
 	GList *l;
-	int sum;
-	int pos;
-	int count;
+	unsigned int subdir_count;
+	unsigned int pos;
+	unsigned int count;
 
 	DBG("list %p len %d", list, *len);
 
@@ -1465,14 +1465,14 @@ static gchar **__connman_storage_get_user_providers(gchar **list, int *len)
 			return list;
 	}
 
-	sum = g_list_length(storage.user_subdirs);
-	if (!sum)
+	subdir_count = g_list_length(storage.user_subdirs);
+	if (!subdir_count)
 		return list;
 
 	if (!list)
-		list = g_new0(gchar *, sum + 1);
+		list = g_new0(gchar *, subdir_count + 1);
 	else
-		list = g_realloc(list, sizeof(gchar *) * (*len + sum + 1));
+		list = g_renew(gchar *, list, *len + subdir_count + 1);
 
 	for (pos = *len, count = 0, l = storage.user_subdirs; l; l = l->next) {
 		struct storage_subdir *subdir = l->data;
@@ -1486,8 +1486,8 @@ static gchar **__connman_storage_get_user_providers(gchar **list, int *len)
 	DBG("%d user providers ", count);
 
 	/* Set list to correct size if all in user subdirs are not added */
-	if (sum != count)
-		list = g_realloc(list, sizeof(gchar *) * (pos + 1));
+	if (subdir_count != count)
+		list = g_renew(gchar *, list, pos + 1);
 
 	list[pos] = NULL;
 	*len = pos;
