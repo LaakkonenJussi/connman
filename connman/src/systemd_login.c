@@ -413,11 +413,13 @@ static enum sd_session_state get_session_state(const char *state)
 	return SD_SESSION_UNDEF;
 }
 
+#define USE_SIMPLE_SD_ACTIVE_CHECK
+
 static bool get_session_uid_and_state(uid_t *uid,
 			enum sd_session_state *session_state)
 {
 #ifdef USE_SIMPLE_SD_ACTIVE_CHECK
-	char *session;
+	char *session = NULL;
 	char *state = NULL;
 	int err;
 
@@ -429,7 +431,12 @@ static bool get_session_uid_and_state(uid_t *uid,
 	err = sd_seat_get_active(DEFAULT_SEAT, &session, uid);
 	if (err) {
 		connman_warn("failed to get active session and/or user for "
-					" seat %s", DEFAULT_SEAT);
+					"seat %s", DEFAULT_SEAT);
+		goto out;
+	}
+
+	if (!session) {
+		DBG("no session");
 		goto out;
 	}
 
@@ -451,7 +458,7 @@ out:
 	g_free(session);
 	g_free(state);
 
-	return *session_state == SD_SESSION_UNDEF && *uid == 0 ? false : true;
+	return *session_state != SD_SESSION_UNDEF && *uid != 0;
 #else
 	char **sessions = NULL;
 	char *seat;
@@ -728,7 +735,7 @@ static gboolean delayed_status_check(gpointer user_data)
 	if (err && err != -EINPROGRESS) {
 		DBG("failed to check session status: %d:%s", err,
 					strerror(-err));
-		return G_SOURCE_CONTINUE;
+		return G_SOURCE_REMOVE;
 	}
 
 	login_data->delayed_status_check_id = 0;
