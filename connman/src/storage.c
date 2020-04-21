@@ -984,7 +984,7 @@ static gchar **__connman_storage_get_system_services(int *len)
 
 	/* Set the list to correct size */
 	if (subdir_count != pos)
-		result = g_realloc(result, sizeof(gchar *) * (pos + 1));
+		result = g_renew(gchar *, result, pos + 1);
 
 out:
 	*len = pos;
@@ -2244,6 +2244,19 @@ static DBusMessage *change_user_vpn(DBusConnection *conn,
 	return g_dbus_create_reply(msg, DBUS_TYPE_INVALID);
 }
 
+/*
+ * This function is called internally only. When doing the initial preparation
+ * at startup (prepare_only = true) the callback (cb) is called twice. First at
+ * the end of the function, and second when a reply from vpnd arrives.When
+ * calling this with prepare_only = false, the callback will be called when
+ * reply is received from vpnd.
+ *
+ * In case of an error, the callback is called only once, as the call to vpnd
+ * is not sent.
+ *
+ * When success this function returns -EINPROGRESS to indicate that the call
+ * to vpnd is sent and reply is pending.
+ */
 int __connman_storage_change_user(uid_t uid,
 			connman_storage_change_user_result_cb_t cb,
 			void *user_cb_data, bool prepare_only)
@@ -2290,25 +2303,24 @@ int __connman_storage_change_user(uid_t uid,
 	 * not initialized technology, service and device.
 	 */
 	if (user_data->prepare_only) {
-		int err_set_dir = set_user_dir(user_data->path,
-					STORAGE_DIR_TYPE_MAIN,
+		err = set_user_dir(user_data->path, STORAGE_DIR_TYPE_MAIN,
 					user_data->prepare_only);
-		if (err_set_dir) {
-			err = err_set_dir;
-			goto prepareout;
-		}
+		if (err)
+			goto out;
 	}
 
 	vpn_msg = dbus_message_new_method_call(VPN_SERVICE, VPN_STORAGE_PATH,
 					VPN_STORAGE_INTERFACE,
 					VPN_STORAGE_CHANGE_USER);
-	if (!vpn_msg)
-		return -ENOMEM;
+	if (!vpn_msg) {
+		err = -ENOMEM;
+		goto out;
+	}
 
 	if (!dbus_message_append_args(vpn_msg, DBUS_TYPE_UINT32, &dbus_uid,
 				DBUS_TYPE_INVALID)) {
 		err = -EINVAL;
-		goto out;
+		goto unref;
 	}
 
 	if (!dbus_connection_send_with_reply(connection, vpn_msg, &call,
@@ -2316,22 +2328,32 @@ int __connman_storage_change_user(uid_t uid,
 		connman_error("Unable to call %s.%s()", VPN_STORAGE_INTERFACE,
 					VPN_STORAGE_CHANGE_USER);
 		err = -EPERM;
-		goto out;
+		goto unref;
 	}
 
 	if (!call) {
 		err = -ECANCELED;
+		goto unref;
+	}
+
+	/*
+	 * Returns FALSE if not enough memory - set appropiate error  However,
+	 * this scenario is highly unlikely to happen. It should fail already
+	 * at creation of the method call.
+	 */
+	if (!dbus_pending_call_set_notify(call, change_user_reply, user_data,
+				NULL)) {
+		dbus_pending_call_unref(call);
+		err = -ENOMEM;
 		goto out;
 	}
 
-	dbus_pending_call_set_notify(call, change_user_reply, user_data, NULL);
-
 	err = -EINPROGRESS;
 
-out:
+unref:
 	dbus_message_unref(vpn_msg);
 
-prepareout:
+out:
 	if (prepare_only) {
 		/* If sending of D-Bus message fails or the setup of user dir
 		 * is not successful revert back to root user in connmand.
