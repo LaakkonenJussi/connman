@@ -1758,6 +1758,9 @@ bool __connman_technology_disable_all()
 							strerror(-err));
 		}
 
+		/* Make sure there is no pending reply awaiting */
+		technology_pending_reply(technology);
+
 		/* To make sure that all scan requests are replied */
 		reply_scan_pending(technology, -ECANCELED);
 
@@ -1776,6 +1779,53 @@ bool __connman_technology_disable_all()
 	g_key_file_unref(keyfile);
 
 	return true;
+}
+
+static unsigned int wifi_delayed_id = 0;
+
+static gboolean enable_delayed(gpointer user_data)
+{
+	struct connman_technology *technology = user_data;
+	int err;
+
+	connman_info("enable_delayed()");
+
+	if (!technology) {
+		connman_warn("enable_delayed() empty data, stop");
+		goto out;
+	}
+
+	if (technology->enabled) {
+		connman_info("enable_delayed() tech %p/%s already enabled",
+					technology, get_name(technology->type));
+		goto out;
+	}
+
+	err = technology_enable(technology);
+	if (!err) {
+		if (__connman_technology_enabled(technology->type))
+			connman_info("enable_delayed() tech %p already powered on",
+						technology);
+	}
+
+out:
+	wifi_delayed_id = 0;
+	return G_SOURCE_REMOVE;
+}
+
+static int technology_init_enable_delayed(
+					struct connman_technology *technology)
+{
+	connman_info("init enable_delayed()");
+
+	if (wifi_delayed_id) {
+		connman_info("already in progress");
+		return -EALREADY;
+	}
+
+	wifi_delayed_id = g_timeout_add(250, enable_delayed, technology);
+
+	return wifi_delayed_id;
 }
 
 bool __connman_technology_enable_from_config()
@@ -1885,6 +1935,13 @@ bool __connman_technology_enable_from_config()
 							technology->type))
 					DBG("tech %p already powered on",
 								technology);
+			} else if (err == -EBUSY) {
+				/*
+				 * Try to enable the tech later if it is now
+				 * busy. Enabling is attempted only once after
+				 * 250ms.
+				 */
+				technology_init_enable_delayed(technology);
 			}
 
 			DBG("tech %p/%s disabled set as enabled, result %s",
@@ -2134,6 +2191,9 @@ void __connman_technology_cleanup(void)
 	}
 
 	g_hash_table_destroy(rfkill_list);
+
+	if (wifi_delayed_id)
+		g_source_remove(wifi_delayed_id);
 
 	dbus_connection_unref(connection);
 
