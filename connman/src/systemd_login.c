@@ -802,7 +802,9 @@ static gboolean io_channel_cb(GIOChannel *source, GIOCondition condition,
 		login_data->iochannel_in_id= 0;
 		close_io_channel(login_data);
 
-		init_restore_sd_connection(login_data);
+		err = init_restore_sd_connection(login_data);
+		if (err == -EALREADY || err == -EINPROGRESS)
+			DBG("re-connection pending");
 
 		return G_SOURCE_REMOVE;
 	}
@@ -997,7 +999,7 @@ static int init_restore_sd_connection(struct systemd_login_data *login_data)
 
 	if (login_data->restore_sd_connection_id) {
 		DBG("restore_sd_connection_id exists");
-		return -EINPROGRESS;
+		return -EALREADY;
 	}
 
 	login_data->restore_sd_connection_id = g_timeout_add_full(
@@ -1005,7 +1007,7 @@ static int init_restore_sd_connection(struct systemd_login_data *login_data)
 				restore_sd_connection, login_data,
 				clean_restore_sd_connection);
 
-	return 0;
+	return -EINPROGRESS;
 }
 
 static void clean_restore_sd_connection(gpointer user_data)
@@ -1059,11 +1061,7 @@ int __systemd_login_init()
 delayed:
 	DBG("do delayed start");
 
-	err = init_restore_sd_connection(login_data);
-	if (err && err != -EINPROGRESS)
-		return err;
-
-	return -EINPROGRESS;
+	return init_restore_sd_connection(login_data);
 }
 
 void __systemd_login_cleanup()
