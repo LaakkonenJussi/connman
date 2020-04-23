@@ -2383,8 +2383,10 @@ static struct vpn_provider *provider_create_from_keyfile(GKeyFile *keyfile,
 			return NULL;
 		}
 
-		if (provider_register(provider) == 0)
+		if (provider_register(provider) == 0) {
 			connection_register(provider);
+			connection_added_signal(provider);
+		}
 	}
 	return provider;
 }
