@@ -1720,17 +1720,7 @@ static int change_storage_dir(const char *root,
 		 * skipped.
 		 */
 		if (prepare_only)
-			break;
-
-		DBG("load services");
-
-		if (cbs && cbs->load)
-			cbs->load();
-
-		DBG("Run post setup");
-
-		if (cbs && cbs->post && !cbs->post())
-			DBG("main post setup failed");
+			goto out;
 
 		break;
 	case STORAGE_DIR_TYPE_VPN:
@@ -1804,17 +1794,23 @@ static int change_storage_dir(const char *root,
 							STORAGE_DIR_TYPE_VPN);
 		}
 
-		if (cbs && cbs->load)
-			cbs->load();
-
-		if (cbs && cbs->post && !cbs->post())
-			DBG("VPN post setup failed");
-
 		break;
 	case STORAGE_DIR_TYPE_USER:
 	case STORAGE_DIR_TYPE_STATE:
 		err = -EINVAL;
-		break;
+		goto out;
+	}
+
+	if (cbs && cbs->post) {
+		DBG("Run post setup");
+
+		if (!cbs->post())
+			DBG("post setup failed");
+	}
+
+	if (cbs && cbs->load) {
+		DBG("load services");
+		cbs->load();
 	}
 
 out:
