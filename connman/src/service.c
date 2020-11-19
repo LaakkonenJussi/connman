@@ -2372,6 +2372,8 @@ bool connman_service_set_autoconnect(struct connman_service *service,
 		connman_network_autoconnect_changed(service->network,
 							service->autoconnect);
 
+	connman_network_set_autoconnect(service->network, autoconnect);
+
 	return true;
 }
 
@@ -10173,6 +10175,9 @@ bool __connman_service_create_from_network(struct connman_network *network)
 
 	service_register(service);
 	service_schedule_added(service);
+
+	connman_network_set_autoconnect(network,
+				service->favorite && service->autoconnect);
 
 	if (service->favorite || service->autoconnect) {
 		device = connman_network_get_device(service->network);
