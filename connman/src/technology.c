@@ -208,10 +208,12 @@ static void technology_save(struct connman_technology *technology)
 					"Tethering.Identifier",
 					technology->tethering_ident);
 
-	if (technology->tethering_passphrase)
+	if (technology->tethering_passphrase) {
+		char *enc = g_strescape(technology->tethering_passphrase, NULL);
 		g_key_file_set_string(keyfile, identifier,
-					"Tethering.Passphrase",
-					technology->tethering_passphrase);
+					"Tethering.Passphrase", enc);
+		g_free(enc);
+	}
 
 done:
 	g_free(identifier);
@@ -462,6 +464,7 @@ static int technology_load_values(struct connman_technology *technology,
 	const char *identifier;
 	bool enable;
 	bool need_saving = false;
+	char *enc;
 
 	if (!technology || !keyfile)
 		return -EINVAL;
@@ -495,8 +498,10 @@ static int technology_load_values(struct connman_technology *technology,
 	technology->tethering_ident = g_key_file_get_string(keyfile,
 				identifier, "Tethering.Identifier", NULL);
 
-	technology->tethering_passphrase = g_key_file_get_string(keyfile,
+	enc = g_key_file_get_string(keyfile,
 				identifier, "Tethering.Passphrase", NULL);
+	if (enc)
+		technology->tethering_passphrase = g_strcompress(enc);
 
 	if (need_saving)
 		technology_save(technology);
