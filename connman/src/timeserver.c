@@ -401,7 +401,7 @@ static void ts_reset(struct connman_service *service)
 
 void __connman_timeserver_sync(struct connman_service *service)
 {
-	if (!service || service == ts_service)
+	if (!service || ts_service == service)
 		return;
 
 	ts_reset(service);
@@ -409,7 +409,7 @@ void __connman_timeserver_sync(struct connman_service *service)
 
 void __connman_timeserver_conf_update(struct connman_service *service)
 {
-	if (!service || service != ts_service)
+	if (!service || (ts_service && ts_service != service))
 		return;
 
 	ts_reset(service);
