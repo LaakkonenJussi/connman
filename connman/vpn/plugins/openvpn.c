@@ -57,37 +57,46 @@
 
 static DBusConnection *connection;
 
+enum opt_type {
+	OPT_NONE = 0,
+	OPT_STRING = 1,
+	OPT_BOOL = 2,
+};
+
 struct {
-	const char *cm_opt;
-	const char *ov_opt;
-	char       has_value;
+	const char	*cm_opt;
+	const char	*ov_opt;
+	char		has_value;
+	enum opt_type	opt_type;
 } ov_options[] = {
-	{ "Host", "--remote", 1 },
-	{ "OpenVPN.CACert", "--ca", 1 },
-	{ "OpenVPN.Cert", "--cert", 1 },
-	{ "OpenVPN.Key", "--key", 1 },
-	{ "OpenVPN.MTU", "--tun-mtu", 1 },
-	{ "OpenVPN.NSCertType", "--ns-cert-type", 1 },
-	{ "OpenVPN.Proto", "--proto", 1 },
-	{ "OpenVPN.Port", "--port", 1 },
-	{ "OpenVPN.AuthUserPass", "--auth-user-pass", 1 },
-	{ "OpenVPN.AskPass", "--askpass", 1 },
-	{ "OpenVPN.AuthNoCache", "--auth-nocache", 0 },
-	{ "OpenVPN.TLSRemote", "--tls-remote", 1 },
-	{ "OpenVPN.TLSAuth", NULL, 1 },
-	{ "OpenVPN.TLSCipher", "--tls-cipher", 1},
-	{ "OpenVPN.TLSAuthDir", NULL, 1 },
-	{ "OpenVPN.Cipher", "--cipher", 1 },
-	{ "OpenVPN.Auth", "--auth", 1 },
-	{ "OpenVPN.CompLZO", "--comp-lzo", 0 },
-	{ "OpenVPN.RemoteCertTls", "--remote-cert-tls", 1 },
-	{ "OpenVPN.ConfigFile", "--config", 1 },
-	{ "OpenVPN.DeviceType", NULL, 1 },
-	{ "OpenVPN.Verb", "--verb", 1 },
-	{ "OpenVPN.Ping", "--ping", 1},
-	{ "OpenVPN.PingExit", "--ping-exit", 1},
-	{ "OpenVPN.RemapUsr1", "--remap-usr1", 1},
-	{ "OpenVPN.BlockIPv6", "--block-ipv6", 0}, /* In versions >= 2.5.0 */
+	{ "Host", "--remote", 1, OPT_STRING},
+	{ "OpenVPN.CACert", "--ca", 1, OPT_STRING},
+	{ "OpenVPN.Cert", "--cert", 1, OPT_STRING},
+	{ "OpenVPN.Key", "--key", 1, OPT_STRING},
+	{ "OpenVPN.MTU", "--tun-mtu", 1, OPT_STRING},
+	{ "OpenVPN.NSCertType", "--ns-cert-type", 1, OPT_STRING},
+	{ "OpenVPN.Proto", "--proto", 1, OPT_STRING},
+	{ "OpenVPN.Port", "--port", 1, OPT_STRING},
+	{ "OpenVPN.AuthUserPass", "--auth-user-pass", 1, OPT_STRING},
+	{ "OpenVPN.AskPass", "--askpass", 1, OPT_STRING},
+	{ "OpenVPN.AuthNoCache", "--auth-nocache", 0, OPT_BOOL},
+	{ "OpenVPN.TLSRemote", "--tls-remote", 1, OPT_STRING},
+	{ "OpenVPN.TLSAuth", NULL, 1, OPT_NONE},
+	{ "OpenVPN.TLSCipher", "--tls-cipher", 1, OPT_STRING},
+	{ "OpenVPN.TLSAuthDir", NULL, 1, OPT_NONE},
+	{ "OpenVPN.Cipher", "--cipher", 1, OPT_STRING},
+	{ "OpenVPN.Auth", "--auth", 1, OPT_STRING},
+	/* Is set to adaptive by default if value is omitted */
+	{ "OpenVPN.CompLZO", "--comp-lzo", 0, OPT_STRING},
+	{ "OpenVPN.RemoteCertTls", "--remote-cert-tls", 1, OPT_STRING},
+	{ "OpenVPN.ConfigFile", "--config", 1, OPT_STRING},
+	{ "OpenVPN.DeviceType", NULL, 1, OPT_NONE},
+	{ "OpenVPN.Verb", "--verb", 1, OPT_STRING},
+	{ "OpenVPN.Ping", "--ping", 1, OPT_STRING},
+	{ "OpenVPN.PingExit", "--ping-exit", 1, OPT_STRING},
+	{ "OpenVPN.RemapUsr1", "--remap-usr1", 1, OPT_STRING},
+	/* In versions >= 2.5.0 */
+	{ "OpenVPN.BlockIPv6", "--block-ipv6", 0, OPT_BOOL},
 };
 
 struct ov_private_data {
@@ -357,38 +366,52 @@ static int ov_save(struct vpn_provider *provider, GKeyFile *keyfile)
 static int task_append_config_data(struct vpn_provider *provider,
 					struct connman_task *task)
 {
-	const char *option;
 	bool block_ipv6 = false;
 	int i;
 
 	for (i = 0; i < (int)ARRAY_SIZE(ov_options); i++) {
-		if (!ov_options[i].ov_opt)
+		const char *ov_opt = ov_options[i].ov_opt;
+		const char *cm_opt = ov_options[i].cm_opt;
+		const char *option = NULL;
+
+		switch (ov_options[i].opt_type) {
+		case OPT_NONE:
 			continue;
 
-		/*
-		 * In case the option is without value, i.e. a boolean toggle
-		 * then ignore the value when option is disabled.
-		 */
-		if (!ov_options[i].has_value && !vpn_provider_get_boolean(
-					provider, ov_options[i].cm_opt, false))
-			continue;
+		case OPT_STRING:
+			if (!ov_opt)
+				continue;
 
-		option = vpn_provider_get_string(provider,
-					ov_options[i].cm_opt);
-		if (!option)
-			continue;
+			option = vpn_provider_get_string(provider, cm_opt);
+			/*
+			 * A string option may be used alone without a value
+			 * in which case the default value is used by OpenVPN.
+			 */
+			if (!option && ov_options[i].has_value)
+				continue;
 
-		/*
-		 * If the AuthUserPass option is "-", provide the input
-		 * via management interface
-		 */
-		if (!g_strcmp0(ov_options[i].cm_opt, "OpenVPN.AuthUserPass") &&
+			/*
+			 * If the AuthUserPass option is "-", provide the input
+			 * via management interface
+			 */
+			if (!g_strcmp0(cm_opt, "OpenVPN.AuthUserPass") &&
 						!g_strcmp0(option, "-"))
-			option = NULL;
+				option = NULL;
 
-		if (connman_task_add_argument(task,
-				ov_options[i].ov_opt,
-				ov_options[i].has_value ? option : NULL) < 0)
+			break;
+
+		case OPT_BOOL:
+			if (!ov_opt)
+				continue;
+
+			/* Ignore the boolean toggle if option is disabled. */
+			if (!vpn_provider_get_boolean(provider, cm_opt, false))
+				continue;
+
+			break;
+		}
+
+		if (connman_task_add_argument(task, ov_opt, option))
 			return -EIO;
 
 	}
