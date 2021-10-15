@@ -225,7 +225,7 @@ static void free_ns_entry(gpointer data)
 static int ov_notify(DBusMessage *msg, struct vpn_provider *provider)
 {
 	DBusMessageIter iter, dict;
-	const char *reason, *key, *value;
+	const char *reason, *context, *key, *value;
 	char *address = NULL, *gateway = NULL, *peer = NULL, *netmask = NULL;
 	struct connman_ipaddress *ipaddress;
 	GSList *nameserver_list = NULL;
@@ -236,15 +236,25 @@ static int ov_notify(DBusMessage *msg, struct vpn_provider *provider)
 	dbus_message_iter_get_basic(&iter, &reason);
 	dbus_message_iter_next(&iter);
 
+	dbus_message_iter_get_basic(&iter, &context);
+	dbus_message_iter_next(&iter);
+
 	if (!provider) {
 		connman_error("No provider found");
 		return VPN_STATE_FAILURE;
 	}
 
-	DBG("%p %s", vpn_provider_get_name(provider), reason);
+	DBG("%p %s %s", vpn_provider_get_name(provider), reason, context);
 
-	if (strcmp(reason, "up")) {
+	if (g_strcmp0(reason, "up")) {
 		ov_connect_done(data, EIO);
+		return VPN_STATE_DISCONNECT;
+	}
+
+	if (g_strcmp0(context, "init")) {
+		connman_warn("provider %p reset with context %s", provider,
+								context);
+		ov_connect_done(data, ECONNRESET);
 		return VPN_STATE_DISCONNECT;
 	}
 
