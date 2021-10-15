@@ -66,37 +66,36 @@ enum opt_type {
 struct {
 	const char	*cm_opt;
 	const char	*ov_opt;
-	char		has_value;
 	enum opt_type	opt_type;
 } ov_options[] = {
-	{ "Host", "--remote", 1, OPT_STRING},
-	{ "OpenVPN.CACert", "--ca", 1, OPT_STRING},
-	{ "OpenVPN.Cert", "--cert", 1, OPT_STRING},
-	{ "OpenVPN.Key", "--key", 1, OPT_STRING},
-	{ "OpenVPN.MTU", "--tun-mtu", 1, OPT_STRING},
-	{ "OpenVPN.NSCertType", "--ns-cert-type", 1, OPT_STRING},
-	{ "OpenVPN.Proto", "--proto", 1, OPT_STRING},
-	{ "OpenVPN.Port", "--port", 1, OPT_STRING},
-	{ "OpenVPN.AuthUserPass", "--auth-user-pass", 1, OPT_STRING},
-	{ "OpenVPN.AskPass", "--askpass", 1, OPT_STRING},
-	{ "OpenVPN.AuthNoCache", "--auth-nocache", 0, OPT_BOOL},
-	{ "OpenVPN.TLSRemote", "--tls-remote", 1, OPT_STRING},
-	{ "OpenVPN.TLSAuth", NULL, 1, OPT_NONE},
-	{ "OpenVPN.TLSCipher", "--tls-cipher", 1, OPT_STRING},
-	{ "OpenVPN.TLSAuthDir", NULL, 1, OPT_NONE},
-	{ "OpenVPN.Cipher", "--cipher", 1, OPT_STRING},
-	{ "OpenVPN.Auth", "--auth", 1, OPT_STRING},
+	{ "Host", "--remote", OPT_STRING},
+	{ "OpenVPN.CACert", "--ca", OPT_STRING},
+	{ "OpenVPN.Cert", "--cert", OPT_STRING},
+	{ "OpenVPN.Key", "--key", OPT_STRING},
+	{ "OpenVPN.MTU", "--tun-mtu", OPT_STRING},
+	{ "OpenVPN.NSCertType", "--ns-cert-type", OPT_STRING},
+	{ "OpenVPN.Proto", "--proto", OPT_STRING},
+	{ "OpenVPN.Port", "--port", OPT_STRING},
+	{ "OpenVPN.AuthUserPass", "--auth-user-pass", OPT_STRING},
+	{ "OpenVPN.AskPass", "--askpass", OPT_STRING},
+	{ "OpenVPN.AuthNoCache", "--auth-nocache", OPT_BOOL},
+	{ "OpenVPN.TLSRemote", "--tls-remote", OPT_STRING},
+	{ "OpenVPN.TLSAuth", NULL, OPT_NONE},
+	{ "OpenVPN.TLSCipher", "--tls-cipher", OPT_STRING},
+	{ "OpenVPN.TLSAuthDir", NULL, OPT_NONE},
+	{ "OpenVPN.Cipher", "--cipher", OPT_STRING},
+	{ "OpenVPN.Auth", "--auth", OPT_STRING},
 	/* Is set to adaptive by default if value is omitted */
-	{ "OpenVPN.CompLZO", "--comp-lzo", 0, OPT_STRING},
-	{ "OpenVPN.RemoteCertTls", "--remote-cert-tls", 1, OPT_STRING},
-	{ "OpenVPN.ConfigFile", "--config", 1, OPT_STRING},
-	{ "OpenVPN.DeviceType", NULL, 1, OPT_NONE},
-	{ "OpenVPN.Verb", "--verb", 1, OPT_STRING},
-	{ "OpenVPN.Ping", "--ping", 1, OPT_STRING},
-	{ "OpenVPN.PingExit", "--ping-exit", 1, OPT_STRING},
-	{ "OpenVPN.RemapUsr1", "--remap-usr1", 1, OPT_STRING},
+	{ "OpenVPN.CompLZO", "--comp-lzo", OPT_STRING},
+	{ "OpenVPN.RemoteCertTls", "--remote-cert-tls", OPT_STRING},
+	{ "OpenVPN.ConfigFile", "--config", OPT_STRING},
+	{ "OpenVPN.DeviceType", NULL, OPT_NONE},
+	{ "OpenVPN.Verb", "--verb", OPT_STRING},
+	{ "OpenVPN.Ping", "--ping", OPT_STRING},
+	{ "OpenVPN.PingExit", "--ping-exit", OPT_STRING},
+	{ "OpenVPN.RemapUsr1", "--remap-usr1", OPT_STRING},
 	/* In versions >= 2.5.0 */
-	{ "OpenVPN.BlockIPv6", "--block-ipv6", 0, OPT_BOOL},
+	{ "OpenVPN.BlockIPv6", "--block-ipv6", OPT_BOOL},
 };
 
 struct ov_private_data {
@@ -397,7 +396,8 @@ static int task_append_config_data(struct vpn_provider *provider,
 			 * A string option may be used alone without a value
 			 * in which case the default value is used by OpenVPN.
 			 */
-			if (!option && ov_options[i].has_value)
+			if (!option && !vpn_provider_setting_key_exists(
+							provider, ov_opt))
 				continue;
 
 			/*
