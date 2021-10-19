@@ -1543,6 +1543,19 @@ static void set_route(struct connection_data *data, struct vpn_route *route)
 		data->default_route_set = true;
 }
 
+static void del_route(struct connection_data *data, struct vpn_route *route)
+{
+	if (route->family == AF_INET6) {
+		unsigned char prefix_len = atoi(route->netmask);
+
+		connman_inet_del_ipv6_network_route(data->index,
+							route->network,
+							prefix_len);
+	} else {
+		connman_inet_del_network_route(data->index, route->network);
+	}
+}
+
 static int save_route(GHashTable *routes, int family, const char *network,
 			const char *netmask, const char *gateway);
 
@@ -1709,6 +1722,26 @@ static int set_routes(struct connman_provider *provider,
 								provider);
 			return err;
 		}
+	}
+
+	return 0;
+}
+
+static int unset_routes(struct connman_provider *provider)
+{
+	struct connection_data *data;
+	GHashTableIter iter;
+	gpointer key, value;
+
+	connman_warn("Unset routes for %p", provider);
+
+	data = connman_provider_get_data(provider);
+	if (!data)
+		return -EINVAL;
+
+	g_hash_table_iter_init(&iter, data->server_routes);
+	while (g_hash_table_iter_next(&iter, &key, &value)) {
+		del_route(data, value);
 	}
 
 	return 0;
@@ -1995,7 +2028,8 @@ static int read_route_dict(GHashTable *routes, DBusMessageIter *dicts)
 static int routes_changed(DBusMessageIter *array, GHashTable *routes)
 {
 	DBusMessageIter entry;
-	int ret = -EINVAL;
+	int ret = -ENOENT;
+	int count = 0;
 
 	if (dbus_message_iter_get_arg_type(array) != DBUS_TYPE_ARRAY) {
 		DBG("Expecting array, ignoring routes.");
@@ -2018,12 +2052,19 @@ static int routes_changed(DBusMessageIter *array, GHashTable *routes)
 				if (ret != 0)
 					ret = err;
 				dbus_message_iter_next(&dicts);
+				count++;
 			}
 
 			dbus_message_iter_next(&entry);
 		}
 
 		dbus_message_iter_next(array);
+	}
+
+	/* Got an empty route set, VPN is being reset, clear routes. */
+	if (ret == -ENOENT && !count) {
+		connman_warn("VPN connection reset happened");
+		return -ECONNRESET;
 	}
 
 	return ret;
@@ -2068,7 +2109,7 @@ static gboolean property_changed(DBusConnection *conn,
 	if (g_str_equal(key, "State")) {
 		dbus_message_iter_get_basic(&value, &str);
 
-		DBG("%s %s -> %s", data->path, data->state, str);
+		connman_warn("%s %s -> %s", data->path, data->state, str);
 
 		if (g_str_equal(data->state, str))
 			return TRUE;
@@ -2087,6 +2128,7 @@ static gboolean property_changed(DBusConnection *conn,
 		err = extract_ip(&value, AF_INET6, data);
 		ip_set = true;
 	} else if (g_str_equal(key, "ServerRoutes")) {
+		connman_warn("ServerRoutes changed");
 		err = routes_changed(&value, data->server_routes);
 		/*
 		 * Note that the vpnd will delay the route sending a bit
@@ -2098,6 +2140,8 @@ static gboolean property_changed(DBusConnection *conn,
 		if (err == 0)
 			set_routes(data->provider,
 						CONNMAN_PROVIDER_ROUTE_SERVER);
+		else if (err == -ECONNRESET)
+			unset_routes(data->provider);
 	} else if (g_str_equal(key, "UserRoutes")) {
 		err = routes_changed(&value, data->user_routes);
 		if (err == 0)
