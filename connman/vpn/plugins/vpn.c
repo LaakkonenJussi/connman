@@ -282,6 +282,7 @@ static DBusMessage *vpn_notify(struct connman_task *task,
 	case VPN_STATE_CONNECT:
 	case VPN_STATE_READY:
 		if (data->state == VPN_STATE_READY) {
+			connman_warn("VPN RESTART");
 			/*
 			 * This is the restart case, in which case we must
 			 * just set the IP address.
@@ -299,6 +300,9 @@ static DBusMessage *vpn_notify(struct connman_task *task,
 
 			vpn_provider_clear_address(provider, AF_INET);
 			vpn_provider_clear_address(provider, AF_INET6);
+
+			vpn_provider_clear_routes(provider);
+			vpn_provider_clear_nameservers(provider);
 
 			vpn_provider_change_address(provider);
 			vpn_provider_set_state(provider,
