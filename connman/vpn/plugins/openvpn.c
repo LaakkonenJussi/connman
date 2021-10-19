@@ -253,8 +253,7 @@ static int ov_notify(DBusMessage *msg, struct vpn_provider *provider)
 	if (g_strcmp0(context, "init")) {
 		connman_warn("provider %p reset with context %s", provider,
 								context);
-		ov_connect_done(data, ECONNRESET);
-		return VPN_STATE_DISCONNECT;
+		return VPN_STATE_CONNECT;
 	}
 
 	dbus_message_iter_recurse(&iter, &dict);
