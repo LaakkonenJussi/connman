@@ -3208,6 +3208,19 @@ int vpn_provider_set_nameservers(struct vpn_provider *provider,
 	return 0;
 }
 
+int vpn_provider_clear_nameservers(struct vpn_provider *provider)
+{
+	if (!provider)
+		return -EINVAL;
+
+	if (provider->nameservers) {
+		g_strfreev(provider->nameservers);
+		provider->nameservers = NULL;
+	}
+
+	return 0;
+}
+
 static int route_env_parse(struct vpn_provider *provider, const char *key,
 				int *family, unsigned long *idx,
 				enum vpn_provider_route_type *type)
@@ -3270,6 +3283,18 @@ int vpn_provider_append_route(struct vpn_provider *provider,
 
 	if (route->netmask && route->gateway && route->network)
 		provider_schedule_changed(provider);
+
+	return 0;
+}
+
+int vpn_provider_clear_routes(struct vpn_provider *provider)
+{
+	DBG("provider %p", provider);
+
+	if (!provider || !provider->routes)
+		return -EINVAL;
+
+	del_routes(provider);
 
 	return 0;
 }
