@@ -30,6 +30,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <connman/ipconfig.h>
+
 #include "connman.h"
 
 static char *default_interface;
@@ -39,16 +41,33 @@ struct connman_nat {
 	char *address;
 	unsigned char prefixlen;
 	struct firewall_context *fw;
+	int ipv6_accept_ra;
+	int ipv6_ndproxy;
 
 	char *interface;
 };
 
-static int enable_ip_forward(bool enable)
+#define IPv4_FORWARD "/proc/sys/net/ipv4/ip_forward"
+#define IPv6_FORWARD "/proc/sys/net/ipv6/conf/all/forwarding"
+
+static int enable_ip_forward(int family, bool enable)
 {
+	const char *path;
 	static char value = 0;
 	int f, err = 0;
 
-	if ((f = open("/proc/sys/net/ipv4/ip_forward", O_CLOEXEC | O_RDWR)) < 0)
+	switch (family) {
+	case AF_INET:
+		path = IPv4_FORWARD;
+		break;
+	case AF_INET6:
+		path = IPv6_FORWARD;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if ((f = open(path, O_CLOEXEC | O_RDWR)) < 0)
 		return -errno;
 
 	if (!value) {
@@ -123,7 +142,7 @@ int __connman_nat_enable(const char *name, const char *address,
 	int err;
 
 	if (g_hash_table_size(nat_hash) == 0) {
-		err = enable_ip_forward(true);
+		err = enable_ip_forward(AF_INET, true);
 		if (err < 0)
 			return err;
 	}
@@ -151,9 +170,179 @@ err:
 	}
 
 	if (g_hash_table_size(nat_hash) == 0)
-		enable_ip_forward(false);
+		enable_ip_forward(AF_INET, false);
 
 	return -ENOMEM;
+}
+
+static void set_original_ipv6_values(struct connman_nat *nat,
+					struct connman_ipconfig *ipconfig,
+					const char *ipv6_address,
+					unsigned char ipv6_prefixlen)
+{
+	int index;
+	int err;
+
+	if (!nat || !ipconfig)
+		return;
+
+	DBG("nat %p ipconfig %p", nat, ipconfig);
+
+	err = enable_ip_forward(AF_INET6, false);
+	if (err)
+		connman_warn("Failed to disable IPv6 forwarding: %d", err);
+
+	if (nat->ipv6_accept_ra != -1)
+		__connman_ipconfig_ipv6_set_accept_ra(ipconfig,
+				nat->ipv6_accept_ra);
+	if (nat->ipv6_ndproxy != -1) {
+		__connman_ipconfig_ipv6_set_ndproxy(ipconfig,
+				nat->ipv6_ndproxy ? true : false);
+
+		index = __connman_ipconfig_get_index(ipconfig);
+		if (index < 0)
+			return;
+
+		err = __connman_inet_del_ipv6_neigbour_proxy(index,
+							ipv6_address,
+							ipv6_prefixlen);
+		if (err) {
+			connman_error("failed to delete IPv6 neighbour proxy");
+			return;
+		}
+	}
+
+	DBG("done");
+}
+
+int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
+						const char *ipv6_address,
+						unsigned char ipv6_prefixlen,
+						const char *ifname_in,
+						bool enable_ndproxy)
+{
+	struct connman_nat *nat;
+	char *ifname = NULL;
+	char **rules = NULL;
+	int index;
+	int err;
+	int i;
+
+	DBG("ipconfig %p ifname_in %s enable_ndproxy %s", ipconfig, ifname_in,
+						enable_ndproxy ? "yes" : "no");
+
+	if (connman_ipconfig_get_config_type(ipconfig) !=
+						CONNMAN_IPCONFIG_TYPE_IPV6) {
+		DBG("ipconfig %p is not IPv6", ipconfig);
+		return -EINVAL;
+	}
+
+	nat = g_try_new0(struct connman_nat, 1);
+	if (!nat) {
+		connman_error("cannot create NAT struct");
+		return -ENOMEM;
+	}
+
+	nat->ipv6_accept_ra = -1;
+	nat->ipv6_ndproxy = -1;
+
+	nat->fw = __connman_firewall_create();
+	if (!nat->fw) {
+		connman_error("cannot create firewall");
+		g_free(nat);
+		return -ENOMEM;
+	}
+
+	nat->ipv6_accept_ra = __connman_ipconfig_ipv6_get_accept_ra(ipconfig);
+
+	err = __connman_ipconfig_ipv6_set_accept_ra(ipconfig, 2);
+	if (err) {
+		connman_error("failed to set accept_ra: %d", err);
+		goto err;
+	}
+
+	err = enable_ip_forward(AF_INET6, true);
+	if (err) {
+		connman_error("failed to set IPv6 forwarding: %d", err);
+		goto err;
+	}
+
+	index = __connman_ipconfig_get_index(ipconfig);
+	ifname = connman_inet_ifname(index);
+	if (!ifname) {
+		connman_error("no interface name for index %d",
+					__connman_ipconfig_get_index(ipconfig));
+		goto err;
+	}
+
+	if (enable_ndproxy) {
+		DBG("Enabling ndproxy");
+
+		nat->ipv6_ndproxy = __connman_ipconfig_ipv6_get_ndproxy(
+							ipconfig) ? 1 : 0;
+		err = __connman_ipconfig_ipv6_set_ndproxy(ipconfig, true);
+		if (err) {
+			connman_error("failed to set IPv6 ndproxy");
+			goto err;
+		}
+
+		err = __connman_inet_add_ipv6_neigbour_proxy(index,
+							ipv6_address,
+							ipv6_prefixlen);
+		if (err) {
+			connman_error("failed to add IPv6 neighbour proxy");
+			goto err;
+		}
+	}
+
+	rules = g_new0(char*, 2);
+	rules[0] = g_strdup_printf("-i %s -o %s -j ACCEPT", ifname_in, ifname);
+	rules[1] = g_strdup_printf("-i %s -o %s -j ACCEPT", ifname, ifname_in);
+
+	for (i = 0; i < 2; i++) {
+		DBG("Enable firewall rule -I FORWARD %s", rules[i]);
+
+		/* Enable forward on IPv6 */
+		err = __connman_firewall_add_ipv6_rule(nat->fw, NULL, NULL,
+						"filter", "FORWARD", rules[i]);
+		if (err < 0) {
+			connman_error("Failed to set FORWARD rule %s on "
+						"ip6tables", rules[i]);
+			break;
+		}
+	}
+
+	g_strfreev(rules);
+
+	err = __connman_firewall_enable(nat->fw);
+	if (err < 0) {
+		connman_error("Failed to enable firewall");
+		goto err;
+	}
+
+	g_hash_table_replace(nat_hash, ifname, nat);
+
+	DBG("prepare done");
+
+	return 0;
+
+err:
+	DBG("prepare failure, revert changes");
+
+	g_free(ifname);
+
+	if (nat) {
+		if (nat->fw)
+			__connman_firewall_destroy(nat->fw);
+
+		/* Restore original values */
+		set_original_ipv6_values(nat, ipconfig, ipv6_address,
+							ipv6_prefixlen);
+
+		g_free(nat);
+	}
+
+	return err;
 }
 
 void __connman_nat_disable(const char *name)
@@ -169,7 +358,43 @@ void __connman_nat_disable(const char *name)
 	g_hash_table_remove(nat_hash, name);
 
 	if (g_hash_table_size(nat_hash) == 0)
-		enable_ip_forward(false);
+		enable_ip_forward(AF_INET, false);
+}
+
+void connman_nat6_restore(struct connman_ipconfig *ipconfig,
+						const char *ipv6_address,
+						unsigned char ipv6_prefixlen)
+{
+	struct connman_nat *nat;
+	char *ifname;
+
+	DBG("ipconfig %p", ipconfig);
+
+	if (!ipconfig)
+		return;
+
+	ifname = connman_inet_ifname(__connman_ipconfig_get_index(ipconfig));
+	if (!ifname) {
+		DBG("no interface name, cannot be removed");
+		return;
+	}
+
+	nat = g_hash_table_lookup(nat_hash, ifname);
+	if (!nat) {
+		DBG("no interface %s found in hash", ifname);
+		g_free(ifname);
+		return;
+	}
+
+	/* Restore original values */
+	set_original_ipv6_values(nat, ipconfig, ipv6_address, ipv6_prefixlen);
+
+	if (nat_hash)
+		g_hash_table_remove(nat_hash, ifname);
+
+	g_free(ifname);
+
+	DBG("restore done");
 }
 
 static void update_default_interface(struct connman_service *service)
