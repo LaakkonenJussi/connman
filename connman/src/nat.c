@@ -39,6 +39,8 @@ struct connman_nat {
 	char *address;
 	unsigned char prefixlen;
 	struct firewall_context *fw;
+	int ipv6_forward;
+	int ipv6_accept_ra;
 
 	char *interface;
 };
@@ -156,6 +158,76 @@ err:
 	return -ENOMEM;
 }
 
+int connman_nat6_prepare(struct connman_ipconfig *ipconfig)
+{
+	char *ifname = NULL;
+	int err;
+
+	nat = g_try_new0(struct connman_nat, 1);
+	if (!nat)
+		goto err;
+
+	nat->ipv6_accept_ra = -1;
+	nat->ipv6_forward = -1;
+
+	nat->fw = __connman_firewall_create();
+	if (!nat->fw)
+		goto err;
+
+	nat->ipv6_accept_ra = __connman_ipconfig_ipv6_get_accept_ra(ifconfig);
+	nat->ipv6_forward = __connman_ipconfig_ipv6_get_forwarding(ifconfig)
+									? 1 : 0;
+
+	err = __connman_ipconfig_ipv6_set_accept_ra(ipconfig, 2);
+	if (err)
+		goto err;
+
+	err = __connman_ipconfig_ipv6_set_forwarding(ipconfig, true);
+	if (err)
+		goto err;
+
+	/* Enable forward on IPv6 */
+	err = __connman_firewall_add_ipv6_rule_(nat->fw, NULL, NULL, "filter",
+				"FORWARD", "-j ACCEPT");
+	if (err < 0) {
+		connman_warn("Failed to set FORWARD rule on ip6tables");
+		goto err;
+	}
+
+	err = __connman_firewall_enable(nat->fw);
+	if (err < 0) {
+		connman_warn("Failed to enable firewall");
+		goto err;
+	}
+
+	ifname = connman_inet_ifname(__connman_ipconfig_get_index(ipconfig));
+	if (!ifname)
+		goto err;
+
+	g_hash_table_replace(nat_hash, ifname, nat);
+
+	return 0;
+
+err:
+	g_free(ifname);
+
+	if (nat) {
+		if (nat->fw)
+			__connman_firewall_destroy(nat->fw);
+
+		if (nat->ipv6_forward != -1)
+			__connman_ipconfig_ipv6_set_forwarding(ipconfig,
+					nat->ipv6_forward ? true : false);
+		if (nat->ipv6_accept_ra != -1)
+			__connman_ipconfig_ipv6_set_accept_ra(ipconfig,
+					nat->ipv6_accept_ra);
+
+		g_free(nat);
+	}
+
+	return -EINVAL;
+}
+
 void __connman_nat_disable(const char *name)
 {
 	struct connman_nat *nat;
@@ -170,6 +242,37 @@ void __connman_nat_disable(const char *name)
 
 	if (g_hash_table_size(nat_hash) == 0)
 		enable_ip_forward(false);
+}
+
+void connman_nat6_restore(struct connman_ipconfig *ipconfig)
+{
+	struct connman_nat *nat;
+	char *ifname;
+
+	if (!ipconfig)
+		return;
+
+	ifname = connman_inet_ifname(__connman_ipconfig_get_index(ipconfig));
+	if (!ifname)
+		return;
+
+	nat = g_hash_table_lookup(nat_hash, name);
+	if (!nat)
+		return;
+
+	if (nat->fw)
+		__connman_firewall_destroy(nat->fw);
+
+	if (nat->ipv6_forward != -1)
+		__connman_ipconfig_ipv6_set_forwarding(ipconfig,
+					nat->ipv6_forward ? true : false);
+	if (nat->ipv6_accept_ra != -1)
+		__connman_ipconfig_ipv6_set_accept_ra(ipconfig,
+					nat->ipv6_accept_ra);
+
+	g_hash_table_remove(nat_hash, ifname);
+
+	g_free(ifname);
 }
 
 static void update_default_interface(struct connman_service *service)
