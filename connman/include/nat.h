@@ -22,6 +22,7 @@
 #ifndef __CONNMAN_NAT_H
 #define __CONNMAN_NAT_H
 
+#include <connman/ipconfig.h>
 
 #ifdef __cplusplus
 extern "C" {
