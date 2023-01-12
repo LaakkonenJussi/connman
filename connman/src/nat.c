@@ -30,6 +30,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <connman/ipconfig.h>
+
 #include "connman.h"
 
 static char *default_interface;
@@ -160,6 +162,7 @@ err:
 
 int connman_nat6_prepare(struct connman_ipconfig *ipconfig)
 {
+	struct connman_nat *nat;
 	char *ifname = NULL;
 	int err;
 
@@ -174,8 +177,8 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig)
 	if (!nat->fw)
 		goto err;
 
-	nat->ipv6_accept_ra = __connman_ipconfig_ipv6_get_accept_ra(ifconfig);
-	nat->ipv6_forward = __connman_ipconfig_ipv6_get_forwarding(ifconfig)
+	nat->ipv6_accept_ra = __connman_ipconfig_ipv6_get_accept_ra(ipconfig);
+	nat->ipv6_forward = __connman_ipconfig_ipv6_get_forwarding(ipconfig)
 									? 1 : 0;
 
 	err = __connman_ipconfig_ipv6_set_accept_ra(ipconfig, 2);
@@ -187,7 +190,7 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig)
 		goto err;
 
 	/* Enable forward on IPv6 */
-	err = __connman_firewall_add_ipv6_rule_(nat->fw, NULL, NULL, "filter",
+	err = __connman_firewall_add_ipv6_rule(nat->fw, NULL, NULL, "filter",
 				"FORWARD", "-j ACCEPT");
 	if (err < 0) {
 		connman_warn("Failed to set FORWARD rule on ip6tables");
@@ -256,7 +259,7 @@ void connman_nat6_restore(struct connman_ipconfig *ipconfig)
 	if (!ifname)
 		return;
 
-	nat = g_hash_table_lookup(nat_hash, name);
+	nat = g_hash_table_lookup(nat_hash, ifname);
 	if (!nat)
 		return;
 
