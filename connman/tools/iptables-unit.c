@@ -319,6 +319,32 @@ DBusMessage *g_dbus_create_reply(DBusMessage *message, int type, ...)
 	return reply;
 }
 
+int __connman_ipconfig_ipv6_get_accept_ra(struct connman_ipconfig *ipconfig)
+{
+	return 0;
+}
+
+int __connman_ipconfig_ipv6_set_accept_ra(struct connman_ipconfig *ipconfig,
+								int value)
+{
+	return 0;
+}
+bool __connman_ipconfig_ipv6_get_forwarding(struct connman_ipconfig *ipconfig)
+{
+	return 0;
+}
+
+int __connman_ipconfig_ipv6_set_forwarding(struct connman_ipconfig *ipconfig,
+								bool enable)
+{
+	return 0;
+}
+
+int __connman_ipconfig_get_index(struct connman_ipconfig *ipconfig)
+{
+	return 1;
+}
+
 static guint watch_id = 69;
 static guint service_watch_id = 123654798;
 
