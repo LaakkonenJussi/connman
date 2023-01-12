@@ -319,6 +319,63 @@ DBusMessage *g_dbus_create_reply(DBusMessage *message, int type, ...)
 	return reply;
 }
 
+int __connman_ipconfig_ipv6_get_accept_ra(struct connman_ipconfig *ipconfig)
+{
+	return 0;
+}
+
+int __connman_ipconfig_ipv6_set_accept_ra(struct connman_ipconfig *ipconfig,
+								int value)
+{
+	return 0;
+}
+
+bool __connman_ipconfig_ipv6_get_forwarding(struct connman_ipconfig *ipconfig)
+{
+	return true;
+}
+
+int __connman_ipconfig_ipv6_set_forwarding(struct connman_ipconfig *ipconfig,
+								bool enable)
+{
+	return 0;
+}
+
+bool __connman_ipconfig_ipv6_get_ndproxy(struct connman_ipconfig *ipconfig)
+{
+	return true;
+}
+
+int __connman_ipconfig_ipv6_set_ndproxy(struct connman_ipconfig *ipconfig,
+								bool enable)
+{
+	return 0;
+}
+
+int __connman_ipconfig_get_index(struct connman_ipconfig *ipconfig)
+{
+	return 1;
+}
+
+struct connman_ipaddress *connman_ipconfig_get_ipaddress(
+					struct connman_ipconfig *ipconfig)
+{
+	return NULL;
+}
+
+enum connman_ipconfig_type connman_ipconfig_get_config_type(
+					struct connman_ipconfig *ipconfig)
+{
+	return CONNMAN_IPCONFIG_TYPE_UNKNOWN;
+}
+
+int connman_ipaddress_get_ip(struct connman_ipaddress *ipaddress,
+					const char **address,
+					unsigned char *netmask_prefix_length)
+{
+	return 0;
+}
+
 static guint watch_id = 69;
 static guint service_watch_id = 123654798;
 
