@@ -460,7 +460,7 @@ static int set_ipv6_accept_ra(gchar *ifname, int value)
 	return write_ipv6_conf_value(ifname, "accept_ra", value);
 }
 
-static int get_ipv6_accept_ra(gchar *ifname, void)
+static int get_ipv6_accept_ra(gchar *ifname)
 {
 	int value;
 
@@ -1920,7 +1920,10 @@ bool __connman_ipconfig_ipv6_get_forwarding(struct connman_ipconfig *ipconfig)
 	if (!ifname)
 		return false;
 
-	return get_ipv6_forwarding(ifname) == 1 ? true : false;
+	value = get_ipv6_forwarding(ifname);
+	g_free(ifname);
+
+	return value == 1 ? true : false;
 }
 
 int __connman_ipconfig_ipv6_set_forwarding(struct connman_ipconfig *ipconfig,
@@ -1928,7 +1931,7 @@ int __connman_ipconfig_ipv6_set_forwarding(struct connman_ipconfig *ipconfig,
 {
 	char *ifname;
 	int err;
-	
+
 	if (!ipconfig)
 		return -EINVAL;
 
@@ -1936,7 +1939,10 @@ int __connman_ipconfig_ipv6_set_forwarding(struct connman_ipconfig *ipconfig,
 	if (!ifname)
 		return -ENOENT;
 
-	return set_ipv6_forwarding(ifconfig, enable);
+	err = set_ipv6_forwarding(ifname, enable);
+	g_free(ifname);
+
+	return err;
 }
 
 
