@@ -31,6 +31,8 @@
 #include "../include/nat.h"
 #include <connman/notifier.h>
 
+#include <gweb/gresolv.h>
+
 #include <glib.h>
 
 #define CONNMAN_API_SUBJECT_TO_CHANGE
@@ -49,12 +51,16 @@ struct clat_data {
 	struct connman_service *service;
 	struct connman_task *task;
 	enum clat_state state;
+	char *isp_64gateway;
 	char *config_path;
 	char *clat_prefix;
 	char *address;
 	unsigned char clat_prefixlen;
 	unsigned char addr_prefixlen;
-	guint dns_query_id;
+
+	GResolv *resolv;
+	guint resolv_query_id;
+	guint remove_resolv_id;
 };
 
 struct clat_data *data = NULL;
@@ -135,14 +141,46 @@ static DBusMessage *clat_task_notify(struct connman_task *task,
 	return NULL;
 }
 
-static void clat_task_do_prefix_query_cb(struct clat_data *d)
+static gboolean remove_resolv(gpointer user_data)
 {
-	DBG("");
+	struct clat_data *d = user_data;
 
-	// TODO succesful return -> prefix known
-	d->clat_prefix = "2001:67c:2b0:db32:0:1::";
-	d->clat_prefixlen = 96;
-	d->dns_query_id = -1;
+	if (d->remove_resolv_id)
+		g_source_remove(d->remove_resolv_id);
+
+	if (d->resolv && d->resolv_query_id)
+		g_resolv_cancel_lookup(d->resolv, d->resolv_query_id);
+
+	d->resolv_query_id = 0;
+	d->remove_resolv_id = 0;
+
+	g_resolv_unref(d->resolv);
+	d->resolv = NULL;
+
+	return G_SOURCE_REMOVE;
+}
+
+static void prefix_query_cb(GResolvResultStatus status,
+					char **results, gpointer user_data)
+{
+	struct clat_data *d = user_data;
+
+	DBG("status %d", status);
+
+	if (status == G_RESOLV_RESULT_STATUS_SUCCESS && results &&
+						g_strv_length(results) > 0) {
+
+		// TODO what to get as the result?
+		d->clat_prefix = "2001:67c:2b0:db32:0:1::";
+		d->clat_prefixlen = 96;
+	}
+
+	/*
+	 * We cannot unref the resolver here as resolv struct is manipulated
+	 * by gresolv.c after we return from this callback.
+	 */
+	data->remove_resolv_id = g_timeout_add(0, remove_resolv, data);
+	data->resolv_query_id = 0;
 
 	clat_run_task(d);
 }
@@ -150,10 +188,25 @@ static void clat_task_do_prefix_query_cb(struct clat_data *d)
 static int clat_task_do_prefix_query(struct clat_data *d)
 {
 	DBG("");
-	// TODO
-	d->dns_query_id = 1;
 
-	clat_task_do_prefix_query_cb(d);
+	if (connman_inet_check_ipaddress(data->isp_64gateway) > 0)
+		return -EINVAL;
+
+	if (d->resolv_query_id > 0)
+		g_source_remove(d->resolv_query_id);
+
+	data->resolv = g_resolv_new(0);
+	if (!data->resolv) {
+		connman_error("CLAT cannot create resolv, stopping");
+		return -ENOMEM;
+	}
+
+	DBG("Trying to resolv %s", data->isp_64gateway);
+
+	g_resolv_set_address_family(d->resolv, AF_INET6);
+	data->resolv_query_id = g_resolv_lookup_hostname(d->resolv,
+					d->isp_64gateway, prefix_query_cb, d);
+
 	return 0;
 }
 
