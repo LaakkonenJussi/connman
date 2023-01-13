@@ -565,7 +565,8 @@ endif
 if CLAT
 unit_test_clat_CFLAGS = $(COVERAGE_OPT) $(AM_CFLAGS) @GLIB_CFLAGS@
 unit_test_clat_SOURCES = $(backtrace_sources) src/connman.h \
-				src/log.c unit/test-clat.c
+				src/log.c src/ipaddress.c unit/test-clat.c \
+				plugins/clat.c
 unit_test_clat_LDADD = @GLIB_LIBS@ -ldl
 noinst_PROGRAMS += unit/test-clat
 TESTS += unit/test-clat
