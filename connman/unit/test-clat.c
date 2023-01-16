@@ -51,6 +51,12 @@ int connman_inet_ifindex(const char *name)
 	return 1;
 }
 
+char *connman_inet_ifname(int index)
+{
+	g_assert_cmpint(index, >, 0);
+	return NULL;
+}
+
 int connman_inet_add_ipv6_network_route(int index, const char *host,
 					const char *gateway,
 					unsigned char prefix_len)
@@ -295,6 +301,22 @@ bool g_resolv_set_address_family(GResolv *resolv, int family)
 {
 	g_assert(resolv);
 	return true;
+}
+
+int connman_rtnl_register(struct connman_rtnl *r)
+{
+	g_assert(r);
+	return 0;
+}
+
+void connman_rtnl_unregister(struct connman_rtnl *r)
+{
+	g_assert(r);
+}
+
+void connman_rtnl_handle_rtprot_ra(bool value)
+{
+	return;
 }
 
 static gchar *option_debug = NULL;
