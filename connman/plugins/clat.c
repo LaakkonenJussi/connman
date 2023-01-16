@@ -30,6 +30,7 @@
 #include <connman/dbus.h>
 #include "../include/nat.h"
 #include <connman/notifier.h>
+#include <connman/rtnl.h>
 
 #include <gweb/gresolv.h>
 
@@ -43,7 +44,7 @@ enum clat_state {
 	CLAT_STATE_PRE_CONFIGURE,
 	CLAT_STATE_RUNNING,
 	CLAT_STATE_POST_CONFIGURE,
-	CLAT_STATE_STOPPED,
+	CLAT_STATE_STOPPED, // TODO: killed?
 	CLAT_STATE_FAILURE,
 };
 
@@ -52,23 +53,32 @@ struct clat_data {
 	struct connman_task *task;
 	enum clat_state state;
 	char *isp_64gateway;
+
 	char *config_path;
 	char *clat_prefix;
 	char *address;
 	unsigned char clat_prefixlen;
 	unsigned char addr_prefixlen;
+	int ifindex;
 
 	GResolv *resolv;
 	guint resolv_query_id;
 	guint remove_resolv_id;
-};
 
-struct clat_data *data = NULL;
+	guint dad_id;
+};
 
 #define TAYGA_CONF "tayga.conf"
 #define IPv4ADDR "192.168.255.1"
 #define IPv4MAPADDR "192.0.0.4"
 #define CLATSUFFIX "c1a7"
+
+struct clat_data *__data = NULL;
+
+static struct clat_data *get_data()
+{
+	return __data;
+}
 
 static bool is_running(enum clat_state state)
 {
@@ -87,8 +97,7 @@ static bool is_running(enum clat_state state)
 	return false;
 }
 
-static int clat_create_tayga_config(const char *prefix, unsigned char prefixlen,
-							const char *address)
+static int clat_create_tayga_config(struct clat_data *data)
 {
 	GError *error = NULL;
 	char *str;
@@ -103,8 +112,9 @@ static int clat_create_tayga_config(const char *prefix, unsigned char prefixlen,
 				"ipv4-addr %s\n"
 				"prefix %s/%u\n"
 				"map %s %s%s",
-				IPv4ADDR, prefix, prefixlen, IPv4MAPADDR,
-				address, CLATSUFFIX);
+				IPv4ADDR, data->clat_prefix,
+				data->clat_prefixlen, IPv4MAPADDR,
+				data->address, CLATSUFFIX);
 
 	DBG("content: %s", str);
 
@@ -131,7 +141,7 @@ $ ip -4 route add default dev clat
 $ tayga
 */
 
-static int clat_run_task(struct clat_data *d);
+static int clat_run_task(struct clat_data *data);
 
 static DBusMessage *clat_task_notify(struct connman_task *task,
 					DBusMessage *msg, void *user_data)
@@ -143,19 +153,19 @@ static DBusMessage *clat_task_notify(struct connman_task *task,
 
 static gboolean remove_resolv(gpointer user_data)
 {
-	struct clat_data *d = user_data;
+	struct clat_data *data = user_data;
 
-	if (d->remove_resolv_id)
-		g_source_remove(d->remove_resolv_id);
+	if (data->remove_resolv_id)
+		g_source_remove(data->remove_resolv_id);
 
-	if (d->resolv && d->resolv_query_id)
-		g_resolv_cancel_lookup(d->resolv, d->resolv_query_id);
+	if (data->resolv && data->resolv_query_id)
+		g_resolv_cancel_lookup(data->resolv, data->resolv_query_id);
 
-	d->resolv_query_id = 0;
-	d->remove_resolv_id = 0;
+	data->resolv_query_id = 0;
+	data->remove_resolv_id = 0;
 
-	g_resolv_unref(d->resolv);
-	d->resolv = NULL;
+	g_resolv_unref(data->resolv);
+	data->resolv = NULL;
 
 	return G_SOURCE_REMOVE;
 }
@@ -163,7 +173,7 @@ static gboolean remove_resolv(gpointer user_data)
 static void prefix_query_cb(GResolvResultStatus status,
 					char **results, gpointer user_data)
 {
-	struct clat_data *d = user_data;
+	struct clat_data *data = user_data;
 
 	DBG("status %d", status);
 
@@ -171,8 +181,8 @@ static void prefix_query_cb(GResolvResultStatus status,
 						g_strv_length(results) > 0) {
 
 		// TODO what to get as the result?
-		d->clat_prefix = "2001:67c:2b0:db32:0:1::";
-		d->clat_prefixlen = 96;
+		data->clat_prefix = "2001:67c:2b0:db32:0:1::";
+		data->clat_prefixlen = 96;
 	}
 
 	/*
@@ -182,18 +192,18 @@ static void prefix_query_cb(GResolvResultStatus status,
 	data->remove_resolv_id = g_timeout_add(0, remove_resolv, data);
 	data->resolv_query_id = 0;
 
-	clat_run_task(d);
+	clat_run_task(data);
 }
 
-static int clat_task_do_prefix_query(struct clat_data *d)
+static int clat_task_do_prefix_query(struct clat_data *data)
 {
 	DBG("");
 
 	if (connman_inet_check_ipaddress(data->isp_64gateway) > 0)
 		return -EINVAL;
 
-	if (d->resolv_query_id > 0)
-		g_source_remove(d->resolv_query_id);
+	if (data->resolv_query_id > 0)
+		g_source_remove(data->resolv_query_id);
 
 	data->resolv = g_resolv_new(0);
 	if (!data->resolv) {
@@ -203,48 +213,83 @@ static int clat_task_do_prefix_query(struct clat_data *d)
 
 	DBG("Trying to resolv %s", data->isp_64gateway);
 
-	g_resolv_set_address_family(d->resolv, AF_INET6);
-	data->resolv_query_id = g_resolv_lookup_hostname(d->resolv,
-					d->isp_64gateway, prefix_query_cb, d);
+	g_resolv_set_address_family(data->resolv, AF_INET6);
+	data->resolv_query_id = g_resolv_lookup_hostname(data->resolv,
+					data->isp_64gateway, prefix_query_cb,
+					data);
 
 	return 0;
 }
 
-static int clat_task_pre_configure(struct clat_data *d)
+static int clat_task_pre_configure(struct clat_data *data)
 {
 	struct connman_ipconfig *ipconfig;
 	struct connman_ipaddress *ipaddress;
+	char** tokens;
+	char ipv6prefix[135] = { 0 };
 	const char *address;
 	unsigned char prefixlen;
+	int left;
+	int pos;
+	int i;
+	
 
-	ipconfig = connman_service_get_ipconfig(d->service, AF_INET6);
-	if (!ipconfig)
+	DBG("");
+
+	ipconfig = connman_service_get_ipconfig(data->service, AF_INET6);
+	if (!ipconfig) {
+		DBG("No IPv6 ipconfig");
 		return -ENOENT;
+	}
 
 	ipaddress = connman_ipconfig_get_ipaddress(ipconfig);
-	if (!ipaddress)
+	if (!ipaddress) {
+		DBG("No IPv6 ipaddress in ipconfig %p", ipconfig);
 		return -ENOENT;
+	}
 
 	connman_ipaddress_get_ip(ipaddress, &address, &prefixlen);
-	
-	// TODO pick random access from the range
-	d->address = g_strdup("2a00:e18:8000:6cd::c1a7");
+	DBG("IPv6 %s", address);
+
+	tokens = g_strsplit(address, ":", 8);
+	if (!tokens) {
+		connman_error("CLAT: failed to tokenize IPv6 address");
+		return -ENOMEM;
+	}
+
+	left = 8 - (128 - (int)prefixlen) / 16;
+	pos = 0;
+
+	for (i = 0; tokens[i] && i < left; i++) {
+		strncpy(ipv6prefix, tokens[i], 4);
+		pos += strlen(tokens[i]) + 1; // + ':'
+
+		if (i + 1 < left)
+			ipv6prefix[pos-1] = ':';
+	}
+
+	g_strfreev(tokens);
+
+	DBG("Address IPv6 prefix %s/%d", ipv6prefix, prefixlen);
+
+	data->address = g_strconcat(ipv6prefix,"::c1a7", NULL);
 
 	connman_nat6_prepare(ipconfig);
-	clat_create_tayga_config(d->clat_prefix, d->clat_prefixlen, d->address);
+	clat_create_tayga_config(data);
 
-	d->task = connman_task_create("tayga", NULL, d);
-	if (!d->task)
+	data->task = connman_task_create("tayga", NULL, data);
+	if (!data->task)
 		return -ENOMEM;
 
-	connman_task_add_argument(d->task, "--mktun", NULL);
-	if (connman_task_set_notify(d->task, "tayga", clat_task_notify, d))
+	connman_task_add_argument(data->task, "--mktun", NULL);
+	if (connman_task_set_notify(data->task, "tayga", clat_task_notify,
+									data))
 		return -ENOMEM;
 
 	return 0;
 }
 
-static int clat_task_start_tayga(struct clat_data *d)
+static int clat_task_start_tayga(struct clat_data *data)
 {
 	struct connman_ipaddress *ipaddress;
 
@@ -261,8 +306,8 @@ static int clat_task_start_tayga(struct clat_data *d)
 
 	//$ ip route add 2a00:e18:8000:6cd::c1a7 dev clat
 	// TODO default route or...?
-	connman_inet_add_ipv6_network_route(index, d->address, NULL,
-							d->addr_prefixlen);
+	connman_inet_add_ipv6_network_route(index, data->address, NULL,
+							data->addr_prefixlen);
 	//$ ip address add 192.0.0.4 dev clat
 	ipaddress = connman_ipaddress_alloc(AF_INET);
 	connman_ipaddress_set_ipv4(ipaddress, IPv4MAPADDR, NULL, NULL);
@@ -272,20 +317,77 @@ static int clat_task_start_tayga(struct clat_data *d)
 	connman_inet_add_host_route(index, IPv4MAPADDR, NULL);
 	connman_ipaddress_free(ipaddress);
 
-	d->task = connman_task_create("tayga", NULL, d);
-	if (!d->task)
+	data->task = connman_task_create("tayga", NULL, data);
+	if (!data->task)
 		return -ENOMEM;
 
-	connman_task_add_argument(d->task, "--config", d->config_path);
-	connman_task_add_argument(d->task, "--nodetach", NULL);
+	connman_task_add_argument(data->task, "--config", data->config_path);
+	connman_task_add_argument(data->task, "--nodetach", NULL);
 
-	if (connman_task_set_notify(d->task, "tayga", clat_task_notify, d))
+	if (connman_task_set_notify(data->task, "tayga", clat_task_notify,
+									data))
 		return -EIO;
 
 	return 0;
 }
 
-static int clat_task_post_configure(struct clat_data *d)
+struct nd_neighbor_advert *hdr;
+
+void clat_dad_cb(struct nd_neighbor_advert *reply, unsigned int length,
+					struct in6_addr *addr,
+					void *user_data)
+{
+	// This reply can be ignored
+	DBG("got reply %p", reply);
+	return;
+}
+
+static gboolean clat_task_run_dad(gpointer user_data)
+{
+	//struct clat_data *data = user_data;
+	//struct in6_addr *addr = NULL;
+	int err = 0;
+
+	// TODO get in6_addr of current ifconfig
+	// TODO allow use of ipv6_do_dad
+
+	/*err =  __connman_inet_ipv6_do_dad(data->ifindex, 100, addr,
+							clat_dad_cb, data);*/
+	if (err) {
+		connman_error("CLAT failed to send dad: %d", err);
+		return G_SOURCE_REMOVE;
+	}
+
+	return G_SOURCE_CONTINUE;
+}
+
+static int clat_task_start_dad(struct clat_data *data)
+{
+	DBG("");
+
+	data->dad_id = g_timeout_add(100, clat_task_run_dad, data);
+
+	if (data->dad_id <= 0) {
+		connman_error("CLAT failed to start DAD timeout");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int clat_task_stop_dad(struct clat_data *data)
+{
+	DBG("");
+
+	if (data->dad_id)
+		g_source_remove(data->dad_id);
+
+	data->dad_id = 0;
+
+	return 0;
+}
+
+static int clat_task_post_configure(struct clat_data *data)
 {
 	struct connman_ipaddress *ipaddress;
 
@@ -302,18 +404,19 @@ static int clat_task_post_configure(struct clat_data *d)
 	connman_inet_del_host_route(index, IPv4MAPADDR);
 	connman_ipaddress_set_ipv4(ipaddress, IPv4MAPADDR, NULL, NULL);
 	connman_inet_clear_address(index, ipaddress);
-	connman_inet_del_ipv6_network_route(index, d->address,
-							d->addr_prefixlen);
+	connman_inet_del_ipv6_network_route(index, data->address,
+							data->addr_prefixlen);
 	connman_inet_ifdown(index);
 	connman_ipaddress_free(ipaddress);
 
-	d->task = connman_task_create("tayga", NULL, d);
-	if (!d->task)
+	data->task = connman_task_create("tayga", NULL, data);
+	if (!data->task)
 		return -ENOMEM;
 
-	connman_task_add_argument(d->task, "--rmtun", NULL);
+	connman_task_add_argument(data->task, "--rmtun", NULL);
 
-	if (connman_task_set_notify(d->task, "tayga", clat_task_notify, d))
+	if (connman_task_set_notify(data->task, "tayga", clat_task_notify,
+									data))
 		return -ENOMEM;
 
 	return 0;
@@ -322,21 +425,21 @@ static int clat_task_post_configure(struct clat_data *d)
 static void clat_task_exit(struct connman_task *task, int exit_code,
 								void *user_data)
 {
-	struct clat_data *d = user_data;
+	struct clat_data *data = user_data;
 
-	DBG("state %d", d->state);
+	DBG("state %d", data->state);
 
 	if (exit_code) {
 		connman_warn("CLAT task failed with code %d", exit_code);
-		d->state = CLAT_STATE_FAILURE;
+		data->state = CLAT_STATE_FAILURE;
 	}
 
-	if (d->task) {
-		connman_task_destroy(d->task);
-		d->task = NULL;
+	if (data->task) {
+		connman_task_destroy(data->task);
+		data->task = NULL;
 	}
 
-	switch (d->state) {
+	switch (data->state) {
 	case CLAT_STATE_IDLE:
 	case CLAT_STATE_STOPPED:
 	case CLAT_STATE_FAILURE:
@@ -346,28 +449,28 @@ static void clat_task_exit(struct connman_task *task, int exit_code,
 	case CLAT_STATE_PREFIX_QUERY:
 	case CLAT_STATE_PRE_CONFIGURE:
 	case CLAT_STATE_RUNNING:
-		DBG("run next state %d", d->state + 1);
-		clat_run_task(d);
+		DBG("run next state %d", data->state + 1);
+		clat_run_task(data);
 		return;
 	case CLAT_STATE_POST_CONFIGURE:
 		DBG("CLAT process ended");
-		d->state = CLAT_STATE_STOPPED;
+		data->state = CLAT_STATE_STOPPED;
 		break;
 	}
 }
 
-static int clat_run_task(struct clat_data *d)
+static int clat_run_task(struct clat_data *data)
 {
 	int err = 0;
 
-	DBG("state %d", d->state);
+	DBG("state %d", data->state);
 
-	switch (d->state) {
+	switch (data->state) {
 	case CLAT_STATE_IDLE:
 	case CLAT_STATE_FAILURE:
-		d->state = CLAT_STATE_PREFIX_QUERY;
+		data->state = CLAT_STATE_PREFIX_QUERY;
 		/* Get the prefix from the ISP NAT service */
-		err = clat_task_do_prefix_query(d);
+		err = clat_task_do_prefix_query(data);
 		if (err) {
 			connman_error("CLAT failed to start prefix query");
 			break;
@@ -376,116 +479,183 @@ static int clat_run_task(struct clat_data *d)
 		return 0;
 
 	case CLAT_STATE_PREFIX_QUERY:
-		err = clat_task_pre_configure(d);
+		err = clat_task_pre_configure(data);
 		if (err) {
 			connman_error("CLAT failed create pre-configure task");
 			break;
 		}
 
-		d->state = CLAT_STATE_PRE_CONFIGURE;
+		data->state = CLAT_STATE_PRE_CONFIGURE;
 		break;
 	case CLAT_STATE_PRE_CONFIGURE:
-		err = clat_task_start_tayga(d);
+		err = clat_task_start_tayga(data);
 		if (err) {
 			connman_error("CLAT failed to create run task");
 			break;
 		}
 
-		d->state = CLAT_STATE_RUNNING;
+		data->state = CLAT_STATE_RUNNING;
+		err = clat_task_start_dad(data);
+		if (err)
+			connman_warn("CLAT failed to start periodid DAD");
+
 		break;
 	/* If either running or stopped state and run is called do cleanup */
 	case CLAT_STATE_RUNNING:
 	case CLAT_STATE_STOPPED:
-		err = clat_task_post_configure(d);
+		err = clat_task_post_configure(data);
 		if (err) {
 			connman_error("CLAT failed to create post-configure task");
 			break;
 		}
 
-		d->state = CLAT_STATE_POST_CONFIGURE;
+		data->state = CLAT_STATE_POST_CONFIGURE;
+		clat_task_stop_dad(data);
 		break;
 	case CLAT_STATE_POST_CONFIGURE:
 		connman_warn("CLAT run task called in post-configure state");
-		d->state = CLAT_STATE_STOPPED;
+		data->state = CLAT_STATE_STOPPED;
 		return 0;
 	}
 
 	if (!err) {
 		DBG("CLAT run task");
-		err = connman_task_run(d->task, clat_task_exit, d, NULL, NULL,
-								NULL);
+		err = connman_task_run(data->task, clat_task_exit, data, NULL,
+								NULL, NULL);
 	}
 
 	if (err) {
 		connman_error("CLAT task failed to run, error %d/%s",
 							err, strerror(-err));
-		d->state = CLAT_STATE_FAILURE;
-		connman_task_destroy(d->task);
-		d->task = NULL;
+		data->state = CLAT_STATE_FAILURE;
+		connman_task_destroy(data->task);
+		data->task = NULL;
 	}
 
 	return err;
 }
 
-static int clat_start(struct clat_data *d)
+static int clat_start(struct clat_data *data)
 {
 	DBG("");
 
-	if (!d)
+	if (!data)
 		return -EINVAL;
 
-	if (is_running(d->state))
+	if (is_running(data->state))
 		return -EALREADY;
 
-	d->state = CLAT_STATE_IDLE;
-	clat_run_task(d);
+	data->state = CLAT_STATE_IDLE;
+	clat_run_task(data);
 
 	return 0;
 }
 
-static int clat_stop(struct clat_data *d)
+static int clat_stop(struct clat_data *data)
 {
 	int err;
 
 	DBG("");
 
-	if (!d)
+	if (!data)
 		return -EINVAL;
 
-	if (!d->task)
+	if (!data->task)
 		return 0;
 
 	struct connman_ipconfig *ipconfig;
 
-	err = connman_task_stop(d->task);
+	err = connman_task_stop(data->task);
 	if (err) {
 		connman_error("CLAT failed to stop current task");
 		return err;
 	}
 
-	connman_task_destroy(d->task);
+	connman_task_destroy(data->task);
 
-	ipconfig = connman_service_get_ipconfig(d->service, AF_INET6);
+	ipconfig = connman_service_get_ipconfig(data->service, AF_INET6);
 	if (ipconfig)
 		connman_nat6_restore(ipconfig);
 
 	/* Run as stopped -> does cleanup */
-	d->state = CLAT_STATE_STOPPED;
-	err = clat_run_task(d);
+	data->state = CLAT_STATE_STOPPED;
+	err = clat_run_task(data);
 	if (err) {
 		connman_error("CLAT failed to start cleanup task");
-		d->state = CLAT_STATE_FAILURE;
+		data->state = CLAT_STATE_FAILURE;
 	}
 
-	d->state = CLAT_STATE_IDLE;
+	data->state = CLAT_STATE_IDLE;
+
+	g_free(data->isp_64gateway);
+	data->isp_64gateway = NULL;
+	data->ifindex = -1;
 
 	return err;
 }
+
+static void clat_new_rtnl_gateway(int index, const char *dst,
+						const char *gateway, int metric,
+						unsigned char rtm_protocol)
+{
+	struct clat_data *data = get_data();
+
+	DBG("%d dst %s gateway %s metric %d", index, dst, gateway, metric);
+
+	/* Not the cellular device we are monitoring. */
+	if (index != data->ifindex)
+		return;
+
+	if (rtm_protocol != RTPROT_RA && rtm_protocol != RTPROT_DHCP) {
+		DBG("rtm_protocol not RA|DHCP");
+		return;
+	}
+
+	/*if (!connman_inet_is_any_addr(dst, AF_INET6)) {
+		DBG("dst %s != IPv6 ANY: %s", dst, IPV6_ANY);
+		return;
+	}*/
+
+	g_free(data->isp_64gateway);
+	data->isp_64gateway = g_strdup(gateway);
+
+	// TODO: perhaps store also dst and metric?
+}
+
+static void clat_del_rtnl_gateway(int index, const char *dst,
+						const char *gateway, int metric,
+						unsigned char rtm_protocol)
+{
+	struct clat_data *data = get_data();
+	
+	DBG("%d dst %s gateway %s metric %d", index, dst, gateway, metric);
+
+	if (index != data->ifindex)
+		return;
+
+	if (rtm_protocol != RTPROT_RA && rtm_protocol != RTPROT_DHCP) {
+		DBG("rtm_protocol not RA|DHCP");
+		return;
+	}
+
+	/* We lost our gateway, shut down clat */
+	if (!g_strcmp0(data->isp_64gateway, gateway)) {
+		DBG("CLAT gateway %s gone", data->isp_64gateway);
+		clat_stop(data);
+	}
+}
+
+static struct connman_rtnl clat_rtnl = {
+	.name			= "clat",
+	.newgateway6		= clat_new_rtnl_gateway,
+	.delgateway6		= clat_del_rtnl_gateway,
+};
 
 static void clat_ipconfig_changed(struct connman_service *service,
 					struct connman_ipconfig *ipconfig)
 {
 	struct connman_network *network;
+	struct clat_data *data = get_data();
 
 	DBG("service %p ipconfig %p", service, ipconfig);
 
@@ -493,6 +663,7 @@ static void clat_ipconfig_changed(struct connman_service *service,
 						CONNMAN_SERVICE_TYPE_CELLULAR) {
 		DBG("Not tracking service %p/%s or not cellular", service,
 				connman_service_get_identifier(service));
+		return;
 	}
 
 	if (connman_ipconfig_get_config_type(ipconfig) ==
@@ -521,6 +692,7 @@ static void clat_ipconfig_changed(struct connman_service *service,
 static void clat_default_changed(struct connman_service *service)
 {
 	struct connman_network *network;
+	struct clat_data *data = get_data();
 
 	DBG("service %p", service);
 
@@ -554,7 +726,8 @@ static void clat_service_state_changed(struct connman_service *service,
 					enum connman_service_state state)
 {
 	struct connman_network *network;
-	int index;
+	struct clat_data *data = get_data();
+	char *ifname;
 
 	DBG("");
 
@@ -574,9 +747,11 @@ static void clat_service_state_changed(struct connman_service *service,
 			data->service = NULL;
 		}
 		return;
-	/* Connecting or connected */
+	/* Connecting does not need yet clat as there is no network.*/
 	case CONNMAN_SERVICE_STATE_ASSOCIATION:
 	case CONNMAN_SERVICE_STATE_CONFIGURATION:
+		return;
+	/* Connected, start clat. */
 	case CONNMAN_SERVICE_STATE_READY:
 	case CONNMAN_SERVICE_STATE_ONLINE:
 		break;
@@ -590,11 +765,22 @@ static void clat_service_state_changed(struct connman_service *service,
 		return;
 	}
 
-	index = connman_network_get_index(network);
-	if (index < 0) {
+	
+	if (data->ifindex < 0)
+		data->ifindex = connman_network_get_index(network);
+
+	if (data->ifindex < 0) {
 		DBG("Interface not up, not starting clat");
 		return;
 	}
+
+	ifname = connman_inet_ifname(data->ifindex);
+	if (!ifname) {
+		DBG("Interface %d not up, not starting clat", data->ifindex);
+		return;
+	}
+
+	g_free(ifname);
 
 	clat_start(data);
 }
@@ -606,28 +792,32 @@ static struct connman_notifier clat_notifier = {
 	.service_state_changed	= clat_service_state_changed,
 };
 
-static void clat_free_data(struct clat_data *d)
+static void clat_free_data(struct clat_data *data)
 {
-	if (!d)
+	if (!data)
 		return;
 
-	if (d->task)
-		connman_task_stop(d->task);
+	if (data->task)
+		connman_task_stop(data->task);
 
-	g_free(d->config_path);
-	g_free(d->clat_prefix);
-	g_free(d->address);
+	g_free(data->config_path);
+	g_free(data->clat_prefix);
+	g_free(data->address);
 
-	g_free(d);
+	g_free(data);
 }
 
 static struct clat_data *clat_init_data()
 {
-	struct clat_data *d;
+	struct clat_data *data;
 	
-	d = g_new0(struct clat_data, 1);
+	data = g_new0(struct clat_data, 1);
+	if (!data)
+		return NULL;
 
-	return d;
+	data->ifindex = -1;
+
+	return data;
 }
 
 static int clat_init(void)
@@ -636,17 +826,25 @@ static int clat_init(void)
 
 	DBG("");
 
-	data = clat_init_data();
-	if (!data) {
-		connman_error("Clat: cannot initialize data");
+	__data = clat_init_data();
+	if (!__data) {
+		connman_error("CLAT: cannot initialize data");
 		return -ENOMEM;
 	}
 
 	err = connman_notifier_register(&clat_notifier);
 	if (err) {
-		connman_error("Clat: notifier register failed");
+		connman_error("CLAT: notifier register failed");
 		return err;
 	}
+
+	err = connman_rtnl_register(&clat_rtnl);
+	if (err) {
+		connman_error("CLAT: rtnl notifier register failed");
+		return err;
+	}
+
+	connman_rtnl_handle_rtprot_ra(true);
 
 	return 0;
 }
@@ -656,7 +854,9 @@ static void clat_exit(void)
 	DBG("");
 
 	connman_notifier_unregister(&clat_notifier);
-	clat_free_data(data);
+	connman_rtnl_handle_rtprot_ra(false);
+	connman_rtnl_unregister(&clat_rtnl);
+	clat_free_data(__data);
 }
 
 CONNMAN_PLUGIN_DEFINE(clat, "CLAT plugin", VERSION,
