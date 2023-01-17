@@ -38,6 +38,8 @@
 
 #define CONNMAN_API_SUBJECT_TO_CHANGE
 
+#define WKN_ADDRESS "ipv4only.arpa"
+
 enum clat_state {
 	CLAT_STATE_IDLE = 0,
 	CLAT_STATE_PREFIX_QUERY,
@@ -46,6 +48,7 @@ enum clat_state {
 	CLAT_STATE_POST_CONFIGURE,
 	CLAT_STATE_STOPPED, // TODO: killed?
 	CLAT_STATE_FAILURE,
+	CLAT_STATE_RESTART,
 };
 
 struct clat_data {
@@ -91,6 +94,7 @@ static bool is_running(enum clat_state state)
 	case CLAT_STATE_PRE_CONFIGURE:
 	case CLAT_STATE_RUNNING:
 	case CLAT_STATE_POST_CONFIGURE:
+	case CLAT_STATE_RESTART:
 		return true;
 	}
 
@@ -170,27 +174,161 @@ static gboolean remove_resolv(gpointer user_data)
 	return G_SOURCE_REMOVE;
 }
 
+struct prefix_entry {
+	char *prefix;
+	unsigned char prefixlen;
+};
+
+static struct prefix_entry *new_prefix_entry(char *address)
+{
+	struct prefix_entry *entry;
+	gchar **tokens;
+
+	DBG("address %s", address);
+
+	if (!address)
+		return NULL;
+
+	tokens = g_strsplit(address, "/", 2);
+	if (!tokens)
+		return NULL;
+
+	entry = g_new0(struct prefix_entry, 1);
+	if (!entry)
+		return NULL;
+
+	if (g_strv_length(tokens) == 2) {
+		entry->prefix = g_strdup(tokens[0]);
+		entry->prefixlen = (unsigned char)g_ascii_strtoull(tokens[1],
+								NULL, 10);
+	} else {
+		DBG("Cannot split with \"/\"");
+	}
+
+	g_strfreev(tokens);
+
+	if (entry->prefixlen > 128 || entry->prefixlen < 16) {
+		DBG("Invalid prefixlen %u", entry->prefixlen);
+		g_free(entry);
+		return NULL;
+	}
+
+	DBG("prefix %s/%u", entry->prefix, entry->prefixlen);
+
+	return entry;
+}
+
+static void free_prefix_entry(gpointer user_data)
+{
+	struct prefix_entry *entry = user_data;
+
+	if (!entry)
+		return;
+
+	g_free(entry->prefix);
+	g_free(entry);
+}
+
+static gint prefix_comp(gconstpointer a, gconstpointer b)
+{
+	const struct prefix_entry *entry_a = a;
+	const struct prefix_entry *entry_b = b;
+
+	/* Largest on top */
+	if (entry_a->prefixlen > entry_b->prefixlen)
+		return -1;
+
+	if (entry_a->prefixlen < entry_b->prefixlen)
+		return 1;
+
+	return 0;
+}
+
+static int assign_clat_prefix(struct clat_data *data, char **results)
+{
+	GList *prefixes = NULL;
+	GList *first;
+	struct prefix_entry *entry;
+	int err;
+	int len;
+	int i;
+
+	DBG("");
+
+	if (!results)
+		return -ENOENT;
+
+	len = g_strv_length(results);
+
+	for (i = 0; i < len; i++) {
+		entry = new_prefix_entry(results[i]);
+		if (!entry)
+			continue;
+
+		prefixes = g_list_insert_sorted(prefixes, entry, prefix_comp);
+	}
+
+	if (!prefixes)
+		return -ENOENT;
+
+	first = g_list_first(prefixes);
+	entry = first->data;
+	if (!entry)
+		return -ENOENT;
+
+	/* A prefix exists already */
+	if (data->clat_prefix && g_strcmp0(data->clat_prefix, entry->prefix) &&
+				data->clat_prefixlen != entry->prefixlen)
+		err = -ERESTART;
+
+	g_free(data->clat_prefix);
+	data->clat_prefix = g_strdup(entry->prefix);
+	data->clat_prefixlen = entry->prefixlen;
+
+	g_list_free_full(prefixes, free_prefix_entry);
+
+	return err;
+}
+
 static void prefix_query_cb(GResolvResultStatus status,
 					char **results, gpointer user_data)
 {
 	struct clat_data *data = user_data;
+	int err;
 
 	DBG("status %d", status);
 
-	if (status == G_RESOLV_RESULT_STATUS_SUCCESS && results &&
-						g_strv_length(results) > 0) {
-
-		// TODO what to get as the result?
-		data->clat_prefix = "2001:67c:2b0:db32:0:1::";
-		data->clat_prefixlen = 96;
+	if (status != G_RESOLV_RESULT_STATUS_SUCCESS) {
+		data->state = CLAT_STATE_FAILURE;
+		DBG("failed to resolv %s, CLAT is stopped", WKN_ADDRESS);
+	} else {
+		err = assign_clat_prefix(data, results);
+		switch (err) {
+		case 0:
+			break;
+		case -EALREADY:
+			break;
+		case -ERESTART:
+			data->state = CLAT_STATE_RESTART;
+			break;
+		default:
+			DBG("failed to assign prefix, error %d", err);
+			data->state = CLAT_STATE_FAILURE;
+			break;
+		}
 	}
 
+	
 	/*
 	 * We cannot unref the resolver here as resolv struct is manipulated
 	 * by gresolv.c after we return from this callback.
 	 */
 	data->remove_resolv_id = g_timeout_add(0, remove_resolv, data);
 	data->resolv_query_id = 0;
+
+	/* No state change with same prefix */
+	if (err == -EALREADY)
+		return;
 
 	clat_run_task(data);
 }
@@ -199,8 +337,10 @@ static int clat_task_do_prefix_query(struct clat_data *data)
 {
 	DBG("");
 
-	if (connman_inet_check_ipaddress(data->isp_64gateway) > 0)
+	/*if (connman_inet_check_ipaddress(data->isp_64gateway) > 0) {
+		
 		return -EINVAL;
+	}*/
 
 	if (data->resolv_query_id > 0)
 		g_source_remove(data->resolv_query_id);
@@ -211,12 +351,11 @@ static int clat_task_do_prefix_query(struct clat_data *data)
 		return -ENOMEM;
 	}
 
-	DBG("Trying to resolv %s", data->isp_64gateway);
+	DBG("Trying to resolv %s gateway %s", WKN_ADDRESS, data->isp_64gateway);
 
 	g_resolv_set_address_family(data->resolv, AF_INET6);
 	data->resolv_query_id = g_resolv_lookup_hostname(data->resolv,
-					data->isp_64gateway, prefix_query_cb,
-					data);
+					WKN_ADDRESS, prefix_query_cb, data);
 
 	return 0;
 }
@@ -434,6 +573,11 @@ static void clat_task_exit(struct connman_task *task, int exit_code,
 		data->state = CLAT_STATE_FAILURE;
 	}
 
+	if (task != data->task) {
+		connman_warn("CLAT task differs, nothing done");
+		return;
+	}
+
 	if (data->task) {
 		connman_task_destroy(data->task);
 		data->task = NULL;
@@ -455,6 +599,9 @@ static void clat_task_exit(struct connman_task *task, int exit_code,
 	case CLAT_STATE_POST_CONFIGURE:
 		DBG("CLAT process ended");
 		data->state = CLAT_STATE_STOPPED;
+		break;
+	case CLAT_STATE_RESTART:
+		DBG("CLAT task return when restarting");
 		break;
 	}
 }
@@ -497,7 +644,7 @@ static int clat_run_task(struct clat_data *data)
 		data->state = CLAT_STATE_RUNNING;
 		err = clat_task_start_dad(data);
 		if (err)
-			connman_warn("CLAT failed to start periodid DAD");
+			connman_warn("CLAT failed to start periodic DAD");
 
 		break;
 	/* If either running or stopped state and run is called do cleanup */
@@ -516,6 +663,24 @@ static int clat_run_task(struct clat_data *data)
 		connman_warn("CLAT run task called in post-configure state");
 		data->state = CLAT_STATE_STOPPED;
 		return 0;
+	case CLAT_STATE_RESTART:
+		err = connman_task_stop(data->task);
+		if (err) {
+			connman_error("CLAT failed to stop current task");
+			return err;
+		}
+
+		connman_task_destroy(data->task);
+
+		/* Run as stopped -> does cleanup */
+		data->state = CLAT_STATE_STOPPED;
+		err = clat_run_task(data);
+		if (err) {
+			connman_error("CLAT failed to start cleanup task");
+			data->state = CLAT_STATE_FAILURE;
+		}
+
+		data->state = CLAT_STATE_IDLE;
 	}
 
 	if (!err) {
