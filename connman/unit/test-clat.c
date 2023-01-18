@@ -243,6 +243,13 @@ enum connman_service_type connman_service_get_type(
 	return CONNMAN_SERVICE_TYPE_UNKNOWN;
 }
 
+enum connman_service_state connman_service_get_state(
+					struct connman_service *service)
+{
+	g_assert(service);
+	return CONNMAN_SERVICE_STATE_IDLE;
+}
+
 struct connman_network *connman_service_get_network(
 					struct connman_service *service)
 {
