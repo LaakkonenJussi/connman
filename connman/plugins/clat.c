@@ -85,7 +85,8 @@ struct clat_data {
 #define IPv4MAPADDR "192.0.0.4"
 #define CLATSUFFIX "c1a7"
 #define CLAT_DEVICE "clat"
-#define PREFIX_QUERY_TIMEOUT 600 /* 10min as seconds */
+#define PREFIX_QUERY_TIMEOUT 10000 /* 10 seconds */
+#define DAD_TIMEOUT 600000 /* 10 minutes */
 
 struct clat_data *__data = NULL;
 
@@ -424,13 +425,26 @@ static int assign_clat_prefix(struct clat_data *data, char **results)
 	}
 
 	/* A prefix exists already */
-	if (data->clat_prefix && g_strcmp0(data->clat_prefix, entry->prefix) &&
+	if (data->clat_prefix) {
+		if (g_strcmp0(data->clat_prefix, entry->prefix) &&
 				data->clat_prefixlen != entry->prefixlen) {
-		DBG("changing existing prefix %s/%u -> %s/%u",
-					data->clat_prefix, data->clat_prefixlen,
-					entry->prefix, entry->prefixlen);
-		err = -ERESTART;
+			DBG("changing existing prefix %s/%u -> %s/%u",
+						data->clat_prefix,
+						data->clat_prefixlen,
+						entry->prefix,
+						entry->prefixlen);
+			err = -ERESTART;
+		}
+
+		if (!g_strcmp0(data->clat_prefix, entry->prefix) &&
+				data->clat_prefixlen == entry->prefixlen) {
+			DBG("no change to existing prefix %s/%u",
+						data->clat_prefix,
+						data->clat_prefixlen);
+			err = -EALREADY;
+		}
 	}
+
 
 	g_free(data->clat_prefix);
 	data->clat_prefix = g_strdup(entry->prefix);
@@ -573,7 +587,7 @@ static int clat_task_start_periodic_query(struct clat_data *data)
 		return -EALREADY;
 	}
 
-	data->prefix_query_id = g_timeout_add_seconds(PREFIX_QUERY_TIMEOUT,
+	data->prefix_query_id = g_timeout_add(PREFIX_QUERY_TIMEOUT,
 							run_prefix_query, data);
 	if (data->prefix_query_id <= 0) {
 		connman_error("CLAT failed to start periodic prefix query");
@@ -596,6 +610,24 @@ static void clat_task_stop_periodic_query(struct clat_data *data)
 	if (data->resolv_query_id)
 		remove_resolv(data);
 }
+
+static gboolean do_online_check(gpointer user_data)
+{
+	return G_SOURCE_REMOVE;
+}
+
+static int clat_task_start_online_check(struct clat_data *data)
+{
+	// TODO run this via wispr ?
+	do_online_check(data);
+	return 0;
+}
+
+static void clat_task_stop_online_check(struct clat_data *data)
+{
+	return;
+}
+
 
 static int clat_task_pre_configure(struct clat_data *data)
 {
@@ -726,8 +758,6 @@ static int clat_task_start_tayga(struct clat_data *data)
 	return 0;
 }
 
-struct nd_neighbor_advert *hdr;
-
 void clat_dad_cb(struct nd_neighbor_advert *reply, unsigned int length,
 					struct in6_addr *addr,
 					void *user_data)
@@ -739,17 +769,20 @@ void clat_dad_cb(struct nd_neighbor_advert *reply, unsigned int length,
 
 static gboolean clat_task_run_dad(gpointer user_data)
 {
-	//struct clat_data *data = user_data;
-	//struct in6_addr *addr = NULL;
+	struct clat_data *data = user_data;
+	unsigned char addr[sizeof(struct in6_addr)];
 	int err = 0;
 
 	DBG("");
 
-	// TODO get in6_addr of current ifconfig
-	// TODO allow use of ipv6_do_dad
+	if (inet_pton(AF_INET6, data->address, addr) != 1) {
+		connman_error("failed to pton address %s", data->address);
+		return G_SOURCE_REMOVE;
+	}
 
-	/*err =  __connman_inet_ipv6_do_dad(data->ifindex, 100, addr,
-							clat_dad_cb, data);*/
+	err = connman_inet_ipv6_do_dad(data->ifindex, 100,
+						(struct in6_addr *)addr,
+						clat_dad_cb, data);
 	if (err) {
 		connman_error("CLAT failed to send dad: %d", err);
 		return G_SOURCE_REMOVE;
@@ -762,7 +795,7 @@ static int clat_task_start_dad(struct clat_data *data)
 {
 	DBG("");
 
-	data->dad_id = g_timeout_add_seconds(100, clat_task_run_dad, data);
+	data->dad_id = g_timeout_add(DAD_TIMEOUT, clat_task_run_dad, data);
 
 	if (data->dad_id <= 0) {
 		connman_error("CLAT failed to start DAD timeout");
@@ -927,6 +960,7 @@ static int clat_run_task(struct clat_data *data)
 		data->state = CLAT_STATE_POST_CONFIGURE;
 		clat_task_stop_periodic_query(data);
 		clat_task_stop_dad(data);
+		clat_task_stop_online_check(data);
 		break;
 	case CLAT_STATE_POST_CONFIGURE:
 		connman_warn("CLAT run task called in post-configure state");
@@ -938,6 +972,7 @@ static int clat_run_task(struct clat_data *data)
 		destroy_task(data);
 		clat_task_stop_periodic_query(data);
 		clat_task_stop_dad(data);
+		clat_task_stop_online_check(data);
 
 		/* Remain in failure state, can be started via clat_start(). */
 		data->state = CLAT_STATE_FAILURE;
@@ -1260,23 +1295,33 @@ static void clat_service_state_changed(struct connman_service *service,
 	/* Connecting does not need yet clat as there is no network.*/
 	case CONNMAN_SERVICE_STATE_ASSOCIATION:
 	case CONNMAN_SERVICE_STATE_CONFIGURATION:
-		DBG("association|configuration, nothing done yet");
+		DBG("association|configuration, assign service %p", service);
 		data->service = service;
 		return;
 	/* Connected, start clat. */
 	case CONNMAN_SERVICE_STATE_READY:
+		if (service != data->service)
+			return;
+
+		if (is_running(data->state)) {
+			DBG("CLAT is already running in state %d/%s",
+						data->state,
+						state2string(data->state));
+			return;
+		}
+
+		DBG("ready, initialize CLAT");
+		break;
 	case CONNMAN_SERVICE_STATE_ONLINE:
 		if (service != data->service)
 			return;
 
-		DBG("ready|online");
-		break;
-	}
+		if (!is_running(data->state)) {
+			DBG("CLAT is not running yet, start it first");
+			break;
+		}
 
-	if (is_running(data->state)) {
-		DBG("CLAT is already running in state %d/%s", data->state,
-						state2string(data->state));
-		return;
+		goto onlinecheck;
 	}
 
 	network = connman_service_get_network(service);
@@ -1316,6 +1361,15 @@ static void clat_service_state_changed(struct connman_service *service,
 	err = clat_start(data);
 	if (err && err != -EALREADY)
 		connman_error("failed to start CLAT, error %d", err);
+
+onlinecheck:
+	if (state == CONNMAN_SERVICE_STATE_ONLINE) {
+		DBG("online, do online check");
+
+		err = clat_task_start_online_check(data);
+		if (err && err != -EALREADY)
+			connman_error("CLAT failed to do online check");
+	}
 }
 
 static struct connman_notifier clat_notifier = {
