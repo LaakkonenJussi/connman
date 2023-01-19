@@ -347,8 +347,8 @@ static struct prefix_entry *new_prefix_entry(const char *address)
 
 	DBG("entry %p", entry);
 
-	/* Result has a global prefix and cannot be split with '/' */
-	if (!tokens && g_str_has_prefix(address, GLOBAL_PREFIX)) {
+	/* Result has a global prefix */
+	if (g_str_has_prefix(address, GLOBAL_PREFIX)) {
 		entry->prefix = g_strdup(GLOBAL_PREFIX);
 		entry->prefixlen = GLOBAL_PREFIXLEN;
 	/* Result had address and prefix length. */
@@ -466,6 +466,8 @@ static int assign_clat_prefix(struct clat_data *data, char **results)
 	return err;
 }
 
+static bool dotest = false;
+
 static void prefix_query_cb(GResolvResultStatus status,
 					char **results, gpointer user_data)
 {
@@ -483,7 +485,20 @@ static void prefix_query_cb(GResolvResultStatus status,
 	data->resolv_query_id = 0;
 
 	if (status != G_RESOLV_RESULT_STATUS_SUCCESS) {
+
 		err = -EHOSTDOWN;
+
+		/* TODO until the unit tests have been done ... */
+		if (dotest) {
+			gchar **r = g_new0(char*, 4);
+			r[0] = g_strdup("64:ff9b::c000:aa");
+			r[1] = g_strdup("64:ff9b::c000:ab");
+			r[2] = g_strdup(GLOBAL_PREFIX);
+			r[3] = g_strdup_printf("%s/%u", GLOBAL_PREFIX,
+							GLOBAL_PREFIXLEN);
+			err = assign_clat_prefix(data, r);
+			g_strfreev(r);
+		}
 	} else {
 		DBG("resolv of %s success, parse prefix", WKN_ADDRESS);
 		err = assign_clat_prefix(data, results);
