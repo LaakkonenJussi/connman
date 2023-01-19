@@ -109,6 +109,16 @@ int connman_inet_check_ipaddress(const char *host)
 	return 0;
 }
 
+int connman_inet_ipv6_do_dad(int index, int timeout_ms, struct in6_addr *addr,
+				connman_inet_ns_cb_t callback, void *user_data)
+{
+	g_assert_cmpint(index, >, 0);
+	g_assert(addr);
+	g_assert(callback);
+
+	return 0;
+}
+
 struct connman_task {
 	char *path;
 	pid_t pid;
