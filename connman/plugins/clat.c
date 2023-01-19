@@ -1153,19 +1153,27 @@ static bool has_ipv4_address(struct connman_service *service)
 	struct connman_ipaddress *ipaddress;
 	const char *address;
 	unsigned char prefixlen;
+	int err;
 
-	ipconfig = connman_service_get_ipconfig(service,
-						CONNMAN_IPCONFIG_TYPE_IPV4);
+	ipconfig = connman_service_get_ipconfig(service, AF_INET);
+	DBG("IPv4 ipconfig %p", ipconfig);
+
 	ipaddress = connman_ipconfig_get_ipaddress(ipconfig);
+	DBG("IPv4 ipaddress %p", ipaddress);
 
-	if (!connman_ipaddress_get_ip(ipaddress, &address, &prefixlen) &&
-						address) {
-		DBG("IPv4 is configured on cellular, not starting CLAT");
-		return true;
+	err = connman_ipaddress_get_ip(ipaddress, &address, &prefixlen);
+	if (err) {
+		DBG("IPv4 is not configured on cellular service %p", service);
+		return false;
 	}
 
-	DBG("no IPv4 address set for service %p", service);
-	return false;
+	if (!address) {
+		DBG("no IPv4 address on cellular service %p", service);
+		return false;
+	}
+
+	DBG("IPv4 address %s set for service %p", address, service);
+	return true;
 }
 
 static void clat_default_changed(struct connman_service *service)
