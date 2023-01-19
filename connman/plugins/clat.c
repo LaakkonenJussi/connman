@@ -88,6 +88,9 @@ struct clat_data {
 #define PREFIX_QUERY_TIMEOUT 10000 /* 10 seconds */
 #define DAD_TIMEOUT 600000 /* 10 minutes */
 
+static const char *GLOBAL_PREFIX = "64:ff9b::";
+static const unsigned char GLOBAL_PREFIXLEN = 96;
+
 struct clat_data *__data = NULL;
 
 static struct clat_data *get_data()
@@ -314,49 +317,6 @@ struct prefix_entry {
 	unsigned char prefixlen;
 };
 
-static struct prefix_entry *new_prefix_entry(char *address)
-{
-	struct prefix_entry *entry;
-	gchar **tokens;
-
-	DBG("address %s", address);
-
-	if (!address)
-		return NULL;
-
-	tokens = g_strsplit(address, "/", 2);
-	if (!tokens) {
-		DBG("cannot create tokens from address %s", address);
-		return NULL;
-	}
-
-	entry = g_new0(struct prefix_entry, 1);
-	if (!entry)
-		return NULL;
-
-	DBG("entry %p", entry);
-
-	if (g_strv_length(tokens) == 2) {
-		entry->prefix = g_strdup(tokens[0]);
-		entry->prefixlen = (unsigned char)g_ascii_strtoull(tokens[1],
-								NULL, 10);
-	} else {
-		DBG("Cannot split with \"/\"");
-	}
-
-	g_strfreev(tokens);
-
-	if (entry->prefixlen > 128 || entry->prefixlen < 16) {
-		DBG("Invalid prefixlen %u", entry->prefixlen);
-		g_free(entry);
-		return NULL;
-	}
-
-	DBG("prefix %s/%u", entry->prefix, entry->prefixlen);
-
-	return entry;
-}
-
 static void free_prefix_entry(gpointer user_data)
 {
 	struct prefix_entry *entry = user_data;
@@ -368,6 +328,56 @@ static void free_prefix_entry(gpointer user_data)
 
 	g_free(entry->prefix);
 	g_free(entry);
+}
+
+static struct prefix_entry *new_prefix_entry(const char *address)
+{
+	struct prefix_entry *entry;
+	gchar **tokens;
+
+	DBG("address %s", address);
+
+	if (!address)
+		return NULL;
+
+	tokens = g_strsplit(address, "/", 2);
+	entry = g_new0(struct prefix_entry, 1);
+	if (!entry)
+		return NULL;
+
+	DBG("entry %p", entry);
+
+	/* Result has a global prefix and cannot be split with '/' */
+	if (!tokens && g_str_has_prefix(address, GLOBAL_PREFIX)) {
+		entry->prefix = g_strdup(GLOBAL_PREFIX);
+		entry->prefixlen = GLOBAL_PREFIXLEN;
+	/* Result had address and prefix length. */
+	} else if (tokens && g_strv_length(tokens) == 2) {
+		entry->prefix = g_strdup(tokens[0]);
+		entry->prefixlen = (unsigned char)g_ascii_strtoull(tokens[1],
+								NULL, 10);
+	} else {
+		DBG("address does not contain a valid prefix");
+		free_prefix_entry(entry);
+		return NULL;
+	}
+	/*
+	 * TODO: Check the prefixlenght from other than ones with GLOBAL_PREFIX
+	 * utilizing XOR of the A record result.
+	 */
+
+	if (tokens)
+		g_strfreev(tokens);
+
+	if (entry->prefixlen > 128 || entry->prefixlen < 16) {
+		DBG("Invalid prefixlen %u", entry->prefixlen);
+		g_free(entry);
+		return NULL;
+	}
+
+	DBG("prefix %s/%u", entry->prefix, entry->prefixlen);
+
+	return entry;
 }
 
 static gint prefix_comp(gconstpointer a, gconstpointer b)
@@ -394,14 +404,13 @@ static int assign_clat_prefix(struct clat_data *data, char **results)
 	int len;
 	int i;
 
-	DBG("");
-
 	if (!results) {
 		DBG("no results");
 		return -ENOENT;
 	}
 
 	len = g_strv_length(results);
+	DBG("got %d results", len);
 
 	for (i = 0; i < len; i++) {
 		entry = new_prefix_entry(results[i]);
@@ -411,13 +420,15 @@ static int assign_clat_prefix(struct clat_data *data, char **results)
 		prefixes = g_list_insert_sorted(prefixes, entry, prefix_comp);
 	}
 
-	if (!prefixes) {
-		DBG("no prefixes found");
-		return -ENOENT;
+	first = g_list_first(prefixes);
+	if (!first || !(entry = first->data)) {
+		DBG("no prefixes found, fallback using global %s/%u",
+							GLOBAL_PREFIX,
+							GLOBAL_PREFIXLEN);
+		entry = new_prefix_entry(GLOBAL_PREFIX);
+		prefixes = g_list_insert_sorted(prefixes, entry, prefix_comp);
 	}
 
-	first = g_list_first(prefixes);
-	entry = first->data;
 	if (!entry) {
 		DBG("no entry is set");
 		g_list_free_full(prefixes, free_prefix_entry);
@@ -455,9 +466,6 @@ static int assign_clat_prefix(struct clat_data *data, char **results)
 	return err;
 }
 
-// TODO: use conf/define
-bool fallback_to_global_prefix = true;
-
 static void prefix_query_cb(GResolvResultStatus status,
 					char **results, gpointer user_data)
 {
@@ -475,22 +483,9 @@ static void prefix_query_cb(GResolvResultStatus status,
 	data->resolv_query_id = 0;
 
 	if (status != G_RESOLV_RESULT_STATUS_SUCCESS) {
-		char **global_prefix = g_new0(char*, 1);
-
-		DBG("failed to resolv %s", WKN_ADDRESS);
-
-		if (fallback_to_global_prefix) {
-
-			DBG("using global 64:ff9b::/96");
-			global_prefix[0] = g_strdup("64:ff9b::/96");
-			err = assign_clat_prefix(data, global_prefix);
-			g_strfreev(global_prefix);
-			DBG("freed");
-		} else {
-			err = -ENOENT;
-		}
-
+		err = -EHOSTDOWN;
 	} else {
+		DBG("resolv of %s success, parse prefix", WKN_ADDRESS);
 		err = assign_clat_prefix(data, results);
 	}
 
@@ -509,6 +504,10 @@ static void prefix_query_cb(GResolvResultStatus status,
 						data->clat_prefixlen);
 		new_state = CLAT_STATE_RESTART;
 		break;
+	case -EHOSTDOWN:
+		DBG("failed to resolv %s, CLAT is not started", WKN_ADDRESS);
+		new_state = CLAT_STATE_FAILURE;
+		break;
 	default:
 		DBG("failed to assign prefix, error %d", err);
 		new_state = CLAT_STATE_FAILURE;
@@ -521,7 +520,9 @@ static void prefix_query_cb(GResolvResultStatus status,
 	 */
 	if (data->state == CLAT_STATE_PREFIX_QUERY ||
 						data->state != new_state) {
-		DBG("State progress or state change -> run CLAT");
+		DBG("State progress or state change");
+		data->state = new_state;
+
 		err = clat_run_task(data);
 		if (err && err != -EALREADY)
 			connman_error("failed to run CLAT, error %d", err);
@@ -532,7 +533,9 @@ static int clat_task_do_prefix_query(struct clat_data *data)
 {
 	DBG("");
 
-	/*if (connman_inet_check_ipaddress(data->isp_64gateway) > 0) {
+	/*
+	 * TODO handle this
+	 if (connman_inet_check_ipaddress(data->isp_64gateway) > 0) {
 		
 		return -EINVAL;
 	}*/
@@ -1317,7 +1320,7 @@ static void clat_service_state_changed(struct connman_service *service,
 			return;
 
 		if (!is_running(data->state)) {
-			DBG("CLAT is not running yet, start it first");
+			DBG("online, CLAT is not running yet, start it first");
 			break;
 		}
 
@@ -1363,8 +1366,9 @@ static void clat_service_state_changed(struct connman_service *service,
 		connman_error("failed to start CLAT, error %d", err);
 
 onlinecheck:
-	if (state == CONNMAN_SERVICE_STATE_ONLINE) {
-		DBG("online, do online check");
+	if (state == CONNMAN_SERVICE_STATE_ONLINE &&
+					data->state == CLAT_STATE_RUNNING) {
+		DBG("online, CLAT is running, do online check");
 
 		err = clat_task_start_online_check(data);
 		if (err && err != -EALREADY)
