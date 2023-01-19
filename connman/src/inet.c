@@ -2223,6 +2223,16 @@ int __connman_inet_ipv6_do_dad(int index, int timeout_ms,
 	return err;
 }
 
+int connman_inet_ipv6_do_dad(int index, int timeout_ms,
+				struct in6_addr *addr,
+				connman_inet_ns_cb_t callback,
+				void *user_data)
+{
+	return __connman_inet_ipv6_do_dad(index, timeout_ms, addr,
+					(__connman_inet_ns_cb_t)callback,
+					user_data);
+}
+
 GSList *__connman_inet_ipv6_get_prefixes(struct nd_router_advert *hdr,
 					unsigned int length)
 {
