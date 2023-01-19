@@ -1151,6 +1151,7 @@ static bool has_ipv4_address(struct connman_service *service)
 {
 	struct connman_ipconfig *ipconfig;
 	struct connman_ipaddress *ipaddress;
+	enum connman_ipconfig_method method;
 	const char *address;
 	unsigned char prefixlen;
 	int err;
@@ -1170,6 +1171,20 @@ static bool has_ipv4_address(struct connman_service *service)
 	if (!address) {
 		DBG("no IPv4 address on cellular service %p", service);
 		return false;
+	}
+
+	method = connman_service_get_ipconfig_method(service,
+						CONNMAN_IPCONFIG_TYPE_IPV4);
+	switch (method) {
+	case CONNMAN_IPCONFIG_METHOD_UNKNOWN:
+	case CONNMAN_IPCONFIG_METHOD_OFF:
+		DBG("IPv4 method unknown/off, address is old");
+		return false;
+	case CONNMAN_IPCONFIG_METHOD_FIXED:
+	case CONNMAN_IPCONFIG_METHOD_MANUAL:
+	case CONNMAN_IPCONFIG_METHOD_DHCP:
+	case CONNMAN_IPCONFIG_METHOD_AUTO:
+		break;
 	}
 
 	DBG("IPv4 address %s set for service %p", address, service);
