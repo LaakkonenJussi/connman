@@ -246,7 +246,8 @@ static int destroy_task(struct clat_data *data)
 static int clat_create_tayga_config(struct clat_data *data)
 {
 	GError *error = NULL;
-	char *str;
+	GString *str;
+	char *buf;
 	int err;
 
 	g_free(data->config_path);
@@ -254,27 +255,31 @@ static int clat_create_tayga_config(struct clat_data *data)
 
 	DBG("config %s", data->config_path);
 
-	str = g_strdup_printf("tun-device %s\n"
-				"ipv4-addr %s\n"
-				"ipv6-addr %s\n"
-				"prefix %s/%u\n"
-				"map %s %s\n",
-				CLAT_DEVICE,
-				IPv4ADDR,
-				data->ipv6address,
-				data->clat_prefix, data->clat_prefixlen,
-				IPv4MAPADDR, data->address);
+	str = g_string_new("");
 
-	DBG("content: %s", str);
+	g_string_append_printf(str, "tun-device %s\n", CLAT_DEVICE);
+	g_string_append_printf(str, "ipv4-addr %s\n", IPv4ADDR);
 
-	g_file_set_contents(data->config_path, str, -1, &error);
+	/* IPv6 address is required only when global prefix is in use */
+	if (!g_strcmp0(data->clat_prefix, GLOBAL_PREFIX) &&
+				data->clat_prefixlen == GLOBAL_PREFIXLEN)
+		g_string_append_printf(str, "ipv6-addr %s\n",
+							data->ipv6address);
+
+	g_string_append_printf(str, "prefix %s/%u\n", data->clat_prefix,
+						data->clat_prefixlen);
+	g_string_append_printf(str, "map %s %s\n", IPv4MAPADDR, data->address);
+
+	buf = g_string_free(str, FALSE);
+
+	g_file_set_contents(data->config_path, buf, -1, &error);
 	if (error) {
 		connman_error("Error creating conf: %s\n", error->message);
 		g_error_free(error);
 		err = -EIO;
 	}
 
-	g_free(str);
+	g_free(buf);
 
 	return err;
 }
@@ -363,7 +368,8 @@ static struct prefix_entry *new_prefix_entry(const char *address)
 	}
 	/*
 	 * TODO: Check the prefixlenght from other than ones with GLOBAL_PREFIX
-	 * utilizing XOR of the A record result.
+	 * utilizing XOR of the A record result. Use /96 prefix for all as
+	 * android does.
 	 */
 
 	if (tokens)
