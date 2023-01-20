@@ -489,6 +489,25 @@ static int get_ipv6_forwarding(gchar *ifname)
 	return value;
 }
 
+static int set_ipv6_ndproxy(gchar *ifname, bool enable)
+{
+	int value = enable ? 1 : 0;
+
+	DBG("%s %d", ifname, enable);
+
+	return write_ipv6_conf_value(ifname, "proxy_ndp", value);
+}
+
+static int get_ipv6_ndproxy(gchar *ifname)
+{
+	int value;
+
+	if (read_ipv6_conf_value(ifname, "proxy_ndp", &value) < 0)
+		value = -EINVAL;
+
+	return value;
+}
+
 int __connman_ipconfig_set_rp_filter()
 {
 	int value;
@@ -1943,6 +1962,45 @@ int __connman_ipconfig_ipv6_set_forwarding(struct connman_ipconfig *ipconfig,
 		return -ENOENT;
 
 	if (set_ipv6_forwarding(ifname, enable) != 1)
+		err = -EPERM;
+
+	g_free(ifname);
+
+	return err;
+}
+
+bool __connman_ipconfig_ipv6_get_ndproxy(struct connman_ipconfig *ipconfig)
+{
+	char *ifname;
+	int value;
+
+	if (!ipconfig)
+		return false;
+
+	ifname = connman_inet_ifname(ipconfig->index);
+	if (!ifname)
+		return false;
+
+	value = get_ipv6_ndproxy(ifname);
+	g_free(ifname);
+
+	return value == 1 ? true : false;
+}
+
+int __connman_ipconfig_ipv6_set_ndproxy(struct connman_ipconfig *ipconfig,
+								bool enable)
+{
+	char *ifname;
+	int err = 0;
+
+	if (!ipconfig)
+		return -EINVAL;
+
+	ifname = connman_inet_ifname(ipconfig->index);
+	if (!ifname)
+		return -ENOENT;
+
+	if (set_ipv6_ndproxy(ifname, enable) != 1)
 		err = -EPERM;
 
 	g_free(ifname);
