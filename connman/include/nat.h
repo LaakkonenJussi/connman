@@ -34,7 +34,8 @@ extern "C" {
  * @short_description: Functions for NAT handling
  */
 
-int connman_nat6_prepare(struct connman_ipconfig *ipconfig);
+int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
+							const char *ifname_in);
 void connman_nat6_restore(struct connman_ipconfig *ipconfig);
 
 #ifdef __cplusplus

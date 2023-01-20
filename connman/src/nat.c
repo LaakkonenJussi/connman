@@ -160,52 +160,69 @@ err:
 	return -ENOMEM;
 }
 
-int connman_nat6_prepare(struct connman_ipconfig *ipconfig)
+int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
+							const char *ifname_in)
 {
 	struct connman_nat *nat;
 	char *ifname = NULL;
+	char *rule = NULL;
 	int err;
 
 	nat = g_try_new0(struct connman_nat, 1);
-	if (!nat)
-		goto err;
+	if (!nat) {
+		connman_error("cannot create NAT struct");
+		return -ENOMEM;
+	}
 
 	nat->ipv6_accept_ra = -1;
 	nat->ipv6_forward = -1;
 
 	nat->fw = __connman_firewall_create();
-	if (!nat->fw)
-		goto err;
+	if (!nat->fw) {
+		connman_error("cannot create firewall");
+		g_free(nat);
+		return -ENOMEM;
+	}
 
 	nat->ipv6_accept_ra = __connman_ipconfig_ipv6_get_accept_ra(ipconfig);
 	nat->ipv6_forward = __connman_ipconfig_ipv6_get_forwarding(ipconfig)
 									? 1 : 0;
 
 	err = __connman_ipconfig_ipv6_set_accept_ra(ipconfig, 2);
-	if (err)
+	if (err) {
+		connman_error("failed to set RA %d", err);
 		goto err;
+	}
 
 	err = __connman_ipconfig_ipv6_set_forwarding(ipconfig, true);
-	if (err)
+	if (err) {
+		connman_error("failed to set IPv6 forwarding");
 		goto err;
+	}
+
+	ifname = connman_inet_ifname(__connman_ipconfig_get_index(ipconfig));
+	if (!ifname) {
+		connman_error("no interface name for index %d",
+					__connman_ipconfig_get_index(ipconfig));
+		goto err;
+	}
+
+	rule = g_strdup_printf("-i %s -o %s -j ACCEPT", ifname_in, ifname);
 
 	/* Enable forward on IPv6 */
 	err = __connman_firewall_add_ipv6_rule(nat->fw, NULL, NULL, "filter",
-				"FORWARD", "-j ACCEPT");
+							"FORWARD", rule);
+	g_free(rule);
 	if (err < 0) {
-		connman_warn("Failed to set FORWARD rule on ip6tables");
+		connman_error("Failed to set FORWARD rule on ip6tables");
 		goto err;
 	}
 
 	err = __connman_firewall_enable(nat->fw);
 	if (err < 0) {
-		connman_warn("Failed to enable firewall");
+		connman_error("Failed to enable firewall");
 		goto err;
 	}
-
-	ifname = connman_inet_ifname(__connman_ipconfig_get_index(ipconfig));
-	if (!ifname)
-		goto err;
 
 	g_hash_table_replace(nat_hash, ifname, nat);
 
@@ -228,7 +245,7 @@ err:
 		g_free(nat);
 	}
 
-	return -EINVAL;
+	return err;
 }
 
 void __connman_nat_disable(const char *name)
