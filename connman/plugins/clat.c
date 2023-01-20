@@ -473,7 +473,7 @@ static int assign_clat_prefix(struct clat_data *data, char **results)
 	return err;
 }
 
-static bool dotest = false;
+static bool dotest = true;
 
 static void prefix_query_cb(GResolvResultStatus status,
 					char **results, gpointer user_data)
@@ -766,7 +766,7 @@ static int clat_task_start_tayga(struct clat_data *data)
 	connman_inet_set_address(index, ipaddress);
 
 	//$ ip -4 route add default dev clat
-	connman_inet_add_host_route(index, IPv4ADDR, NULL);
+	connman_inet_add_network_route(index, IPv4ADDR, NULL, IPv4ADDRMASK);
 	connman_ipaddress_free(ipaddress);
 
 	if (create_task(data))
@@ -858,7 +858,7 @@ static int clat_task_post_configure(struct clat_data *data)
 
 	// TODO check return values
 	ipaddress = connman_ipaddress_alloc(AF_INET);
-	connman_inet_del_host_route(index, IPv4ADDR);
+	connman_inet_del_network_route(index, IPv4ADDR);
 	connman_ipaddress_set_ipv4(ipaddress, IPv4ADDR, IPv4ADDRMASK, NULL);
 	connman_inet_clear_address(index, ipaddress);
 	connman_inet_del_ipv6_network_route(index, data->address,
