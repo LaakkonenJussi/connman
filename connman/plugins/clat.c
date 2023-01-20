@@ -813,8 +813,14 @@ void clat_dad_cb(struct nd_neighbor_advert *reply, unsigned int length,
 					struct in6_addr *addr,
 					void *user_data)
 {
+	char ipv6_addr[INET6_ADDRSTRLEN];
+
 	// This reply can be ignored
-	DBG("got reply %p", reply);
+	DBG("got reply %p length %u", reply, length);
+
+	if (addr && inet_ntop(AF_INET6, addr, ipv6_addr, INET6_ADDRSTRLEN))
+		DBG("IPv6 address %s", ipv6_addr);
+
 	return;
 }
 
