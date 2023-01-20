@@ -665,15 +665,19 @@ static void modem_ipaddress_setup(struct modem_data *md)
 		DBG("IPv4 only, set IPv6 off");
 		service = connman_service_lookup_from_network(md->network);
 		ipconfig = connman_service_get_ipconfig(service, AF_INET6);
-		connman_network_set_ipv6_method(md->network,
-						CONNMAN_IPCONFIG_METHOD_OFF);
+		/* This may interfere with ofono
+		 * connman_network_set_ipv6_method(md->network,
+		 * 				CONNMAN_IPCONFIG_METHOD_OFF);
+		 */
 		break;
 	case OFONO_CONNCTX_PROTOCOL_IPV6:
 		DBG("IPv6 only, set IPv4 off");
 		service = connman_service_lookup_from_network(md->network);
 		ipconfig = connman_service_get_ipconfig(service, AF_INET);
-		connman_network_set_ipv4_method(md->network,
-						CONNMAN_IPCONFIG_METHOD_OFF);
+		/* This may interfere with ofono
+		 * connman_network_set_ipv4_method(md->network,
+		 * 				CONNMAN_IPCONFIG_METHOD_OFF);
+		 */
 		break;
 	case OFONO_CONNCTX_PROTOCOL_DUAL:
 	case OFONO_CONNCTX_PROTOCOL_NONE:
