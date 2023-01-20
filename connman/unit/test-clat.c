@@ -86,10 +86,27 @@ int connman_inet_add_host_route(int index, const char *host,
 						const char *gateway)
 {
 	g_assert_cmpint(index, >, 0);
+	g_assert(host);
+	return 0;
+}
+
+int connman_inet_add_network_route(int index, const char *host,
+						const char *gateway,
+						const char *netmask)
+{
+	g_assert_cmpint(index, >, 0);
+	g_assert(host);
 	return 0;
 }
 
 int connman_inet_del_host_route(int index, const char *host)
+{
+	g_assert_cmpint(index, >, 0);
+	g_assert(host);
+	return 0;
+}
+
+int connman_inet_del_network_route(int index, const char *host)
 {
 	g_assert_cmpint(index, >, 0);
 	g_assert(host);
@@ -179,19 +196,31 @@ int connman_task_stop(struct connman_task *task)
 	return 0;
 }
 
+struct connman_ipconfig {
+	struct connman_ipaddress *ipaddress;
+	enum connman_ipconfig_type type;
+	enum connman_ipconfig_method method;
+};
+
 enum connman_ipconfig_type connman_ipconfig_get_config_type(
 					struct connman_ipconfig *ipconfig)
 {
 	g_assert(ipconfig);
 
-	return CONNMAN_IPCONFIG_TYPE_IPV4;
+	return ipconfig->type;
 }
 
 struct connman_ipaddress *connman_ipconfig_get_ipaddress(
 					struct connman_ipconfig *ipconfig)
 {
 	g_assert(ipconfig);
-	return NULL;
+	return ipconfig->ipaddress;
+}
+
+enum connman_ipconfig_method get_method(struct connman_ipconfig *ipconfig)
+{
+	g_assert(ipconfig);
+	return ipconfig->method;
 }
 
 int connman_nat6_prepare(struct connman_ipconfig *ipconfig)
@@ -205,23 +234,47 @@ void connman_nat6_restore(struct connman_ipconfig *ipconfig)
 	g_assert(ipconfig);
 }
 
+static struct connman_notifier *n;
 
 int connman_notifier_register(struct connman_notifier *notifier)
 {
 	g_assert(notifier);
+	g_assert_null(n);
+	n = notifier;
 	return 0;
 }
 
 void connman_notifier_unregister(struct connman_notifier *notifier)
 {
 	g_assert(notifier);
+	g_assert(notifier == n);
+	n = NULL;
 }
+
+struct connman_service {
+	char *identifier;
+	char *path;
+	enum connman_service_state state;
+	enum connman_service_type type;
+	char *name;
+	struct connman_ipconfig *ipconfig_ipv4;
+	struct connman_ipconfig *ipconfig_ipv6;
+	struct connman_network *network;
+};
+
+static struct connman_service *def_service = NULL;
 
 struct connman_ipconfig *connman_service_get_ipconfig(
 					struct connman_service *service,
 					int family)
 {
 	g_assert(service);
+	if (family == AF_INET)
+		return service->ipconfig_ipv4;
+
+	if (family == AF_INET6)
+		return service->ipconfig_ipv6;
+
 	return NULL;
 }
 
@@ -230,18 +283,29 @@ enum connman_ipconfig_method connman_service_get_ipconfig_method(
 					enum connman_ipconfig_type type)
 {
 	g_assert(service);
+
+	switch (type) {
+	case CONNMAN_IPCONFIG_TYPE_IPV4:
+		return get_method(service->ipconfig_ipv4);
+	case CONNMAN_IPCONFIG_TYPE_IPV6:
+		return get_method(service->ipconfig_ipv6);
+	case CONNMAN_IPCONFIG_TYPE_ALL:
+	case CONNMAN_IPCONFIG_TYPE_UNKNOWN:
+		break;
+	}
+
 	return CONNMAN_IPCONFIG_TYPE_UNKNOWN;
 }
 
-
 struct connman_service *connman_service_get_default(void)
 {
-	return NULL;
+	return def_service;
 }
 
 const char *connman_service_get_identifier(struct connman_service *service)
 {
 	g_assert(service);
+	return service->identifier;
 	return NULL;
 }
 
@@ -250,21 +314,21 @@ enum connman_service_type connman_service_get_type(
 					struct connman_service *service)
 {
 	g_assert(service);
-	return CONNMAN_SERVICE_TYPE_UNKNOWN;
+	return service->type;
 }
 
 enum connman_service_state connman_service_get_state(
 					struct connman_service *service)
 {
 	g_assert(service);
-	return CONNMAN_SERVICE_STATE_IDLE;
+	return service->state;
 }
 
 struct connman_network *connman_service_get_network(
 					struct connman_service *service)
 {
 	g_assert(service);
-	return NULL;
+	return service->network;
 }
 
 
@@ -301,9 +365,22 @@ void g_resolv_unref(GResolv *resolv)
 guint g_resolv_lookup_hostname(GResolv *resolv, const char *hostname,
 				GResolvResultFunc func, gpointer user_data)
 {
+	gchar **r;
+
 	g_assert(resolv);
 	g_assert(hostname);
 	g_assert(func);
+
+	g_assert_cmpstr(hostname, ==, "ipv4only.arpa");
+
+	r = g_new0(char*, 4);
+	r[0] = g_strdup("64:ff9b::c000:aa");
+	r[1] = g_strdup("64:ff9b::c000:ab");
+	r[2] = g_strdup("64:ff9b::/96");
+	r[3] = g_strdup("dead:beef:0000:feed:abba:cabb:1234:");
+
+	g_strfreev(r);
+
 	return 0;
 }
 
@@ -320,19 +397,28 @@ bool g_resolv_set_address_family(GResolv *resolv, int family)
 	return true;
 }
 
-int connman_rtnl_register(struct connman_rtnl *r)
+static struct connman_rtnl *r = NULL;
+
+int connman_rtnl_register(struct connman_rtnl *rtnl)
 {
-	g_assert(r);
+	g_assert(rtnl);
+	g_assert_null(r);
+	r = rtnl;
 	return 0;
 }
 
-void connman_rtnl_unregister(struct connman_rtnl *r)
+void connman_rtnl_unregister(struct connman_rtnl *rtnl)
 {
-	g_assert(r);
+	g_assert(rtnl);
+	g_assert(rtnl == r);
+	r = NULL;
 }
+
+static bool rtprot_ra = false;
 
 void connman_rtnl_handle_rtprot_ra(bool value)
 {
+	rtprot_ra = value;
 	return;
 }
 
@@ -360,7 +446,16 @@ static GOptionEntry options[] = {
 
 static void clat_plugin_test1()
 {
-	g_assert(true);
+	struct connman_service service = { 0 };
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert_true(rtprot_ra);
+
+	__connman_builtin_clat.exit();
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
 }
 
 
