@@ -147,7 +147,7 @@ static void close_io_channel(struct clat_data *data, GIOChannel *channel)
 		return;
 
 	if (data->out_ch == channel) {
-		DBG("closing stderr");
+		DBG("closing task %p STDOUT", data->task);
 
 		if (data->out_ch_id) {
 			g_source_remove(data->out_ch_id);
@@ -165,7 +165,7 @@ static void close_io_channel(struct clat_data *data, GIOChannel *channel)
 	}
 
 	if (data->err_ch == channel) {
-		DBG("closing stderr");
+		DBG("closing task %p STDERR", data->task);
 
 		if (data->err_ch_id) {
 			g_source_remove(data->err_ch_id);
@@ -285,14 +285,6 @@ static int clat_create_tayga_config(struct clat_data *data)
 }
 
 static int clat_run_task(struct clat_data *data);
-
-static DBusMessage *clat_task_notify(struct connman_task *task,
-					DBusMessage *msg, void *user_data)
-{
-	DBG("task %p notified", task);
-
-	return NULL;
-}
 
 static gboolean remove_resolv(gpointer user_data)
 {
@@ -663,6 +655,7 @@ static int clat_task_pre_configure(struct clat_data *data)
 	unsigned char prefixlen;
 	int left;
 	int pos;
+	int err;
 	int i;
 
 	DBG("");
@@ -707,7 +700,12 @@ static int clat_task_pre_configure(struct clat_data *data)
 	DBG("Address IPv6 prefix %s/%u -> address %s", data->ipv6address,
 					data->ipv6_prefixlen, data->address);
 
-	connman_nat6_prepare(ipconfig);
+	err = connman_nat6_prepare(ipconfig, TAYGA_CLAT_DEVICE);
+	if (err) {
+		connman_warn("CLAT failed to prepare nat and firewall %d", err);
+		return err;
+	}
+
 	clat_create_tayga_config(data);
 
 	if (create_task(data))
@@ -715,9 +713,6 @@ static int clat_task_pre_configure(struct clat_data *data)
 
 	connman_task_add_argument(data->task, "--config", data->config_path);
 	connman_task_add_argument(data->task, "--mktun", NULL);
-	if (connman_task_set_notify(data->task, "tayga", clat_task_notify,
-									data))
-		return -ENOMEM;
 
 	return 0;
 }
@@ -774,10 +769,6 @@ static int clat_task_start_tayga(struct clat_data *data)
 	connman_task_add_argument(data->task, "--config", data->config_path);
 	connman_task_add_argument(data->task, "--nodetach", NULL);
 	connman_task_add_argument(data->task, "-d", NULL);
-
-	if (connman_task_set_notify(data->task, "tayga", clat_task_notify,
-									data))
-		return -EIO;
 
 	return 0;
 }
@@ -870,10 +861,6 @@ static int clat_task_post_configure(struct clat_data *data)
 
 	connman_task_add_argument(data->task, "--config", data->config_path);
 	connman_task_add_argument(data->task, "--rmtun", NULL);
-
-	if (connman_task_set_notify(data->task, "tayga",clat_task_notify,
-									data))
-		return -ENOMEM;
 
 	return 0;
 }
