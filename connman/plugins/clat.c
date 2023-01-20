@@ -81,10 +81,12 @@ struct clat_data {
 
 #define TAYGA_BIN "/usr/local/bin/tayga"
 #define TAYGA_CONF "tayga.conf"
-#define IPv4ADDR "192.168.255.1"
-#define IPv4MAPADDR "192.0.0.4"
+#define TAYGA_IPv4ADDR "192.0.0.2"
+#define TAYGA_CLAT_DEVICE "clat"
+
+#define IPv4ADDR "192.0.0.1"
+#define IPv4ADDRMASK "255.255.255.0"
 #define CLATSUFFIX "c1a7"
-#define CLAT_DEVICE "clat"
 #define PREFIX_QUERY_TIMEOUT 10000 /* 10 seconds */
 #define DAD_TIMEOUT 600000 /* 10 minutes */
 
@@ -218,7 +220,6 @@ static int create_task(struct clat_data *data)
 	return 0;
 }
 
-
 static int destroy_task(struct clat_data *data)
 {
 	int err;
@@ -257,8 +258,8 @@ static int clat_create_tayga_config(struct clat_data *data)
 
 	str = g_string_new("");
 
-	g_string_append_printf(str, "tun-device %s\n", CLAT_DEVICE);
-	g_string_append_printf(str, "ipv4-addr %s\n", IPv4ADDR);
+	g_string_append_printf(str, "tun-device %s\n", TAYGA_CLAT_DEVICE);
+	g_string_append_printf(str, "ipv4-addr %s\n", TAYGA_IPv4ADDR);
 
 	/* IPv6 address is required only when global prefix is in use */
 	if (!g_strcmp0(data->clat_prefix, GLOBAL_PREFIX) &&
@@ -268,7 +269,7 @@ static int clat_create_tayga_config(struct clat_data *data)
 
 	g_string_append_printf(str, "prefix %s/%u\n", data->clat_prefix,
 						data->clat_prefixlen);
-	g_string_append_printf(str, "map %s %s\n", IPv4MAPADDR, data->address);
+	g_string_append_printf(str, "map %s %s\n", IPv4ADDR, data->address);
 
 	buf = g_string_free(str, FALSE);
 
@@ -740,7 +741,7 @@ static int clat_task_start_tayga(struct clat_data *data)
 	int index;
 	//$ ip link set dev clat up
 	// TODO wait for rtnl notify?
-	index = connman_inet_ifindex(CLAT_DEVICE);
+	index = connman_inet_ifindex(TAYGA_CLAT_DEVICE);
 	if (index < 0) {
 		connman_warn("CLAT tayga not up yet?");
 		return -ENODEV;
@@ -751,7 +752,7 @@ static int clat_task_start_tayga(struct clat_data *data)
 	err = connman_inet_ifup(index);
 	if (err && err != -EALREADY) {
 		connman_error("CLAT failed to bring interface %s up",
-								CLAT_DEVICE);
+								TAYGA_CLAT_DEVICE);
 		return err;
 	}
 
@@ -761,11 +762,11 @@ static int clat_task_start_tayga(struct clat_data *data)
 							data->addr_prefixlen);
 	//$ ip address add 192.0.0.4 dev clat
 	ipaddress = connman_ipaddress_alloc(AF_INET);
-	connman_ipaddress_set_ipv4(ipaddress, IPv4MAPADDR, NULL, NULL);
+	connman_ipaddress_set_ipv4(ipaddress, IPv4ADDR, IPv4ADDRMASK, NULL);
 	connman_inet_set_address(index, ipaddress);
 
 	//$ ip -4 route add default dev clat
-	connman_inet_add_host_route(index, IPv4MAPADDR, NULL);
+	connman_inet_add_host_route(index, IPv4ADDR, NULL);
 	connman_ipaddress_free(ipaddress);
 
 	if (create_task(data))
@@ -857,8 +858,8 @@ static int clat_task_post_configure(struct clat_data *data)
 
 	// TODO check return values
 	ipaddress = connman_ipaddress_alloc(AF_INET);
-	connman_inet_del_host_route(index, IPv4MAPADDR);
-	connman_ipaddress_set_ipv4(ipaddress, IPv4MAPADDR, NULL, NULL);
+	connman_inet_del_host_route(index, IPv4ADDR);
+	connman_ipaddress_set_ipv4(ipaddress, IPv4ADDR, IPv4ADDRMASK, NULL);
 	connman_inet_clear_address(index, ipaddress);
 	connman_inet_del_ipv6_network_route(index, data->address,
 							data->addr_prefixlen);
