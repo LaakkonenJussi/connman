@@ -1893,7 +1893,7 @@ int __connman_ipconfig_ipv6_set_accept_ra(struct connman_ipconfig *ipconfig,
 								int value)
 {
 	char *ifname;
-	int err;
+	int err = 0;
 
 	if (!ipconfig || ipconfig->type != CONNMAN_IPCONFIG_TYPE_IPV6)
 		return -EINVAL;
@@ -1902,7 +1902,10 @@ int __connman_ipconfig_ipv6_set_accept_ra(struct connman_ipconfig *ipconfig,
 	if (!ifname)
 		return -ENOENT;
 
-	err = set_ipv6_accept_ra(ifname, value);
+	/* Returns the amount of chars written */
+	if (set_ipv6_accept_ra(ifname, value) != 1)
+		err = -EPERM;
+
 	g_free(ifname);
 
 	return err;
@@ -1930,7 +1933,7 @@ int __connman_ipconfig_ipv6_set_forwarding(struct connman_ipconfig *ipconfig,
 								bool enable)
 {
 	char *ifname;
-	int err;
+	int err = 0;
 
 	if (!ipconfig)
 		return -EINVAL;
@@ -1939,7 +1942,9 @@ int __connman_ipconfig_ipv6_set_forwarding(struct connman_ipconfig *ipconfig,
 	if (!ifname)
 		return -ENOENT;
 
-	err = set_ipv6_forwarding(ifname, enable);
+	if (set_ipv6_forwarding(ifname, enable) != 1)
+		err = -EPERM;
+
 	g_free(ifname);
 
 	return err;
