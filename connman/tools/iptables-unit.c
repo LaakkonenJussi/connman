@@ -329,12 +329,24 @@ int __connman_ipconfig_ipv6_set_accept_ra(struct connman_ipconfig *ipconfig,
 {
 	return 0;
 }
+
 bool __connman_ipconfig_ipv6_get_forwarding(struct connman_ipconfig *ipconfig)
+{
+	return true;
+}
+
+int __connman_ipconfig_ipv6_set_forwarding(struct connman_ipconfig *ipconfig,
+								bool enable)
 {
 	return 0;
 }
 
-int __connman_ipconfig_ipv6_set_forwarding(struct connman_ipconfig *ipconfig,
+bool __connman_ipconfig_ipv6_get_ndproxy(struct connman_ipconfig *ipconfig)
+{
+	return true;
+}
+
+int __connman_ipconfig_ipv6_set_ndproxy(struct connman_ipconfig *ipconfig,
 								bool enable)
 {
 	return 0;
