@@ -85,7 +85,6 @@ struct clat_data {
 #define TAYGA_CLAT_DEVICE "clat"
 
 #define IPv4ADDR "192.0.0.1"
-#define IPv4ADDRMASK "255.255.255.0"
 #define CLATSUFFIX "c1a7"
 #define PREFIX_QUERY_TIMEOUT 10000 /* 10 seconds */
 #define DAD_TIMEOUT 600000 /* 10 minutes */
@@ -762,11 +761,11 @@ static int clat_task_start_tayga(struct clat_data *data)
 							data->addr_prefixlen);
 	//$ ip address add 192.0.0.4 dev clat
 	ipaddress = connman_ipaddress_alloc(AF_INET);
-	connman_ipaddress_set_ipv4(ipaddress, IPv4ADDR, IPv4ADDRMASK, NULL);
+	connman_ipaddress_set_ipv4(ipaddress, IPv4ADDR, NULL, NULL);
 	connman_inet_set_address(index, ipaddress);
 
 	//$ ip -4 route add default dev clat
-	connman_inet_add_network_route(index, IPv4ADDR, NULL, IPv4ADDRMASK);
+	connman_inet_add_network_route(index, IPv4ADDR, NULL, NULL);
 	connman_ipaddress_free(ipaddress);
 
 	if (create_task(data))
@@ -859,7 +858,7 @@ static int clat_task_post_configure(struct clat_data *data)
 	// TODO check return values
 	ipaddress = connman_ipaddress_alloc(AF_INET);
 	connman_inet_del_network_route(index, IPv4ADDR);
-	connman_ipaddress_set_ipv4(ipaddress, IPv4ADDR, IPv4ADDRMASK, NULL);
+	connman_ipaddress_set_ipv4(ipaddress, IPv4ADDR, NULL, NULL);
 	connman_inet_clear_address(index, ipaddress);
 	connman_inet_del_ipv6_network_route(index, data->address,
 							data->addr_prefixlen);
