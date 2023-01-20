@@ -35,7 +35,8 @@ extern "C" {
  */
 
 int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
-							const char *ifname_in);
+							const char *ifname_in,
+							bool ndproxy);
 void connman_nat6_restore(struct connman_ipconfig *ipconfig);
 
 #ifdef __cplusplus

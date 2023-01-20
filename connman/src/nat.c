@@ -43,6 +43,7 @@ struct connman_nat {
 	struct firewall_context *fw;
 	int ipv6_forward;
 	int ipv6_accept_ra;
+	int ipv6_ndproxy;
 
 	char *interface;
 };
@@ -160,8 +161,26 @@ err:
 	return -ENOMEM;
 }
 
+static void set_original_ipv6_values(struct connman_nat *nat,
+					struct connman_ipconfig *ipconfig)
+{
+	if (!nat || !ipconfig)
+		return;
+
+	if (nat->ipv6_forward != -1)
+		__connman_ipconfig_ipv6_set_forwarding(ipconfig,
+				nat->ipv6_forward ? true : false);
+	if (nat->ipv6_accept_ra != -1)
+		__connman_ipconfig_ipv6_set_accept_ra(ipconfig,
+				nat->ipv6_accept_ra);
+	if (nat->ipv6_ndproxy != -1)
+		__connman_ipconfig_ipv6_set_ndproxy(ipconfig,
+				nat->ipv6_ndproxy ? true : false);
+}
+
 int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
-							const char *ifname_in)
+							const char *ifname_in,
+							bool enable_ndproxy)
 {
 	struct connman_nat *nat;
 	char *ifname = NULL;
@@ -176,6 +195,7 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 
 	nat->ipv6_accept_ra = -1;
 	nat->ipv6_forward = -1;
+	nat->ipv6_ndproxy = -1;
 
 	nat->fw = __connman_firewall_create();
 	if (!nat->fw) {
@@ -198,6 +218,16 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 	if (err) {
 		connman_error("failed to set IPv6 forwarding");
 		goto err;
+	}
+
+	if (enable_ndproxy) {
+		nat->ipv6_ndproxy = __connman_ipconfig_ipv6_get_ndproxy(
+							ipconfig) ? 1 : 0;
+		err = __connman_ipconfig_ipv6_set_ndproxy(ipconfig, true);
+		if (err) {
+			connman_error("failed to set IPv6 ndproxy");
+			goto err;
+		}
 	}
 
 	ifname = connman_inet_ifname(__connman_ipconfig_get_index(ipconfig));
@@ -235,12 +265,8 @@ err:
 		if (nat->fw)
 			__connman_firewall_destroy(nat->fw);
 
-		if (nat->ipv6_forward != -1)
-			__connman_ipconfig_ipv6_set_forwarding(ipconfig,
-					nat->ipv6_forward ? true : false);
-		if (nat->ipv6_accept_ra != -1)
-			__connman_ipconfig_ipv6_set_accept_ra(ipconfig,
-					nat->ipv6_accept_ra);
+		/* Restore original values */
+		set_original_ipv6_values(nat, ipconfig);
 
 		g_free(nat);
 	}
@@ -283,12 +309,8 @@ void connman_nat6_restore(struct connman_ipconfig *ipconfig)
 	if (nat->fw)
 		__connman_firewall_destroy(nat->fw);
 
-	if (nat->ipv6_forward != -1)
-		__connman_ipconfig_ipv6_set_forwarding(ipconfig,
-					nat->ipv6_forward ? true : false);
-	if (nat->ipv6_accept_ra != -1)
-		__connman_ipconfig_ipv6_set_accept_ra(ipconfig,
-					nat->ipv6_accept_ra);
+	/* Restore original values */
+	set_original_ipv6_values(nat, ipconfig);
 
 	g_hash_table_remove(nat_hash, ifname);
 
