@@ -3267,3 +3267,26 @@ out:
 	close(sk);
 	return ret;
 }
+
+static int ipv6_neigbour_proxy(int index, bool enable, const char *ipv6_address,
+						unsigned char ipv6_prefixlen)
+{
+	if (index < 0 || !ipv6_address)
+		return -EINVAL;
+
+	// TODO Implement this.
+
+	return 0;
+}
+
+int __connman_inet_add_ipv6_neigbour_proxy(int index, const char *ipv6_address,
+						unsigned char ipv6_prefixlen)
+{
+	return ipv6_neigbour_proxy(index, true, ipv6_address, ipv6_prefixlen);
+}
+
+int __connman_inet_del_ipv6_neigbour_proxy(int index, const char *ipv6_address,
+						unsigned char ipv6_prefixlen)
+{
+	return ipv6_neigbour_proxy(index, false, ipv6_address, ipv6_prefixlen);
+}
