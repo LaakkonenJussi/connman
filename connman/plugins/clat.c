@@ -216,6 +216,8 @@ static int create_task(struct clat_data *data)
 	if (!data->task)
 		return -ENOMEM;
 
+	DBG("task %p", data->task);
+
 	return 0;
 }
 
@@ -225,6 +227,8 @@ static int destroy_task(struct clat_data *data)
 
 	if (!data || !data->task)
 		return -ENOENT;
+
+	DBG("task %p", data->task);
 
 	if (data->out_ch)
 		close_io_channel(data, data->out_ch);
@@ -251,7 +255,8 @@ static int clat_create_tayga_config(struct clat_data *data)
 	int err;
 
 	g_free(data->config_path);
-	data->config_path = g_build_filename(RUNSTATEDIR, "connman", TAYGA_CONF, NULL);
+	data->config_path = g_build_filename(RUNSTATEDIR, "connman",
+						TAYGA_CONF, NULL);
 
 	DBG("config %s", data->config_path);
 
@@ -527,6 +532,11 @@ static void prefix_query_cb(GResolvResultStatus status,
 		break;
 	}
 
+	if (data->state == CLAT_STATE_FAILURE) {
+		DBG("CLAT already in failure state, not transitioning state");
+		return;
+	}
+
 	/*
 	 * Do state transition only when doing initial query or when changing
 	 * state.
@@ -672,14 +682,19 @@ static int clat_task_pre_configure(struct clat_data *data)
 		return -ENOENT;
 	}
 
-	connman_ipaddress_get_ip(ipaddress, &address, &prefixlen);
+	err = connman_ipaddress_get_ip(ipaddress, &address, &prefixlen);
+	if (err || !address) {
+		DBG("No IPv6 address set in ipaddress %p", ipaddress);
+		return -ENOENT;
+	}
+
 	DBG("IPv6 %s prefixlen %u", address, prefixlen);
 	data->ipv6address = g_strdup(address);
 	data->ipv6_prefixlen = prefixlen;
 
 	tokens = g_strsplit(address, ":", 8);
 	if (!tokens) {
-		connman_error("CLAT: failed to tokenize IPv6 address");
+		connman_error("CLAT failed to tokenize IPv6 address");
 		return -ENOMEM;
 	}
 
@@ -700,7 +715,7 @@ static int clat_task_pre_configure(struct clat_data *data)
 	DBG("Address IPv6 prefix %s/%u -> address %s", data->ipv6address,
 					data->ipv6_prefixlen, data->address);
 
-	err = connman_nat6_prepare(ipconfig, TAYGA_CLAT_DEVICE);
+	err = connman_nat6_prepare(ipconfig, TAYGA_CLAT_DEVICE, true);
 	if (err) {
 		connman_warn("CLAT failed to prepare nat and firewall %d", err);
 		return err;
@@ -934,7 +949,8 @@ static int clat_run_task(struct clat_data *data)
 	case CLAT_STATE_PREFIX_QUERY:
 		err = clat_task_pre_configure(data);
 		if (err) {
-			connman_error("CLAT failed create pre-configure task");
+			connman_error("CLAT failed to create pre-configure "
+								"task");
 			break;
 		}
 
@@ -964,7 +980,8 @@ static int clat_run_task(struct clat_data *data)
 	case CLAT_STATE_STOPPED:
 		err = clat_task_post_configure(data);
 		if (err) {
-			connman_error("CLAT failed to create post-configure task");
+			connman_error("CLAT failed to create post-configure "
+								"task");
 			break;
 		}
 
@@ -1012,10 +1029,7 @@ static int clat_run_task(struct clat_data *data)
 		connman_error("CLAT task failed to run, error %d/%s",
 							err, strerror(-err));
 		data->state = CLAT_STATE_FAILURE;
-
-		if (data->task)
-			connman_task_destroy(data->task);
-		data->task = NULL;
+		destroy_task(data);
 	} else {
 		data->out_ch = g_io_channel_unix_new(fd_out);
 		data->out_ch_id = g_io_add_watch(data->out_ch,
@@ -1314,6 +1328,11 @@ static void clat_service_state_changed(struct connman_service *service,
 		if (service != data->service)
 			return;
 
+		if (connman_service_get_default() != data->service) {
+			DBG("CLAT service is not default service");
+			return;
+		}
+
 		if (is_running(data->state)) {
 			DBG("CLAT is already running in state %d/%s",
 						data->state,
@@ -1326,6 +1345,11 @@ static void clat_service_state_changed(struct connman_service *service,
 	case CONNMAN_SERVICE_STATE_ONLINE:
 		if (service != data->service)
 			return;
+
+		if (connman_service_get_default() != data->service) {
+			DBG("CLAT service is not default service");
+			return;
+		}
 
 		if (!is_running(data->state)) {
 			DBG("online, CLAT is not running yet, start it first");
