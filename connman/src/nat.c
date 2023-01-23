@@ -358,19 +358,28 @@ void connman_nat6_restore(struct connman_ipconfig *ipconfig)
 	struct connman_nat *nat;
 	char *ifname;
 
+	DBG("ipconfig %p", ipconfig);
+
 	if (!ipconfig)
 		return;
 
 	ifname = connman_inet_ifname(__connman_ipconfig_get_index(ipconfig));
-	if (!ifname)
+	if (!ifname) {
+		DBG("no interface name, cannot be removed");
 		return;
+	}
 
 	nat = g_hash_table_lookup(nat_hash, ifname);
-	if (!nat)
+	if (!nat) {
+		DBG("no interface %s found in hash", ifname);
+		g_free(ifname);
 		return;
+	}
 
-	if (nat->fw)
+	if (nat->fw) {
+		DBG("clear firewall");
 		__connman_firewall_destroy(nat->fw);
+	}
 
 	/* Restore original values */
 	set_original_ipv6_values(nat, ipconfig);
