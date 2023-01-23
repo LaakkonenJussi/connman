@@ -77,26 +77,109 @@ struct clat_data {
 	int err_ch_id;
 	GIOChannel *out_ch;
 	GIOChannel *err_ch;
+
+	int task_last_exit_code;
 };
 
-#define TAYGA_BIN "/usr/local/bin/tayga"
-#define TAYGA_CONF "tayga.conf"
-#define TAYGA_IPv4ADDR "192.0.0.2"		/* from RFC 7335 */
-#define TAYGA_CLAT_DEVICE "clat"
+#define DEFAULT_TAYGA_BIN		"/usr/local/bin/tayga"
+#define TAYGA_CLAT_DEVICE		"clat"
+#define TAYGA_CONF			"tayga.conf"
+#define TAYGA_IPv4ADDR			"192.0.0.2"	/* from RFC 7335 */
+#define CLAT_IPv4ADDR			"192.0.0.1"	/* from RFC 7335 */
+#define IPv4ADDR_NETMASK		29		/* from RFC 7335 */
+#define CLAT_SUFFIX			"c1a7"
 
-#define CLAT_IPv4ADDR "192.0.0.1"		/* from RFC 7335 */
-#define CLAT_SUFFIX "c1a7"
-#define PREFIX_QUERY_TIMEOUT 10000		/* 10 seconds */
-#define DAD_TIMEOUT 600000			/* 10 minutes */
+#define PREFIX_DAD_TIMEOUT		10000		/* 10 seconds */
+#define DAD_TIMEOUT			600000		/* 10 minutes */
 
-static const char *GLOBAL_PREFIX = "64:ff9b::";
+static const char GLOBAL_PREFIX[] = "64:ff9b::";
 static const unsigned char GLOBAL_PREFIXLEN = 96;
+
+static struct {
+	char *tayga_bin;
+	bool dad_enabled;
+	bool resolv_always_succeeds;
+} clat_settings = {
+	.tayga_bin = NULL,
+
+	/* Use DAD for protecting the address, in android this is done */
+	.dad_enabled = true,
+
+	/* Resolv result always sets global prefix if fails */
+	.resolv_always_succeeds = false,
+};
+
+#define CLATCONFIGFILE			CONFIGDIR "/clat.conf"
+#define CONF_TAYGA_BIN			"Tayga"
+#define CONF_DAD_ENABLED		"EnableDAD"
+#define CONF_RESOLV_ALWAYS_SUCCEEDS	"ResolvAlwaysSucceeds"
 
 struct clat_data *__data = NULL;
 
-static struct clat_data *get_data()
+static GKeyFile *load_clat_config(const char *file)
 {
-	return __data;
+	GError *err = NULL;
+	GKeyFile *keyfile;
+
+	keyfile = g_key_file_new();
+
+	g_key_file_set_list_separator(keyfile, ',');
+
+	if (!g_key_file_load_from_file(keyfile, file, 0, &err)) {
+		if (err->code != G_FILE_ERROR_NOENT) {
+			connman_error("Parsing %s failed: %s", file,
+								err->message);
+		}
+
+		g_error_free(err);
+		g_key_file_unref(keyfile);
+		return NULL;
+	}
+
+	DBG("load config %s", file);
+
+	return keyfile;
+}
+
+static void parse_clat_config(GKeyFile *config)
+{
+	GError *error = NULL;
+	bool boolean;
+	char *str;
+	const char *group = "CLAT";
+
+	if (!config) {
+		DBG("No CLAT config was found, nothing to parse");
+		return;
+	}
+
+	DBG("parsing config %p", config);
+
+	str = g_key_file_get_string(config, group, CONF_TAYGA_BIN, &error);
+	if (!error)
+		clat_settings.tayga_bin = g_strdup(str);
+	else
+		clat_settings.tayga_bin = g_strdup(DEFAULT_TAYGA_BIN);
+
+	boolean = g_key_file_get_boolean(config, group, CONF_DAD_ENABLED,
+						&error);
+	if (!error)
+		clat_settings.dad_enabled = boolean;
+
+	g_clear_error(&error);
+
+	boolean = g_key_file_get_boolean(config, group,
+						CONF_RESOLV_ALWAYS_SUCCEEDS,
+						&error);
+	if (!error)
+		clat_settings.resolv_always_succeeds = boolean;
+
+	g_clear_error(&error);
+}
+
+static void clear_clat_config(void)
+{
+	g_free(clat_settings.tayga_bin);
 }
 
 static bool is_running(enum clat_state state)
@@ -212,7 +295,7 @@ static int create_task(struct clat_data *data)
 	if (!data)
 		return -ENOENT;
 
-	data->task = connman_task_create(TAYGA_BIN, NULL, data);
+	data->task = connman_task_create(clat_settings.tayga_bin, NULL, data);
 	if (!data->task)
 		return -ENOMEM;
 
@@ -230,11 +313,11 @@ static int destroy_task(struct clat_data *data)
 
 	DBG("task %p", data->task);
 
-	if (data->out_ch)
+	/*if (data->out_ch)
 		close_io_channel(data, data->out_ch);
 
 	if (data->err_ch)
-		close_io_channel(data, data->err_ch);
+		close_io_channel(data, data->err_ch);*/
 
 	err = connman_task_stop(data->task);
 	if (err) {
@@ -245,6 +328,63 @@ static int destroy_task(struct clat_data *data)
 	connman_task_destroy(data->task);
 	data->task = NULL;
 	return 0;
+}
+
+static struct clat_data *get_data()
+{
+	return __data;
+}
+
+static void clat_data_clear(struct clat_data *data)
+{
+	if (!data)
+		return;
+
+	DBG("data %p", data);
+
+	destroy_task(data);
+	g_free(data->isp_64gateway);
+	data->isp_64gateway = NULL;
+	g_free(data->config_path);
+	data->config_path = NULL;
+	g_free(data->clat_prefix);
+	data->clat_prefix = NULL;
+	g_free(data->address);
+	data->address = NULL;
+	g_free(data->ipv6address);
+	data->ipv6address = NULL;
+
+	data->clat_prefixlen = 0;
+	data->addr_prefixlen = 0;
+	data->ipv6_prefixlen = 0;
+	data->ifindex = -1;
+	data->task_last_exit_code = 0;
+}
+
+static void clat_data_free(struct clat_data *data)
+{
+	DBG("");
+
+	if (!data)
+		return;
+
+	clat_data_clear(data);
+	g_free(data);
+}
+
+static struct clat_data *clat_data_init()
+{
+	struct clat_data *data;
+
+	DBG("");
+
+	data = g_new0(struct clat_data, 1);
+	if (!data)
+		return NULL;
+
+	data->ifindex = -1;
+
+	return data;
 }
 
 static int clat_create_tayga_config(struct clat_data *data)
@@ -273,8 +413,19 @@ static int clat_create_tayga_config(struct clat_data *data)
 
 	g_string_append_printf(str, "prefix %s/%u\n", data->clat_prefix,
 						data->clat_prefixlen);
-	g_string_append_printf(str, "map %s %s\n", CLAT_IPv4ADDR,
-						data->address);
+
+	/*
+	 * Man pages state that:
+	 * Creates  a static mapping between RFC 7577 compliant hosts or
+	 * subnets ipv4_address[/length] and ipv6_address[/length] to be used
+	 * when translating IPv4 packets to IPv6 or IPv6 packets to IPv4. If
+	 * /length is not present, the /length after ipv4_address is treated
+	 * as "/32" and that of ipv6_address as "/128".
+	 */
+	g_string_append_printf(str, "map %s %s/%u\n", CLAT_IPv4ADDR,
+						/*IPv4ADDR_NETMASK,*/
+						data->address,
+						data->addr_prefixlen);
 
 	buf = g_string_free(str, FALSE);
 
@@ -470,8 +621,6 @@ static int assign_clat_prefix(struct clat_data *data, char **results)
 	return err;
 }
 
-static bool dotest = true;
-
 static void prefix_query_cb(GResolvResultStatus status,
 					char **results, gpointer user_data)
 {
@@ -489,19 +638,14 @@ static void prefix_query_cb(GResolvResultStatus status,
 	data->resolv_query_id = 0;
 
 	if (status != G_RESOLV_RESULT_STATUS_SUCCESS) {
-
-		err = -EHOSTDOWN;
-
-		/* TODO until the unit tests have been done ... */
-		if (dotest) {
-			gchar **r = g_new0(char*, 4);
-			r[0] = g_strdup("64:ff9b::c000:aa");
-			r[1] = g_strdup("64:ff9b::c000:ab");
-			r[2] = g_strdup(GLOBAL_PREFIX);
-			r[3] = g_strdup_printf("%s/%u", GLOBAL_PREFIX,
-							GLOBAL_PREFIXLEN);
-			err = assign_clat_prefix(data, r);
-			g_strfreev(r);
+		if (clat_settings.resolv_always_succeeds) {
+			DBG("ignore resolv result %d", status);
+			gchar **override = g_new0(char*, 1);
+			override[0] = g_strdup("64:ff9b::/96");
+			err = assign_clat_prefix(data, override);
+			g_strfreev(override);
+		} else {
+			err = -EHOSTDOWN;
 		}
 	} else {
 		DBG("resolv of %s success, parse prefix", WKN_ADDRESS);
@@ -614,7 +758,7 @@ static int clat_task_start_periodic_query(struct clat_data *data)
 		return -EALREADY;
 	}
 
-	data->prefix_query_id = g_timeout_add(PREFIX_QUERY_TIMEOUT,
+	data->prefix_query_id = g_timeout_add(PREFIX_DAD_TIMEOUT,
 							run_prefix_query, data);
 	if (data->prefix_query_id <= 0) {
 		connman_error("CLAT failed to start periodic prefix query");
@@ -656,17 +800,46 @@ static void clat_task_stop_online_check(struct clat_data *data)
 }
 
 
-static int derive_ipv6_address(struct clat_data *data, const char *ipv6_prefix)
+static int derive_ipv6_address(struct clat_data *data, const char *ipv6_addr,
+						unsigned char ipv6_prefixlen)
 {
-	if (!data || !ipv6_prefix)
+	char** tokens;
+	char ipv6prefix[135] = { 0 };
+	int left;
+	int pos;
+	int i;
+
+	DBG("data %p IPv6 address %s/%u", data, ipv6_addr, ipv6_prefixlen);
+
+	if (!data || !ipv6_addr)
 		return -EINVAL;
+
+	tokens = g_strsplit(ipv6_addr, ":", 8);
+	if (!tokens) {
+		connman_error("CLAT failed to tokenize IPv6 address");
+		return -EINVAL;
+	}
+
+	left = 8 - (128 - (int)ipv6_prefixlen) / 16;
+	pos = 0;
+
+	for (i = 0; tokens[i] && i < left; i++) {
+		strncpy(&ipv6prefix[pos], tokens[i], 4);
+		pos += strlen(tokens[i]) + 1; // + ':'
+
+		if (i + 1 < left)
+			ipv6prefix[pos-1] = ':';
+	}
+
+	g_strfreev(tokens);
 
 	/*
 	 * TODO clat daemon made in perl does this a bit more intelligently,
 	 * https://github.com/toreanderson/clatd/blob/master/clatd#L442
 	 * 
 	 */
-	data->address = g_strconcat(ipv6_prefix, "::", CLAT_SUFFIX, NULL);
+	data->address = g_strconcat(ipv6prefix, "::", CLAT_SUFFIX, NULL);
+	data->addr_prefixlen = ipv6_prefixlen;
 
 	return 0;
 }
@@ -675,14 +848,9 @@ static int clat_task_pre_configure(struct clat_data *data)
 {
 	struct connman_ipconfig *ipconfig;
 	struct connman_ipaddress *ipaddress;
-	char** tokens;
-	char ipv6prefix[135] = { 0 };
 	const char *address;
 	unsigned char prefixlen;
-	int left;
-	int pos;
 	int err;
-	int i;
 
 	DBG("");
 
@@ -708,31 +876,13 @@ static int clat_task_pre_configure(struct clat_data *data)
 	data->ipv6address = g_strdup(address);
 	data->ipv6_prefixlen = prefixlen;
 
-	tokens = g_strsplit(address, ":", 8);
-	if (!tokens) {
-		connman_error("CLAT failed to tokenize IPv6 address");
-		return -ENOMEM;
-	}
-
-	left = 8 - (128 - (int)prefixlen) / 16;
-	pos = 0;
-
-	for (i = 0; tokens[i] && i < left; i++) {
-		strncpy(&ipv6prefix[pos], tokens[i], 4);
-		pos += strlen(tokens[i]) + 1; // + ':'
-
-		if (i + 1 < left)
-			ipv6prefix[pos-1] = ':';
-	}
-
-	g_strfreev(tokens);
-
-	err = derive_ipv6_address(data, ipv6prefix);
+	err = derive_ipv6_address(data, address, prefixlen);
 	if (err) {
 		connman_error("CLAT failed to derive IPv6 address from %s",
-						ipv6prefix);
+						address);
 		return err;
 	}
+
 	DBG("Address IPv6 prefix %s/%u -> address %s", data->ipv6address,
 					data->ipv6_prefixlen, data->address);
 
@@ -764,9 +914,34 @@ $ ip -4 route add default dev clat
 $ tayga
 */
 
+/* TODO add this to ipaddress.c as plugins/vpn.c uses this */
+static char *cidr_to_str(unsigned char cidr_netmask)
+{
+	struct in_addr netmask_in;
+	in_addr_t addr;
+	char netmask[INET_ADDRSTRLEN] = { 0 };
+	unsigned char prefix_len = 32;
+
+	if (cidr_netmask && cidr_netmask <= prefix_len)
+		prefix_len = cidr_netmask;
+
+	addr = 0xffffffff << (32 - prefix_len);
+	netmask_in.s_addr = htonl(addr);
+
+	if (!inet_ntop(AF_INET, &netmask_in, netmask, INET_ADDRSTRLEN)) {
+		connman_error("failed to convert CIDR %u", cidr_netmask);
+		return NULL;
+	}
+
+	DBG("CIDR %u to netmask %s", cidr_netmask, netmask);
+
+	return g_strdup(netmask);
+}
+
 static int clat_task_start_tayga(struct clat_data *data)
 {
 	struct connman_ipaddress *ipaddress;
+	char *netmask;
 	int err;
 	int index;
 	//$ ip link set dev clat up
@@ -782,7 +957,7 @@ static int clat_task_start_tayga(struct clat_data *data)
 	err = connman_inet_ifup(index);
 	if (err && err != -EALREADY) {
 		connman_error("CLAT failed to bring interface %s up",
-								TAYGA_CLAT_DEVICE);
+							TAYGA_CLAT_DEVICE);
 		return err;
 	}
 
@@ -790,14 +965,16 @@ static int clat_task_start_tayga(struct clat_data *data)
 	// TODO default route or...?
 	connman_inet_add_ipv6_network_route(index, data->address, NULL,
 							data->addr_prefixlen);
-	//$ ip address add 192.0.0.4 dev clat
+	//$ ip address add 192.0.0.2 dev clat
+	netmask = cidr_to_str(IPv4ADDR_NETMASK);
 	ipaddress = connman_ipaddress_alloc(AF_INET);
-	connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, NULL, NULL);
+	connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, netmask, NULL);
 	connman_inet_set_address(index, ipaddress);
 
 	//$ ip -4 route add default dev clat
-	connman_inet_add_network_route(index, CLAT_IPv4ADDR, NULL, NULL);
+	connman_inet_add_network_route(index, CLAT_IPv4ADDR, NULL, netmask);
 	connman_ipaddress_free(ipaddress);
+	g_free(netmask);
 
 	if (create_task(data))
 		return -ENOMEM;
@@ -852,6 +1029,11 @@ static int clat_task_start_dad(struct clat_data *data)
 {
 	DBG("");
 
+	if (!clat_settings.dad_enabled) {
+		DBG("DAD disabled by config");
+		return 0;
+	}
+
 	data->dad_id = g_timeout_add(DAD_TIMEOUT, clat_task_run_dad, data);
 
 	if (data->dad_id <= 0) {
@@ -876,14 +1058,21 @@ static int clat_task_stop_dad(struct clat_data *data)
 
 static int clat_task_post_configure(struct clat_data *data)
 {
+	struct connman_ipconfig *ipconfig;
 	struct connman_ipaddress *ipaddress;
-
+	char *netmask;
 	int index;
+
+	ipconfig = connman_service_get_ipconfig(data->service, AF_INET6);
+	if (ipconfig)
+		connman_nat6_restore(ipconfig);
+
 	//$ ip link set dev clat up
 	// TODO wait for rtnl notify?
-	index = connman_inet_ifindex("clat");
+	index = connman_inet_ifindex(TAYGA_CLAT_DEVICE);
 	if (index < 0) {
-		connman_warn("CLAT tayga not up, nothing to do");
+		DBG("CLAT tayga interface not up, nothing to do");
+		return -ENODEV;
 	}
 
 	DBG("");
@@ -891,12 +1080,14 @@ static int clat_task_post_configure(struct clat_data *data)
 	// TODO check return values
 	ipaddress = connman_ipaddress_alloc(AF_INET);
 	connman_inet_del_network_route(index, CLAT_IPv4ADDR);
-	connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, NULL, NULL);
+	netmask = cidr_to_str(IPv4ADDR_NETMASK);
+	connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, netmask, NULL);
 	connman_inet_clear_address(index, ipaddress);
 	connman_inet_del_ipv6_network_route(index, data->address,
 							data->addr_prefixlen);
 	connman_inet_ifdown(index);
 	connman_ipaddress_free(ipaddress);
+	g_free(netmask);
 
 	if (create_task(data))
 		return -ENOMEM;
@@ -911,23 +1102,20 @@ static void clat_task_exit(struct connman_task *task, int exit_code,
 								void *user_data)
 {
 	struct clat_data *data = user_data;
+	int err;
 
 	DBG("state %d/%s", data->state, state2string(data->state));
 
-	if (exit_code) {
+	if (exit_code)
 		connman_warn("CLAT task failed with code %d", exit_code);
-		data->state = CLAT_STATE_FAILURE;
-	}
+	data->task_last_exit_code = exit_code;
 
 	if (task != data->task) {
 		connman_warn("CLAT task differs, nothing done");
 		return;
 	}
 
-	if (data->task) {
-		connman_task_destroy(data->task);
-		data->task = NULL;
-	}
+	destroy_task(data);
 
 	switch (data->state) {
 	case CLAT_STATE_IDLE:
@@ -935,13 +1123,19 @@ static void clat_task_exit(struct connman_task *task, int exit_code,
 	case CLAT_STATE_FAILURE:
 		DBG("CLAT task exited in state %d/%s", data->state,
 						state2string(data->state));
-		return;
+		break;
 	case CLAT_STATE_PREFIX_QUERY:
 	case CLAT_STATE_PRE_CONFIGURE:
 	case CLAT_STATE_RUNNING:
-		DBG("run next state %d/%s", data->state + 1 ,
+		if (data->task_last_exit_code)
+			data->state = CLAT_STATE_FAILURE;
+		else
+			DBG("run next state %d/%s", data->state + 1,
 						state2string(data->state + 1));
-		clat_run_task(data);
+
+		err = clat_run_task(data);
+		if (err && err != -EALREADY)
+			connman_error("failed to run CLAT, error %d", err);
 		return;
 	case CLAT_STATE_POST_CONFIGURE:
 		DBG("CLAT process ended");
@@ -949,8 +1143,14 @@ static void clat_task_exit(struct connman_task *task, int exit_code,
 		break;
 	case CLAT_STATE_RESTART:
 		DBG("CLAT task return when restarting");
-		break;
+		return;
 	}
+
+	/*
+	 * Not continuing with running task or handling restart, clear all data
+	 * in case of terminating failure or when stopping clat.
+	 */
+	clat_data_clear(data);
 }
 
 static int clat_run_task(struct clat_data *data)
@@ -1005,17 +1205,18 @@ static int clat_run_task(struct clat_data *data)
 	/* If either running or stopped state and run is called do cleanup */
 	case CLAT_STATE_RUNNING:
 	case CLAT_STATE_STOPPED:
+		clat_task_stop_periodic_query(data);
+		clat_task_stop_dad(data);
+		clat_task_stop_online_check(data);
+
 		err = clat_task_post_configure(data);
 		if (err) {
 			connman_error("CLAT failed to create post-configure "
 								"task");
 			break;
 		}
-
 		data->state = CLAT_STATE_POST_CONFIGURE;
-		clat_task_stop_periodic_query(data);
-		clat_task_stop_dad(data);
-		clat_task_stop_online_check(data);
+
 		break;
 	case CLAT_STATE_POST_CONFIGURE:
 		connman_warn("CLAT run task called in post-configure state");
@@ -1025,13 +1226,23 @@ static int clat_run_task(struct clat_data *data)
 		DBG("CLAT entered failure state, stop all that is running");
 
 		destroy_task(data);
+
+		/* Do post configure if the interface is up */
+		err = clat_task_post_configure(data);
+		if (err && err != -ENODEV)
+			connman_error("CLAT failed to create post-configure "
+						"task in failure state");
+
 		clat_task_stop_periodic_query(data);
 		clat_task_stop_dad(data);
 		clat_task_stop_online_check(data);
 
 		/* Remain in failure state, can be started via clat_start(). */
 		data->state = CLAT_STATE_FAILURE;
-		return 0;
+		if (err)
+			return err;
+
+		break;
 	case CLAT_STATE_RESTART:
 		destroy_task(data);
 
@@ -1044,6 +1255,15 @@ static int clat_run_task(struct clat_data *data)
 		}
 
 		data->state = CLAT_STATE_IDLE;
+		break;
+	}
+
+	if (data->task_last_exit_code) {
+		DBG("CLAT run task aborted, last task run exited with %d",
+						data->task_last_exit_code);
+		data->state = CLAT_STATE_FAILURE;
+		clat_data_clear(data);
+		return 0;
 	}
 
 	if (!err) {
@@ -1091,23 +1311,18 @@ static int clat_start(struct clat_data *data)
 
 static int clat_stop(struct clat_data *data)
 {
+	struct connman_ipconfig *ipconfig;
 	int err;
-
-	DBG("state %d/%s", data->state, state2string(data->state));
 
 	if (!data)
 		return -EINVAL;
 
+	DBG("state %d/%s", data->state, state2string(data->state));
+
 	if (!data->task)
 		return 0;
 
-	struct connman_ipconfig *ipconfig;
-
 	destroy_task(data);
-
-	ipconfig = connman_service_get_ipconfig(data->service, AF_INET6);
-	if (ipconfig)
-		connman_nat6_restore(ipconfig);
 
 	/* Run as stopped -> does cleanup */
 	data->state = CLAT_STATE_STOPPED;
@@ -1442,44 +1657,20 @@ static struct connman_notifier clat_notifier = {
 	.service_state_changed	= clat_service_state_changed,
 };
 
-static void clat_free_data(struct clat_data *data)
-{
-	DBG("");
-
-	if (!data)
-		return;
-
-	destroy_task(data);
-	g_free(data->config_path);
-	g_free(data->clat_prefix);
-	g_free(data->address);
-	g_free(data->ipv6address);
-
-	g_free(data);
-}
-
-static struct clat_data *clat_init_data()
-{
-	struct clat_data *data;
-
-	DBG("");
-
-	data = g_new0(struct clat_data, 1);
-	if (!data)
-		return NULL;
-
-	data->ifindex = -1;
-
-	return data;
-}
-
 static int clat_init(void)
 {
+	GKeyFile *config;
 	int err;
 
 	DBG("");
 
-	__data = clat_init_data();
+	config = load_clat_config(CLATCONFIGFILE);
+	if (config) {
+		parse_clat_config(config);
+		g_key_file_free(config);
+	}
+
+	__data = clat_data_init();
 	if (!__data) {
 		connman_error("CLAT: cannot initialize data");
 		return -ENOMEM;
@@ -1513,7 +1704,8 @@ static void clat_exit(void)
 	connman_rtnl_handle_rtprot_ra(false);
 	connman_rtnl_unregister(&clat_rtnl);
 
-	clat_free_data(__data);
+	clat_data_free(__data);
+	clear_clat_config();
 }
 
 CONNMAN_PLUGIN_DEFINE(clat, "CLAT plugin", VERSION,
