@@ -973,7 +973,7 @@ static int clat_task_start_tayga(struct clat_data *data)
 	connman_inet_set_address(index, ipaddress);
 
 	//$ ip -4 route add default dev clat
-	connman_inet_add_network_route(index, CLAT_IPv4ADDR, NULL, netmask);
+	connman_inet_add_network_route(index, CLAT_IPv4ADDR, "0.0.0.0", NULL);
 	connman_ipaddress_free(ipaddress);
 	g_free(netmask);
 
