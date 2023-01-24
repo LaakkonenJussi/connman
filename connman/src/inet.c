@@ -536,9 +536,10 @@ int connman_inet_del_host_route(int index, const char *host)
 	return connman_inet_del_network_route(index, host);
 }
 
-int connman_inet_add_network_route(int index, const char *host,
+int connman_inet_add_network_route_with_metric(int index, const char *host,
 					const char *gateway,
-					const char *netmask)
+					const char *netmask,
+					short metric)
 {
 	struct ifreq ifr;
 	struct rtentry rt;
@@ -567,6 +568,9 @@ int connman_inet_add_network_route(int index, const char *host,
 
 	memset(&rt, 0, sizeof(rt));
 	rt.rt_flags = RTF_UP;
+
+	if (metric)
+		rt.rt_metric = metric;
 
 	/*
 	 * Set RTF_GATEWAY only when gateway is set and the gateway IP address
@@ -619,7 +623,16 @@ out:
 	return err;
 }
 
-int connman_inet_del_network_route(int index, const char *host)
+int connman_inet_add_network_route(int index, const char *host,
+					const char *gateway,
+					const char *netmask)
+{
+	return connman_inet_add_network_route_with_metric(index, host,
+					gateway, netmask, 0);
+}
+
+int connman_inet_del_network_route_with_metric(int index, const char *host,
+					short metric)
 {
 	struct ifreq ifr;
 	struct rtentry rt;
@@ -648,6 +661,9 @@ int connman_inet_del_network_route(int index, const char *host)
 	memset(&rt, 0, sizeof(rt));
 	rt.rt_flags = RTF_UP | RTF_HOST;
 
+	if (metric)
+		rt.rt_metric = metric;
+
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
 	addr.sin_addr.s_addr = inet_addr(host);
@@ -666,6 +682,11 @@ out:
 							strerror(-err));
 
 	return err;
+}
+
+int connman_inet_del_network_route(int index, const char *host)
+{
+	return connman_inet_del_network_route_with_metric(index, host, 0);
 }
 
 int connman_inet_del_ipv6_network_route_with_metric(int index, const char *host,
