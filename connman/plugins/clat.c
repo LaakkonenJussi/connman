@@ -915,12 +915,6 @@ static int clat_task_pre_configure(struct clat_data *data)
 	DBG("Address IPv6 %s/%u -> CLAT address %s", data->ipv6address,
 					data->ipv6_prefixlen, data->address);
 
-	err = connman_nat6_prepare(ipconfig, TAYGA_CLAT_DEVICE, true);
-	if (err) {
-		connman_warn("CLAT failed to prepare nat and firewall %d", err);
-		return err;
-	}
-
 	clat_create_tayga_config(data);
 
 	if (create_task(data))
@@ -969,6 +963,7 @@ static char *cidr_to_str(unsigned char cidr_netmask)
 
 static int clat_task_start_tayga(struct clat_data *data)
 {
+	struct connman_ipconfig *ipconfig;
 	struct connman_ipaddress *ipaddress;
 	char *netmask = NULL;
 	int err;
@@ -987,6 +982,20 @@ static int clat_task_start_tayga(struct clat_data *data)
 	if (err && err != -EALREADY) {
 		connman_error("CLAT failed to bring interface %s up",
 							TAYGA_CLAT_DEVICE);
+		return err;
+	}
+
+	ipconfig = connman_service_get_ipconfig(data->service, AF_INET6);
+	if (!ipconfig) {
+		DBG("No IPv6 ipconfig");
+		return -ENOENT;
+	}
+
+	err = connman_nat6_prepare(ipconfig, data->address,
+						data->addr_prefixlen,
+						TAYGA_CLAT_DEVICE, true);
+	if (err) {
+		connman_warn("CLAT failed to prepare nat and firewall %d", err);
 		return err;
 	}
 
@@ -1104,7 +1113,8 @@ static int clat_task_post_configure(struct clat_data *data)
 
 	ipconfig = connman_service_get_ipconfig(data->service, AF_INET6);
 	if (ipconfig)
-		connman_nat6_restore(ipconfig);
+		connman_nat6_restore(ipconfig, data->address,
+							data->addr_prefixlen);
 
 	DBG("ipconfig %p", ipconfig);
 
