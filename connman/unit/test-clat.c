@@ -253,13 +253,19 @@ enum connman_ipconfig_method get_method(struct connman_ipconfig *ipconfig)
 	return ipconfig->method;
 }
 
-int connman_nat6_prepare(struct connman_ipconfig *ipconfig)
+int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
+						const char *ipv6address,
+						unsigned char ipv6prefixlen,
+						const char *ifname_in,
+						bool ndproxy)
 {
 	g_assert(ipconfig);
 	return 0;
 }
 
-void connman_nat6_restore(struct connman_ipconfig *ipconfig)
+void connman_nat6_restore(struct connman_ipconfig *ipconfig,
+						const char *ipv6address,
+						unsigned char ipv6prefixlen)
 {
 	g_assert(ipconfig);
 }
