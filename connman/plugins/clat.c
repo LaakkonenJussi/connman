@@ -77,8 +77,6 @@ struct clat_data {
 	int err_ch_id;
 	GIOChannel *out_ch;
 	GIOChannel *err_ch;
-
-	int task_last_exit_code;
 };
 
 #define DEFAULT_TAYGA_BIN		"/usr/local/bin/tayga"
@@ -237,9 +235,6 @@ static void close_io_channel(struct clat_data *data, GIOChannel *channel)
 			data->out_ch_id = 0;
 		}
 
-		if (!data->out_ch)
-			return;
-
 		g_io_channel_shutdown(data->out_ch, FALSE, NULL);
 		g_io_channel_unref(data->out_ch);
 
@@ -255,9 +250,6 @@ static void close_io_channel(struct clat_data *data, GIOChannel *channel)
 			data->err_ch_id = 0;
 		}
 
-		if (!data->err_ch)
-			return;
-
 		g_io_channel_shutdown(data->err_ch, FALSE, NULL);
 		g_io_channel_unref(data->err_ch);
 
@@ -271,14 +263,15 @@ static gboolean io_channel_cb(GIOChannel *source, GIOCondition condition,
 {
 	struct clat_data *data = user_data;
 	char *str;
-	const char *type = source == data->out_ch ? "STDOUT" : "STDERR";
+	const char *type = (source == data->out_ch ? "STDOUT" :
+				(source == data->err_ch ? "STDERR" : "NaN"));
 
 	if ((condition & G_IO_IN) &&
 		g_io_channel_read_line(source, &str, NULL, NULL, NULL) ==
 							G_IO_STATUS_NORMAL) {
 		str[strlen(str) - 1] = '\0';
 
-		DBG("%s: %s", type, str);
+		connman_error("CLAT %s: %s", clat_settings.tayga_bin, str);
 
 		g_free(str);
 	} else if (condition & (G_IO_ERR | G_IO_HUP)) {
@@ -312,12 +305,6 @@ static int destroy_task(struct clat_data *data)
 		return -ENOENT;
 
 	DBG("task %p", data->task);
-
-	/*if (data->out_ch)
-		close_io_channel(data, data->out_ch);
-
-	if (data->err_ch)
-		close_io_channel(data, data->err_ch);*/
 
 	err = connman_task_stop(data->task);
 	if (err) {
@@ -363,7 +350,6 @@ static void clat_data_clear(struct clat_data *data)
 	data->addr_prefixlen = 0;
 	data->ipv6_prefixlen = 0;
 	data->ifindex = -1;
-	data->task_last_exit_code = 0;
 
 	data->state = CLAT_STATE_IDLE;
 }
@@ -428,11 +414,11 @@ static int clat_create_tayga_config(struct clat_data *data)
 	 * when translating IPv4 packets to IPv6 or IPv6 packets to IPv4. If
 	 * /length is not present, the /length after ipv4_address is treated
 	 * as "/32" and that of ipv6_address as "/128".
+	 *
+	 * BUT IT DOES NOT WORK.
 	 */
-	g_string_append_printf(str, "map %s %s/%u\n", CLAT_IPv4ADDR,
-						/*IPv4ADDR_NETMASK,*/
-						data->address,
-						data->addr_prefixlen);
+	g_string_append_printf(str, "map %s %s\n", CLAT_IPv4ADDR,
+						data->address);
 
 	buf = g_string_free(str, FALSE);
 
@@ -635,7 +621,9 @@ static void prefix_query_cb(GResolvResultStatus status,
 	enum clat_state new_state = data->state;
 	int err;
 
-	DBG("state %d status %d GResolv %p", data->state, status, data->resolv);
+	DBG("state %d/%s status %d GResolv %p", data->state,
+						state2string(data->state),
+						status, data->resolv);
 
 	if (!data->resolv && !data->resolv_query_id) {
 		DBG("resolv was already cleared, running state: %s",
@@ -1123,7 +1111,6 @@ static void clat_task_exit(struct connman_task *task, int exit_code,
 
 	if (exit_code)
 		connman_warn("CLAT task failed with code %d", exit_code);
-	data->task_last_exit_code = exit_code;
 
 	if (task != data->task) {
 		connman_warn("CLAT task differs, nothing done");
@@ -1142,7 +1129,7 @@ static void clat_task_exit(struct connman_task *task, int exit_code,
 	case CLAT_STATE_PREFIX_QUERY:
 	case CLAT_STATE_PRE_CONFIGURE:
 	case CLAT_STATE_RUNNING:
-		if (data->task_last_exit_code)
+		if (exit_code)
 			data->state = CLAT_STATE_FAILURE;
 		else
 			DBG("run next state %d/%s", data->state + 1,
@@ -1274,14 +1261,6 @@ static int clat_run_task(struct clat_data *data)
 		break;
 	}
 
-	if (data->task_last_exit_code) {
-		DBG("CLAT run task aborted, last task run exited with %d",
-						data->task_last_exit_code);
-		data->state = CLAT_STATE_FAILURE;
-		clat_data_clear(data);
-		return 0;
-	}
-
 	if (!err) {
 		DBG("CLAT run task %p", data->task);
 		err = connman_task_run(data->task, clat_task_exit, data, NULL,
@@ -1294,10 +1273,16 @@ static int clat_run_task(struct clat_data *data)
 		data->state = CLAT_STATE_FAILURE;
 		destroy_task(data);
 	} else {
+		if (data->out_ch)
+			close_io_channel(data, data->out_ch);
+
 		data->out_ch = g_io_channel_unix_new(fd_out);
 		data->out_ch_id = g_io_add_watch(data->out_ch,
 						G_IO_IN | G_IO_ERR | G_IO_HUP,
 						(GIOFunc)io_channel_cb, data);
+		if (data->err_ch)
+			close_io_channel(data, data->err_ch);
+
 		data->err_ch = g_io_channel_unix_new(fd_err);
 		data->err_ch_id = g_io_add_watch(data->err_ch,
 						G_IO_IN | G_IO_ERR | G_IO_HUP,
