@@ -343,14 +343,19 @@ static void clat_data_clear(struct clat_data *data)
 	DBG("data %p", data);
 
 	destroy_task(data);
+
 	g_free(data->isp_64gateway);
 	data->isp_64gateway = NULL;
+
 	g_free(data->config_path);
 	data->config_path = NULL;
+
 	g_free(data->clat_prefix);
 	data->clat_prefix = NULL;
+
 	g_free(data->address);
 	data->address = NULL;
+
 	g_free(data->ipv6address);
 	data->ipv6address = NULL;
 
@@ -359,6 +364,8 @@ static void clat_data_clear(struct clat_data *data)
 	data->ipv6_prefixlen = 0;
 	data->ifindex = -1;
 	data->task_last_exit_code = 0;
+
+	data->state = CLAT_STATE_IDLE;
 }
 
 static void clat_data_free(struct clat_data *data)
@@ -628,7 +635,13 @@ static void prefix_query_cb(GResolvResultStatus status,
 	enum clat_state new_state = data->state;
 	int err;
 
-	DBG("status %d", status);
+	DBG("state %d status %d GResolv %p", data->state, status, data->resolv);
+
+	if (!data->resolv && !data->resolv_query_id) {
+		DBG("resolv was already cleared, running state: %s",
+					is_running(data->state) ? "yes" : "no");
+		return;
+	}
 
 	/*
 	 * We cannot unref the resolver here as resolv struct is manipulated
@@ -883,7 +896,7 @@ static int clat_task_pre_configure(struct clat_data *data)
 		return err;
 	}
 
-	DBG("Address IPv6 prefix %s/%u -> address %s", data->ipv6address,
+	DBG("Address IPv6 %s/%u -> CLAT address %s", data->ipv6address,
 					data->ipv6_prefixlen, data->address);
 
 	err = connman_nat6_prepare(ipconfig, TAYGA_CLAT_DEVICE, true);
@@ -1063,31 +1076,33 @@ static int clat_task_post_configure(struct clat_data *data)
 	char *netmask;
 	int index;
 
+	//$ ip link set dev clat up
+	// TODO wait for rtnl notify?
+
 	ipconfig = connman_service_get_ipconfig(data->service, AF_INET6);
 	if (ipconfig)
 		connman_nat6_restore(ipconfig);
 
-	//$ ip link set dev clat up
-	// TODO wait for rtnl notify?
+	DBG("ipconfig %p", ipconfig);
+
 	index = connman_inet_ifindex(TAYGA_CLAT_DEVICE);
-	if (index < 0) {
-		DBG("CLAT tayga interface not up, nothing to do");
-		return -ENODEV;
-	}
+	if (index >= 0) {
+		ipaddress = connman_ipaddress_alloc(AF_INET);
+		connman_inet_del_network_route(index, CLAT_IPv4ADDR);
 
-	DBG("");
+		netmask = cidr_to_str(IPv4ADDR_NETMASK);
+		connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, netmask,
+									NULL);
+		g_free(netmask);
 
-	// TODO check return values
-	ipaddress = connman_ipaddress_alloc(AF_INET);
-	connman_inet_del_network_route(index, CLAT_IPv4ADDR);
-	netmask = cidr_to_str(IPv4ADDR_NETMASK);
-	connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, netmask, NULL);
-	connman_inet_clear_address(index, ipaddress);
-	connman_inet_del_ipv6_network_route(index, data->address,
+		connman_inet_clear_address(index, ipaddress);
+		connman_inet_del_ipv6_network_route(index, data->address,
 							data->addr_prefixlen);
-	connman_inet_ifdown(index);
-	connman_ipaddress_free(ipaddress);
-	g_free(netmask);
+		connman_inet_ifdown(index);
+		connman_ipaddress_free(ipaddress);
+	} else {
+		DBG("CLAT tayga interface not up, nothing to do");
+	}
 
 	if (create_task(data))
 		return -ENOMEM;
@@ -1239,6 +1254,7 @@ static int clat_run_task(struct clat_data *data)
 
 		/* Remain in failure state, can be started via clat_start(). */
 		data->state = CLAT_STATE_FAILURE;
+
 		if (err)
 			return err;
 
@@ -1311,16 +1327,12 @@ static int clat_start(struct clat_data *data)
 
 static int clat_stop(struct clat_data *data)
 {
-	struct connman_ipconfig *ipconfig;
 	int err;
 
 	if (!data)
 		return -EINVAL;
 
 	DBG("state %d/%s", data->state, state2string(data->state));
-
-	if (!data->task)
-		return 0;
 
 	destroy_task(data);
 
@@ -1332,13 +1344,15 @@ static int clat_stop(struct clat_data *data)
 		data->state = CLAT_STATE_FAILURE;
 	}
 
-	data->state = CLAT_STATE_IDLE;
-
-	g_free(data->isp_64gateway);
-	data->isp_64gateway = NULL;
-	data->ifindex = -1;
+	/* Sets as idle */
+	clat_data_clear(data);
 
 	return err;
+}
+
+static int clat_failure(struct clat_data *data)
+{
+	return 0;
 }
 
 static void clat_new_rtnl_gateway(int index, const char *dst,
