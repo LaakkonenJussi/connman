@@ -85,6 +85,8 @@ struct clat_data {
 #define TAYGA_IPv4ADDR			"192.0.0.2"	/* from RFC 7335 */
 #define CLAT_IPv4ADDR			"192.0.0.1"	/* from RFC 7335 */
 #define IPv4ADDR_NETMASK		29		/* from RFC 7335 */
+#define CLAT_INADDR_ANY		"0.0.0.0"
+#define CLAT_IPv4_METRIC		2049		/* Set as value -1 */
 #define CLAT_SUFFIX			"c1a7"
 
 #define PREFIX_DAD_TIMEOUT		10000		/* 10 seconds */
@@ -97,6 +99,7 @@ static struct {
 	char *tayga_bin;
 	bool dad_enabled;
 	bool resolv_always_succeeds;
+	bool clat_device_use_netmask;
 } clat_settings = {
 	.tayga_bin = NULL,
 
@@ -105,12 +108,16 @@ static struct {
 
 	/* Resolv result always sets global prefix if fails */
 	.resolv_always_succeeds = false,
+
+	/* Add netmask to the CLAT device IPv4 address */
+	.clat_device_use_netmask = false,
 };
 
 #define CLATCONFIGFILE			CONFIGDIR "/clat.conf"
 #define CONF_TAYGA_BIN			"Tayga"
 #define CONF_DAD_ENABLED		"EnableDAD"
 #define CONF_RESOLV_ALWAYS_SUCCEEDS	"ResolvAlwaysSucceeds"
+#define CONF_CLAT_USE_NETMASK		"ClatDeviceUseNetmask"
 
 struct clat_data *__data = NULL;
 
@@ -171,6 +178,14 @@ static void parse_clat_config(GKeyFile *config)
 						&error);
 	if (!error)
 		clat_settings.resolv_always_succeeds = boolean;
+
+	g_clear_error(&error);
+
+	boolean = g_key_file_get_boolean(config, group,
+						CONF_CLAT_USE_NETMASK,
+						&error);
+	if (!error)
+		clat_settings.clat_device_use_netmask = boolean;
 
 	g_clear_error(&error);
 }
@@ -942,7 +957,7 @@ static char *cidr_to_str(unsigned char cidr_netmask)
 static int clat_task_start_tayga(struct clat_data *data)
 {
 	struct connman_ipaddress *ipaddress;
-	char *netmask;
+	char *netmask = NULL;
 	int err;
 	int index;
 	//$ ip link set dev clat up
@@ -967,13 +982,19 @@ static int clat_task_start_tayga(struct clat_data *data)
 	connman_inet_add_ipv6_network_route(index, data->address, NULL,
 							data->addr_prefixlen);
 	//$ ip address add 192.0.0.2 dev clat
-	netmask = cidr_to_str(IPv4ADDR_NETMASK);
+	if (clat_settings.clat_device_use_netmask)
+		netmask = cidr_to_str(IPv4ADDR_NETMASK);
+
 	ipaddress = connman_ipaddress_alloc(AF_INET);
 	connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, netmask, NULL);
 	connman_inet_set_address(index, ipaddress);
 
 	//$ ip -4 route add default dev clat
-	connman_inet_add_network_route(index, CLAT_IPv4ADDR, "0.0.0.0", NULL);
+	/* Set no address, all traffic should be forwarded to the device */
+	connman_inet_add_network_route_with_metric(index, CLAT_INADDR_ANY,
+							CLAT_INADDR_ANY,
+							CLAT_INADDR_ANY,
+							CLAT_IPv4_METRIC);
 	connman_ipaddress_free(ipaddress);
 	g_free(netmask);
 
@@ -1061,7 +1082,7 @@ static int clat_task_post_configure(struct clat_data *data)
 {
 	struct connman_ipconfig *ipconfig;
 	struct connman_ipaddress *ipaddress;
-	char *netmask;
+	char *netmask = NULL;
 	int index;
 
 	//$ ip link set dev clat up
@@ -1076,9 +1097,12 @@ static int clat_task_post_configure(struct clat_data *data)
 	index = connman_inet_ifindex(TAYGA_CLAT_DEVICE);
 	if (index >= 0) {
 		ipaddress = connman_ipaddress_alloc(AF_INET);
-		connman_inet_del_network_route(index, CLAT_IPv4ADDR);
+		connman_inet_del_network_route_with_metric(index, CLAT_IPv4ADDR,
+							CLAT_IPv4_METRIC);
 
-		netmask = cidr_to_str(IPv4ADDR_NETMASK);
+		if (clat_settings.clat_device_use_netmask)
+			netmask = cidr_to_str(IPv4ADDR_NETMASK);
+
 		connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, netmask,
 									NULL);
 		g_free(netmask);
