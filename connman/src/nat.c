@@ -173,6 +173,8 @@ static void set_original_ipv6_values(struct connman_nat *nat,
 	if (!nat || !ipconfig)
 		return;
 
+	DBG("nat %p ipconfig %p", nat, ipconfig);
+
 	if (nat->ipv6_forward != -1)
 		__connman_ipconfig_ipv6_set_forwarding(ipconfig,
 				nat->ipv6_forward ? true : false);
@@ -197,6 +199,9 @@ static void set_original_ipv6_values(struct connman_nat *nat,
 		}
 
 		index = __connman_ipconfig_get_index(ipconfig);
+		if (index < 0)
+			return;
+
 		err = __connman_inet_del_ipv6_neigbour_proxy(index,
 							ipv6_address,
 							ipv6_prefixlen);
@@ -205,6 +210,8 @@ static void set_original_ipv6_values(struct connman_nat *nat,
 			return;
 		}
 	}
+
+	DBG("done");
 }
 
 int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
@@ -215,6 +222,9 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 	char *ifname = NULL;
 	char *rule = NULL;
 	int err;
+
+	DBG("ipconfig %p ifname_in %s enable_ndproxy %s", ipconfig, ifname_in,
+						enable_ndproxy ? "yes" : "no");
 
 	if (connman_ipconfig_get_config_type(ipconfig) !=
 						CONNMAN_IPCONFIG_TYPE_IPV6) {
@@ -268,6 +278,8 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 		unsigned char ipv6_prefixlen;
 		int index;
 
+		DBG("Enabling ndproxy");
+
 		nat->ipv6_ndproxy = __connman_ipconfig_ipv6_get_ndproxy(
 							ipconfig) ? 1 : 0;
 		err = __connman_ipconfig_ipv6_set_ndproxy(ipconfig, true);
@@ -302,6 +314,8 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 
 	rule = g_strdup_printf("-i %s -o %s -j ACCEPT", ifname_in, ifname);
 
+	DBG("Enable firewall rule -I FORWARD %s", rule);
+
 	/* Enable forward on IPv6 */
 	err = __connman_firewall_add_ipv6_rule(nat->fw, NULL, NULL, "filter",
 							"FORWARD", rule);
@@ -319,9 +333,13 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 
 	g_hash_table_replace(nat_hash, ifname, nat);
 
+	DBG("prepare done");
+
 	return 0;
 
 err:
+	DBG("prepare failure, revert changes");
+
 	g_free(ifname);
 
 	if (nat) {
@@ -376,17 +394,15 @@ void connman_nat6_restore(struct connman_ipconfig *ipconfig)
 		return;
 	}
 
-	if (nat->fw) {
-		DBG("clear firewall");
-		__connman_firewall_destroy(nat->fw);
-	}
-
 	/* Restore original values */
 	set_original_ipv6_values(nat, ipconfig);
 
-	g_hash_table_remove(nat_hash, ifname);
+	if (nat_hash)
+		g_hash_table_remove(nat_hash, ifname);
 
 	g_free(ifname);
+
+	DBG("restore done");
 }
 
 static void update_default_interface(struct connman_service *service)
