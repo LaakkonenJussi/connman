@@ -101,6 +101,7 @@ static struct {
 	bool dad_enabled;
 	bool resolv_always_succeeds;
 	bool clat_device_use_netmask;
+	bool tayga_use_ipv6_conf;
 } clat_settings = {
 	.tayga_bin = NULL,
 
@@ -112,6 +113,9 @@ static struct {
 
 	/* Add netmask to the CLAT device IPv4 address */
 	.clat_device_use_netmask = false,
+
+	/* Write IPv6 address of the interface used to the tayga config */
+	.tayga_use_ipv6_conf = false,
 };
 
 #define CLATCONFIGFILE			CONFIGDIR "/clat.conf"
@@ -119,6 +123,7 @@ static struct {
 #define CONF_DAD_ENABLED		"EnableDAD"
 #define CONF_RESOLV_ALWAYS_SUCCEEDS	"ResolvAlwaysSucceeds"
 #define CONF_CLAT_USE_NETMASK		"ClatDeviceUseNetmask"
+#define CONF_TAYGA_USE_IPV6_CONF	"TaygaRequiresIPv6Address"
 
 struct clat_data *__data = NULL;
 
@@ -187,6 +192,14 @@ static void parse_clat_config(GKeyFile *config)
 						&error);
 	if (!error)
 		clat_settings.clat_device_use_netmask = boolean;
+
+	g_clear_error(&error);
+
+	boolean = g_key_file_get_boolean(config, group,
+						CONF_TAYGA_USE_IPV6_CONF,
+						&error);
+	if (!error)
+		clat_settings.tayga_use_ipv6_conf = boolean;
 
 	g_clear_error(&error);
 }
@@ -415,8 +428,7 @@ static int clat_create_tayga_config(struct clat_data *data)
 	g_string_append_printf(str, "ipv4-addr %s\n", TAYGA_IPv4ADDR);
 
 	/* IPv6 address is required only when global prefix is in use */
-	if (!g_strcmp0(data->clat_prefix, GLOBAL_PREFIX) &&
-				data->clat_prefixlen == GLOBAL_PREFIXLEN)
+	if (clat_settings.tayga_use_ipv6_conf)
 		g_string_append_printf(str, "ipv6-addr %s\n",
 							data->ipv6address);
 
