@@ -87,6 +87,7 @@ struct clat_data {
 #define IPv4ADDR_NETMASK		29		/* from RFC 7335 */
 #define CLAT_INADDR_ANY		"0.0.0.0"
 #define CLAT_IPv4_METRIC		2049		/* Set as value -1 */
+#define CLAT_IPv6_METRIC		1024
 #define CLAT_SUFFIX			"c1a7"
 
 #define PREFIX_DAD_TIMEOUT		10000		/* 10 seconds */
@@ -855,7 +856,7 @@ static int derive_ipv6_address(struct clat_data *data, const char *ipv6_addr,
 	 * 
 	 */
 	data->address = g_strconcat(ipv6prefix, "::", CLAT_SUFFIX, NULL);
-	data->addr_prefixlen = ipv6_prefixlen;
+	data->addr_prefixlen = 128;
 
 	return 0;
 }
@@ -979,8 +980,9 @@ static int clat_task_start_tayga(struct clat_data *data)
 
 	//$ ip route add 2a00:e18:8000:6cd::c1a7 dev clat
 	// TODO default route or...?
-	connman_inet_add_ipv6_network_route(index, data->address, NULL,
-							data->addr_prefixlen);
+	connman_inet_add_ipv6_network_route_with_metric(index, data->address,
+						NULL, data->addr_prefixlen,
+						CLAT_IPv6_METRIC);
 	//$ ip address add 192.0.0.2 dev clat
 	if (clat_settings.clat_device_use_netmask)
 		netmask = cidr_to_str(IPv4ADDR_NETMASK);
@@ -1104,12 +1106,14 @@ static int clat_task_post_configure(struct clat_data *data)
 			netmask = cidr_to_str(IPv4ADDR_NETMASK);
 
 		connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, netmask,
-									NULL);
+							NULL);
 		g_free(netmask);
 
 		connman_inet_clear_address(index, ipaddress);
-		connman_inet_del_ipv6_network_route(index, data->address,
-							data->addr_prefixlen);
+		connman_inet_del_ipv6_network_route_with_metric(index,
+							data->address,
+							data->addr_prefixlen,
+							CLAT_IPv6_METRIC);
 		connman_inet_ifdown(index);
 		connman_ipaddress_free(ipaddress);
 	} else {
