@@ -57,9 +57,9 @@ char *connman_inet_ifname(int index)
 	return NULL;
 }
 
-int connman_inet_add_ipv6_network_route(int index, const char *host,
+int connman_inet_add_ipv6_network_route_with_metric(int index, const char *host,
 					const char *gateway,
-					unsigned char prefix_len)
+					unsigned char prefix_len, short metric)
 {
 	g_assert_cmpint(index, >, 0);
 	g_assert(host);
@@ -67,12 +67,28 @@ int connman_inet_add_ipv6_network_route(int index, const char *host,
 	return 0;
 }
 
-int connman_inet_del_ipv6_network_route(int index, const char *host,
-						unsigned char prefix_len)
+int connman_inet_add_ipv6_network_route(int index, const char *host,
+					const char *gateway,
+					unsigned char prefix_len)
+{
+	return connman_inet_add_ipv6_network_route_with_metric(index, host,
+					gateway, prefix_len, 1);
+}
+
+int connman_inet_del_ipv6_network_route_with_metric(int index, const char *host,
+						unsigned char prefix_len,
+						short metric)
 {
 	g_assert_cmpint(index, >, 0);
 	g_assert(host);
 	return 0;
+}
+
+int connman_inet_del_ipv6_network_route(int index, const char *host,
+						unsigned char prefix_len)
+{
+	return connman_inet_del_ipv6_network_route_with_metric(index, host,
+						prefix_len, 1);
 }
 
 int connman_inet_set_address(int index, struct connman_ipaddress *ipaddress)
