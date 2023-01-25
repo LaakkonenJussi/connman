@@ -547,9 +547,6 @@ bool __connman_ipconfig_ipv6_get_force_disabled(
 int __connman_ipconfig_ipv6_get_accept_ra(struct connman_ipconfig *ipconfig);
 int __connman_ipconfig_ipv6_set_accept_ra(struct connman_ipconfig *ipconfig,
 					int value);
-bool __connman_ipconfig_ipv6_get_forwarding(struct connman_ipconfig *ipconfig);
-int __connman_ipconfig_ipv6_set_forwarding(struct connman_ipconfig *ipconfig,
-					bool enable);
 bool __connman_ipconfig_ipv6_get_ndproxy(struct connman_ipconfig *ipconfig);
 int __connman_ipconfig_ipv6_set_ndproxy(struct connman_ipconfig *ipconfig,
 					bool enable);

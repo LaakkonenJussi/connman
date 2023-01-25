@@ -1930,45 +1930,6 @@ int __connman_ipconfig_ipv6_set_accept_ra(struct connman_ipconfig *ipconfig,
 	return err;
 }
 
-bool __connman_ipconfig_ipv6_get_forwarding(struct connman_ipconfig *ipconfig)
-{
-	char *ifname;
-	int value;
-
-	if (!ipconfig)
-		return false;
-
-	ifname = connman_inet_ifname(ipconfig->index);
-	if (!ifname)
-		return false;
-
-	value = get_ipv6_forwarding(ifname);
-	g_free(ifname);
-
-	return value == 1 ? true : false;
-}
-
-int __connman_ipconfig_ipv6_set_forwarding(struct connman_ipconfig *ipconfig,
-								bool enable)
-{
-	char *ifname;
-	int err = 0;
-
-	if (!ipconfig)
-		return -EINVAL;
-
-	ifname = connman_inet_ifname(ipconfig->index);
-	if (!ifname)
-		return -ENOENT;
-
-	if (set_ipv6_forwarding(ifname, enable) != 1)
-		err = -EPERM;
-
-	g_free(ifname);
-
-	return err;
-}
-
 bool __connman_ipconfig_ipv6_get_ndproxy(struct connman_ipconfig *ipconfig)
 {
 	char *ifname;
