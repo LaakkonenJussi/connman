@@ -108,7 +108,8 @@ int connman_inet_add_host_route(int index, const char *host,
 
 int connman_inet_add_network_route_with_metric(int index, const char *host,
 					const char *gateway,
-					const char *netmask, short metric)
+					const char *netmask, short metric,
+					unsigned long mtu)
 {
 	g_assert_cmpint(index, >, 0);
 	g_assert(host);
@@ -120,7 +121,7 @@ int connman_inet_add_network_route(int index, const char *host,
 						const char *netmask)
 {
 	return connman_inet_add_network_route_with_metric(index, host,
-							gateway, netmask, 0);
+							gateway, netmask, 0, 0);
 }
 
 int connman_inet_del_host_route(int index, const char *host)
