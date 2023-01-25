@@ -3297,7 +3297,7 @@ out:
 static int ipv6_neigbour_proxy(int index, bool enable, const char *ipv6_address,
 						unsigned char ipv6_prefixlen)
 {
-	struct sockaddr_nl sa;
+	struct sockaddr_nl nladdr;
 	struct nlmsghdr *nlh;
 	struct ndmsg *ndm;
 	struct rtattr *attr;
@@ -3313,8 +3313,8 @@ static int ipv6_neigbour_proxy(int index, bool enable, const char *ipv6_address,
 	if (sk < 0)
 		goto out;
 
-	memset(&sa, 0, sizeof(sa));
-	sa.nl_family = AF_NETLINK;
+	memset(&nladdr, 0, sizeof(nladdr));
+	nladdr.nl_family = AF_NETLINK;
 
 	nlh = (struct nlmsghdr *)buf;
 	nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg));
@@ -3328,23 +3328,25 @@ static int ipv6_neigbour_proxy(int index, bool enable, const char *ipv6_address,
 	ndm->ndm_type = RTN_UNICAST;
 	ndm->ndm_flags = NTF_PROXY;
 
-	// TODO check this
 	attr = (struct rtattr *)(buf + NLMSG_ALIGN(nlh->nlmsg_len));
 	attr->rta_type = NDA_DST;
-	attr->rta_len = RTA_LENGTH(16);
+	attr->rta_len = RTA_LENGTH(sizeof(struct in6_addr));
 
 	if (!inet_pton(AF_INET6, ipv6_address, RTA_DATA(attr))) {
 		connman_error("Invalid ndproxy IPv6 address %s", ipv6_address);
 		goto out;
 	}
 
-	// TODO check this
-	nlh->nlmsg_len = NLMSG_ALIGN(nlh->nlmsg_len) + RTA_LENGTH(16);
+	nlh->nlmsg_len = NLMSG_ALIGN(nlh->nlmsg_len) +
+					RTA_LENGTH(sizeof(struct in6_addr));
 
-	len = sendto(sk, nlh, nlh->nlmsg_len, 0, (struct sockaddr *)&sa,
-							sizeof(sa));
+	len = sendto(sk, nlh, nlh->nlmsg_len, 0, (struct sockaddr *) &nladdr,
+							sizeof(nladdr));
 	if (len == -1) {
-		DBG("failed to send neigh %s request", enable ? "add" : "del");
+		connman_error("neighbour proxy %s request failed: %d/%s",
+							enable ? "add" : "del",
+							-errno,
+							strerror(errno));
 		err = -errno;
 		goto out;
 	}
