@@ -87,6 +87,7 @@ struct clat_data {
 #define IPv4ADDR_NETMASK		29		/* from RFC 7335 */
 #define CLAT_INADDR_ANY		"0.0.0.0"
 #define CLAT_IPv4_METRIC		2049		/* Set as value -1 */
+#define CLAT_IPv4_ROUTE_MTU		1260		/* from clatd */
 #define CLAT_IPv6_METRIC		1024
 #define CLAT_SUFFIX			"c1a7"
 
@@ -1015,7 +1016,8 @@ static int clat_task_start_tayga(struct clat_data *data)
 	connman_inet_add_network_route_with_metric(index, CLAT_INADDR_ANY,
 							CLAT_INADDR_ANY,
 							CLAT_INADDR_ANY,
-							CLAT_IPv4_METRIC);
+							CLAT_IPv4_METRIC,
+							CLAT_IPv4_ROUTE_MTU);
 	connman_ipaddress_free(ipaddress);
 	g_free(netmask);
 
