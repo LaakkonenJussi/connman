@@ -470,25 +470,6 @@ static int get_ipv6_accept_ra(gchar *ifname)
 	return value;
 }
 
-static int set_ipv6_forwarding(gchar *ifname, bool enable)
-{
-	int value = enable ? 1 : 0;
-
-	DBG("%s %d", ifname, enable);
-
-	return write_ipv6_conf_value(ifname, "forwarding", value);
-}
-
-static int get_ipv6_forwarding(gchar *ifname)
-{
-	int value;
-
-	if (read_ipv6_conf_value(ifname, "forwarding", &value) < 0)
-		value = -EINVAL;
-
-	return value;
-}
-
 static int set_ipv6_ndproxy(gchar *ifname, bool enable)
 {
 	int value = enable ? 1 : 0;
