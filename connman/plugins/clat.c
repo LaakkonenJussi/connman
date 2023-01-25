@@ -90,7 +90,7 @@ struct clat_data {
 #define CLAT_IPv6_METRIC		1024
 #define CLAT_SUFFIX			"c1a7"
 
-#define PREFIX_DAD_TIMEOUT		10000		/* 10 seconds */
+#define PREFIX_QUERY_TIMEOUT		10000		/* 10 seconds */
 #define DAD_TIMEOUT			600000		/* 10 minutes */
 
 static const char GLOBAL_PREFIX[] = "64:ff9b::";
@@ -357,8 +357,6 @@ static void clat_data_clear(struct clat_data *data)
 		return;
 
 	DBG("data %p", data);
-
-	destroy_task(data);
 
 	g_free(data->isp_64gateway);
 	data->isp_64gateway = NULL;
@@ -698,7 +696,7 @@ static void prefix_query_cb(GResolvResultStatus status,
 		break;
 	case -EHOSTDOWN:
 		DBG("failed to resolv %s, CLAT is not started", WKN_ADDRESS);
-		new_state = CLAT_STATE_FAILURE;
+		new_state = CLAT_STATE_STOPPED;
 		break;
 	default:
 		DBG("failed to assign prefix, error %d", err);
@@ -787,7 +785,7 @@ static int clat_task_start_periodic_query(struct clat_data *data)
 		return -EALREADY;
 	}
 
-	data->prefix_query_id = g_timeout_add(PREFIX_DAD_TIMEOUT,
+	data->prefix_query_id = g_timeout_add(PREFIX_QUERY_TIMEOUT,
 							run_prefix_query, data);
 	if (data->prefix_query_id <= 0) {
 		connman_error("CLAT failed to start periodic prefix query");
@@ -1157,6 +1155,17 @@ static void clat_task_exit(struct connman_task *task, int exit_code,
 	struct clat_data *data = user_data;
 	int err;
 
+	if (!data) {
+		DBG("data gone, exit code %d after CLAT exit", exit_code);
+
+		if (task) {
+			DBG("destroying task %p", task);
+			connman_task_destroy(task);
+		}
+
+		return;
+	}
+
 	DBG("state %d/%s", data->state, state2string(data->state));
 
 	if (exit_code)
@@ -1307,7 +1316,11 @@ static int clat_run_task(struct clat_data *data)
 			data->state = CLAT_STATE_FAILURE;
 		}
 
-		data->state = CLAT_STATE_IDLE;
+		/*
+		 * RESTART comes after prefix query has been done, go directly
+		 * to PRE_CONFIGURE state.
+		 */
+		data->state = CLAT_STATE_PRE_CONFIGURE;
 		break;
 	}
 
