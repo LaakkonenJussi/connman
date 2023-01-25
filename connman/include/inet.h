@@ -47,7 +47,8 @@ int connman_inet_add_network_route(int index, const char *host, const char *gate
 					const char *netmask);
 int connman_inet_add_network_route_with_metric(int index, const char *host,
 					const char *gateway,
-					const char *netmask, short metric);
+					const char *netmask, short metric,
+					unsigned long mtu);
 int connman_inet_del_network_route(int index, const char *host);
 int connman_inet_del_network_route_with_metric(int index, const char *host,
 					short metric);

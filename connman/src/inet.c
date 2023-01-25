@@ -541,15 +541,16 @@ int connman_inet_del_host_route(int index, const char *host)
 int connman_inet_add_network_route_with_metric(int index, const char *host,
 					const char *gateway,
 					const char *netmask,
-					short metric)
+					short metric,
+					unsigned long mtu)
 {
 	struct ifreq ifr;
 	struct rtentry rt;
 	struct sockaddr_in addr;
 	int sk, err = 0;
 
-	DBG("index %d host %s gateway %s netmask %s", index,
-		host, gateway, netmask);
+	DBG("index %d host %s gateway %s netmask %s metric %d mtu %ld", index,
+		host, gateway, netmask, metric, mtu);
 
 	sk = socket(PF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
 	if (sk < 0) {
@@ -573,6 +574,9 @@ int connman_inet_add_network_route_with_metric(int index, const char *host,
 
 	if (metric)
 		rt.rt_metric = metric;
+
+	if (mtu)
+		rt.rt_mtu = mtu;
 
 	/*
 	 * Set RTF_GATEWAY only when gateway is set and the gateway IP address
@@ -630,7 +634,7 @@ int connman_inet_add_network_route(int index, const char *host,
 					const char *netmask)
 {
 	return connman_inet_add_network_route_with_metric(index, host,
-					gateway, netmask, 0);
+					gateway, netmask, 0, 0);
 }
 
 int connman_inet_del_network_route_with_metric(int index, const char *host,
