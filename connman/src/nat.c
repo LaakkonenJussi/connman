@@ -440,6 +440,11 @@ void connman_nat6_restore(struct connman_ipconfig *ipconfig,
 	/* Restore original values */
 	set_original_ipv6_values(nat, ipconfig, ipv6_address, ipv6_prefixlen);
 
+	if (nat->fw) {
+		if (__connman_firewall_disable(nat->fw))
+			DBG("cannot disable firewall");
+	}
+
 	if (nat_hash)
 		g_hash_table_remove(nat_hash, ifname);
 
