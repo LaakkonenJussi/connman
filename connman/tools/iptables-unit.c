@@ -134,6 +134,51 @@ struct connman_service *connman_service_lookup_from_identifier(
 	return NULL;
 }
 
+struct connman_network *connman_service_get_network(
+					struct connman_service *service)
+{
+	return NULL;
+}
+
+struct connman_ipconfig *connman_service_get_ipconfig(
+					struct connman_service *service,
+					int family)
+{
+	return NULL;
+}
+
+struct connman_service *
+connman_service_ref_debug(struct connman_service *service,
+			const char *file, int line, const char *caller)
+{
+	return NULL;
+}
+
+/**
+ * connman_service_unref:
+ * @service: service structure
+ *
+ * Decrease reference counter of service and release service if no
+ * longer needed.
+ */
+void connman_service_unref_debug(struct connman_service *service,
+			const char *file, int line, const char *caller)
+{
+	return;
+}
+
+bool connman_network_is_configured(struct connman_network *network,
+					enum connman_ipconfig_type type)
+{
+	g_assert(network);
+
+	if (type == CONNMAN_IPCONFIG_TYPE_IPV4 ||
+					type == CONNMAN_IPCONFIG_TYPE_IPV6)
+		return true;
+
+	return false;
+}
+
 const char *__connman_technology_get_tethering_ident(
 				struct connman_technology *tech)
 {
