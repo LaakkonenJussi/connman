@@ -34,7 +34,8 @@
 
 #include "connman.h"
 
-static char *default_interface;
+static char *default_interface = NULL;
+static struct connman_service *default_service = NULL;
 static GHashTable *nat_hash;
 
 struct connman_nat {
@@ -100,16 +101,66 @@ static int enable_ip_forward(int family, bool enable)
 	return err;
 }
 
+static bool default_interface_has_ipv4_address()
+{
+	struct connman_network *network;
+	struct connman_ipconfig *ipconfig;
+	struct connman_ipaddress *ipaddress;
+	const char *address;
+	unsigned char prefixlen;
+	int err;
+
+	if (!default_interface)
+		return false;
+
+	network = connman_service_get_network(default_service);
+	if (!network) {
+		DBG("no network for service %p interface %s", default_service,
+							default_interface);
+		return false;
+	}
+
+	if (!connman_network_is_configured(network, CONNMAN_IPCONFIG_TYPE_IPV4)) {
+		DBG("IPv4 not is configured on network %p", network);
+		return false;
+	}
+
+	/* Configured, verify that address exists */
+	ipconfig = connman_service_get_ipconfig(default_service, AF_INET);
+	DBG("IPv4 ipconfig %p", ipconfig);
+
+	ipaddress = connman_ipconfig_get_ipaddress(ipconfig);
+	DBG("IPv4 ipaddress %p", ipaddress);
+
+	err = connman_ipaddress_get_ip(ipaddress, &address, &prefixlen);
+	if (err || !address) {
+		DBG("IPv4 is not configured on service %p interface %s",
+					default_service, default_interface);
+		return false;
+	}
+
+	DBG("IPv4 address %s set for service %p interface %s", address,
+					default_service, default_interface);
+
+	return true;
+}
+
 static int enable_nat(struct connman_nat *nat)
 {
 	char *cmd;
 	int err;
 
 	g_free(nat->interface);
-	nat->interface = g_strdup(default_interface);
+
+	if (default_interface_has_ipv4_address())
+		nat->interface = g_strdup(default_interface);
+	else
+		nat->interface = g_strdup("clat");
 
 	if (!nat->interface)
 		return 0;
+
+	DBG("interface %s", nat->interface);
 
 	/* Enable masquerading */
 	cmd = g_strdup_printf("-s %s/%d -o %s -j MASQUERADE",
@@ -411,6 +462,14 @@ static void update_default_interface(struct connman_service *service)
 	g_free(default_interface);
 	default_interface = interface;
 
+	if (default_service) {
+		connman_service_unref(default_service);
+		default_service = NULL;
+	}
+
+	if (service)
+		default_service = connman_service_ref(service);
+
 	g_hash_table_iter_init(&iter, nat_hash);
 
 	while (g_hash_table_iter_next(&iter, &key, &value)) {
@@ -465,6 +524,10 @@ int __connman_nat_init(void)
 void __connman_nat_cleanup(void)
 {
 	DBG("");
+
+	g_free(default_interface);
+	if (default_service)
+		connman_service_unref(default_service);
 
 	g_hash_table_foreach(nat_hash, shutdown_nat, NULL);
 	g_hash_table_destroy(nat_hash);
