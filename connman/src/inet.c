@@ -575,8 +575,10 @@ int connman_inet_add_network_route_with_metric(int index, const char *host,
 	if (metric)
 		rt.rt_metric = metric;
 
-	if (mtu)
+	if (mtu) {
 		rt.rt_mtu = mtu;
+		rt.rt_mss = mtu - 40; /* MSS is 40b smaller than MTU */
+	}
 
 	/*
 	 * Set RTF_GATEWAY only when gateway is set and the gateway IP address
