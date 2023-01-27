@@ -39,6 +39,8 @@ static struct connman_service *default_service = NULL;
 static GHashTable *nat_hash;
 
 struct connman_nat {
+	int family;
+	char *ifname;			/* Same as the name as hash key */
 	char *address;
 	unsigned char prefixlen;
 	struct firewall_context *fw;
@@ -101,78 +103,64 @@ static int enable_ip_forward(int family, bool enable)
 	return err;
 }
 
-static bool default_interface_has_ipv4_address()
-{
-	struct connman_network *network;
-	struct connman_ipconfig *ipconfig;
-	struct connman_ipaddress *ipaddress;
-	const char *address;
-	unsigned char prefixlen;
-	int err;
-
-	if (!default_interface)
-		return false;
-
-	network = connman_service_get_network(default_service);
-	if (!network) {
-		DBG("no network for service %p interface %s", default_service,
-							default_interface);
-		return false;
-	}
-
-	if (!connman_network_is_configured(network, CONNMAN_IPCONFIG_TYPE_IPV4)) {
-		DBG("IPv4 not is configured on network %p", network);
-		return false;
-	}
-
-	/* Configured, verify that address exists */
-	ipconfig = connman_service_get_ipconfig(default_service, AF_INET);
-	DBG("IPv4 ipconfig %p", ipconfig);
-
-	ipaddress = connman_ipconfig_get_ipaddress(ipconfig);
-	DBG("IPv4 ipaddress %p", ipaddress);
-
-	err = connman_ipaddress_get_ip(ipaddress, &address, &prefixlen);
-	if (err || !address) {
-		DBG("IPv4 is not configured on service %p interface %s",
-					default_service, default_interface);
-		return false;
-	}
-
-	DBG("IPv4 address %s set for service %p interface %s", address,
-					default_service, default_interface);
-
-	return true;
-}
-
-static int enable_nat(struct connman_nat *nat)
+static int enable_nat(struct connman_nat *nat, bool dn_masquerading,
+					const char *dn_ipaddr_range,
+					unsigned char dn_ipaddr_netmask)
 {
 	char *cmd;
 	int err;
 
 	g_free(nat->interface);
-
-	if (default_interface_has_ipv4_address())
-		nat->interface = g_strdup(default_interface);
-	else
-		nat->interface = g_strdup("clat");
+	nat->interface = g_strdup(default_interface);
 
 	if (!nat->interface)
 		return 0;
 
-	DBG("interface %s", nat->interface);
+	DBG("name %s interface %s", nat->ifname, nat->interface);
 
 	/* Enable masquerading */
 	cmd = g_strdup_printf("-s %s/%d -o %s -j MASQUERADE",
 					nat->address,
 					nat->prefixlen,
 					nat->interface);
+	DBG("rule %s", cmd);
 
 	err = __connman_firewall_add_rule(nat->fw, NULL, NULL, "nat",
 				"POSTROUTING", cmd);
 	g_free(cmd);
 	if (err < 0)
 		return err;
+
+	/* Additional masquerading rules were set */
+	if (dn_masquerading) {
+		char *sourceaddr = NULL;
+
+		if (dn_ipaddr_range)
+			sourceaddr = g_strdup_printf("-s %s/%u ",
+						dn_ipaddr_range,
+						dn_ipaddr_netmask);
+
+		/*
+		 * In dual nat masquerade from the given address space
+		 * designated for the 1st nat to the address space for the
+		 * tether.
+		 */
+		cmd = g_strdup_printf("%s-d %s/%u -o %s -j MASQUERADE",
+					sourceaddr ? sourceaddr : "",
+					nat->address,
+					nat->prefixlen,
+					nat->ifname);
+		DBG("rule %s", cmd);
+
+		err = __connman_firewall_add_rule(nat->fw, NULL, NULL, "nat",
+					"POSTROUTING", cmd);
+
+		g_free(sourceaddr);
+		g_free(cmd);
+
+		if (err < 0)
+			return err;
+	}
 
 	return __connman_firewall_enable(nat->fw);
 }
@@ -181,6 +169,8 @@ static void disable_nat(struct connman_nat *nat)
 {
 	if (!nat->interface)
 		return;
+
+	DBG("interface %s", nat->interface);
 
 	/* Disable masquerading */
 	__connman_firewall_disable(nat->fw);
@@ -191,6 +181,8 @@ int __connman_nat_enable(const char *name, const char *address,
 {
 	struct connman_nat *nat;
 	int err;
+
+	DBG("");
 
 	if (g_hash_table_size(nat_hash) == 0) {
 		err = enable_ip_forward(AF_INET, true);
@@ -208,10 +200,12 @@ int __connman_nat_enable(const char *name, const char *address,
 
 	nat->address = g_strdup(address);
 	nat->prefixlen = prefixlen;
+	nat->ifname = g_strdup(name);
+	nat->family = AF_INET;
 
 	g_hash_table_replace(nat_hash, g_strdup(name), nat);
 
-	return enable_nat(nat);
+	return enable_nat(nat, false, NULL, 0);
 
 err:
 	if (nat) {
@@ -273,7 +267,6 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 						bool enable_ndproxy)
 {
 	struct connman_nat *nat;
-	char *ifname = NULL;
 	char **rules = NULL;
 	int index;
 	int err;
@@ -294,6 +287,8 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 		return -ENOMEM;
 	}
 
+	nat->interface = g_strdup(ifname_in);
+	nat->family = AF_INET6;
 	nat->ipv6_accept_ra = -1;
 	nat->ipv6_ndproxy = -1;
 
@@ -319,8 +314,8 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 	}
 
 	index = __connman_ipconfig_get_index(ipconfig);
-	ifname = connman_inet_ifname(index);
-	if (!ifname) {
+	nat->ifname = connman_inet_ifname(index);
+	if (!nat->ifname) {
 		connman_error("no interface name for index %d",
 					__connman_ipconfig_get_index(ipconfig));
 		goto err;
@@ -347,8 +342,10 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 	}
 
 	rules = g_new0(char*, 2);
-	rules[0] = g_strdup_printf("-i %s -o %s -j ACCEPT", ifname_in, ifname);
-	rules[1] = g_strdup_printf("-i %s -o %s -j ACCEPT", ifname, ifname_in);
+	rules[0] = g_strdup_printf("-i %s -o %s -j ACCEPT", nat->interface,
+								nat->ifname);
+	rules[1] = g_strdup_printf("-i %s -o %s -j ACCEPT", nat->interface,
+								ifname_in);
 
 	for (i = 0; i < 2; i++) {
 		DBG("Enable firewall rule -I FORWARD %s", rules[i]);
@@ -371,7 +368,7 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 		goto err;
 	}
 
-	g_hash_table_replace(nat_hash, ifname, nat);
+	g_hash_table_replace(nat_hash, g_strdup(nat->ifname), nat);
 
 	DBG("prepare done");
 
@@ -379,8 +376,6 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 
 err:
 	DBG("prepare failure, revert changes");
-
-	g_free(ifname);
 
 	if (nat) {
 		if (nat->fw)
@@ -401,8 +396,13 @@ void __connman_nat_disable(const char *name)
 	struct connman_nat *nat;
 
 	nat = g_hash_table_lookup(nat_hash, name);
-	if (!nat)
+	if (!nat || nat->family != AF_INET)
 		return;
+
+	if (nat->family != AF_INET) {
+		DBG("nat %p/%s IP family is not IPv4", nat, name);
+		return;
+	}
 
 	disable_nat(nat);
 
@@ -437,6 +437,12 @@ void connman_nat6_restore(struct connman_ipconfig *ipconfig,
 		return;
 	}
 
+	if (nat->family != AF_INET6) {
+		connman_error("nat %p/%s IP family is not IPv6", nat, ifname);
+		g_free(ifname);
+		return;
+	}
+
 	/* Restore original values */
 	set_original_ipv6_values(nat, ipconfig, ipv6_address, ipv6_prefixlen);
 
@@ -453,12 +459,56 @@ void connman_nat6_restore(struct connman_ipconfig *ipconfig,
 	DBG("restore done");
 }
 
-static void update_default_interface(struct connman_service *service)
+static int restart_nat(bool dn_masquerading, const char *dn_ipaddr_range,
+					unsigned char dn_ipaddr_netmask)
 {
 	GHashTableIter iter;
 	gpointer key, value;
-	char *interface;
 	int err;
+
+	DBG("");
+
+	g_hash_table_iter_init(&iter, nat_hash);
+
+	while (g_hash_table_iter_next(&iter, &key, &value)) {
+		const char *name = key;
+		struct connman_nat *nat = value;
+
+		if (nat->family != AF_INET)
+			continue;
+
+		DBG("name %s interface %s", name, nat->interface);
+
+		disable_nat(nat);
+		err = enable_nat(nat, dn_masquerading, dn_ipaddr_range,
+							dn_ipaddr_netmask);
+		if (err < 0) {
+			DBG("Failed to enable nat for %s", name);
+			return err;
+		}
+	}
+
+	return 0;
+}
+
+int connman_nat_double_nat_override(const char *ifname,
+						const char *ipaddr_range,
+						unsigned char ipaddr_netmask)
+{
+	if (!ifname || !ipaddr_range)
+		return -EINVAL;
+
+	DBG("interface %s", ifname);
+
+	g_free(default_interface);
+	default_interface = g_strdup(ifname);
+
+	return restart_nat(true, ipaddr_range, ipaddr_netmask);
+}
+
+static void update_default_interface(struct connman_service *service)
+{
+	char *interface;
 
 	interface = connman_service_get_interface(service);
 
@@ -475,17 +525,7 @@ static void update_default_interface(struct connman_service *service)
 	if (service)
 		default_service = connman_service_ref(service);
 
-	g_hash_table_iter_init(&iter, nat_hash);
-
-	while (g_hash_table_iter_next(&iter, &key, &value)) {
-		const char *name = key;
-		struct connman_nat *nat = value;
-
-		disable_nat(nat);
-		err = enable_nat(nat);
-		if (err < 0)
-			DBG("Failed to enable nat for %s", name);
-	}
+	restart_nat(false, NULL, 0);
 }
 
 static void shutdown_nat(gpointer key, gpointer value, gpointer user_data)
@@ -500,6 +540,7 @@ static void cleanup_nat(gpointer data)
 	struct connman_nat *nat = data;
 
 	__connman_firewall_destroy(nat->fw);
+	g_free(nat->ifname);
 	g_free(nat->address);
 	g_free(nat->interface);
 	g_free(nat);

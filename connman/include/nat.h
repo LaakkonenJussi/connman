@@ -34,6 +34,9 @@ extern "C" {
  * @short_description: Functions for NAT handling
  */
 
+int connman_nat_double_nat_override(const char *ifname,
+						const char *ipaddr_range,
+						unsigned char ipaddr_netmask);
 int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 						const char *ipv6_address,
 						unsigned char ipv6_prefixlen,
