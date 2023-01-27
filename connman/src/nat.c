@@ -38,6 +38,10 @@ static char *default_interface = NULL;
 static struct connman_service *default_service = NULL;
 static GHashTable *nat_hash;
 
+static bool dn_pending_enabled = false;
+static char *dn_pending_ipaddr_range = NULL;
+unsigned char dn_pending_ipaddr_netmask;
+
 struct connman_nat {
 	int family;
 	char *ifname;			/* Same as the name as hash key */
@@ -132,13 +136,24 @@ static int enable_nat(struct connman_nat *nat, bool dn_masquerading,
 		return err;
 
 	/* Additional masquerading rules were set */
-	if (dn_masquerading) {
+	if (dn_masquerading || dn_pending_enabled) {
 		char *sourceaddr = NULL;
 
-		if (dn_ipaddr_range)
+		if (dn_masquerading && dn_ipaddr_range) {
 			sourceaddr = g_strdup_printf("-s %s/%u ",
 						dn_ipaddr_range,
 						dn_ipaddr_netmask);
+		} else if (dn_pending_enabled && dn_pending_ipaddr_range) {
+			sourceaddr = g_strdup_printf("-s %s/%u ",
+						dn_pending_ipaddr_range,
+						dn_pending_ipaddr_netmask);
+
+			/* Unset pending dualnat */
+			dn_pending_enabled = false;
+			g_free(dn_pending_ipaddr_range);
+			dn_pending_ipaddr_range = NULL;
+			dn_pending_ipaddr_netmask = 0;
+		}
 
 		/*
 		 * In dual nat masquerade from the given address space
@@ -464,6 +479,7 @@ static int restart_nat(bool dn_masquerading, const char *dn_ipaddr_range,
 {
 	GHashTableIter iter;
 	gpointer key, value;
+	int count = 0;
 	int err;
 
 	DBG("");
@@ -486,6 +502,17 @@ static int restart_nat(bool dn_masquerading, const char *dn_ipaddr_range,
 			DBG("Failed to enable nat for %s", name);
 			return err;
 		}
+
+		count++;
+	}
+
+	/* Dual NAT needs to be applied later on */
+	if (!count && dn_masquerading) {
+		dn_pending_enabled = true;
+		g_free(dn_pending_ipaddr_range);
+		dn_pending_ipaddr_range = g_strdup(dn_ipaddr_range);
+		dn_pending_ipaddr_netmask = dn_ipaddr_netmask;
+		return -EINPROGRESS;
 	}
 
 	return 0;
@@ -571,6 +598,7 @@ void __connman_nat_cleanup(void)
 {
 	DBG("");
 
+	g_free(dn_pending_ipaddr_range);
 	g_free(default_interface);
 	if (default_service)
 		connman_service_unref(default_service);
