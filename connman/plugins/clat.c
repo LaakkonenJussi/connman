@@ -1220,14 +1220,17 @@ static void clat_task_exit(struct connman_task *task, int exit_code,
 
 static void setup_double_nat(struct clat_data *data)
 {
+	int err;
+
 	if (!data)
 		return;
 
 	if (data->tethering_on && data->state == CLAT_STATE_RUNNING) {
 		DBG("tethering enabled when CLAT is running, override nat");
 
-		if (connman_nat_double_nat_override(TAYGA_CLAT_DEVICE,
-						"192.0.0.0", IPv4ADDR_NETMASK))
+		err = connman_nat_double_nat_override(TAYGA_CLAT_DEVICE,
+						"192.0.0.0", IPv4ADDR_NETMASK);
+		if (err && err != -EINPROGRESS)
 			connman_error("Failed to setup double nat for tether");
 	}
 }
