@@ -77,6 +77,8 @@ struct clat_data {
 	int err_ch_id;
 	GIOChannel *out_ch;
 	GIOChannel *err_ch;
+
+	bool tethering_on;
 };
 
 #define DEFAULT_TAYGA_BIN		"/usr/local/bin/tayga"
@@ -91,7 +93,7 @@ struct clat_data {
 #define CLAT_IPv6_METRIC		1024
 #define CLAT_SUFFIX			"c1a7"
 
-#define PREFIX_QUERY_TIMEOUT		10000		/* 10 seconds */
+#define PREFIX_QUERY_TIMEOUT		600000		/* 10 seconds */
 #define DAD_TIMEOUT			600000		/* 10 minutes */
 
 static const char GLOBAL_PREFIX[] = "64:ff9b::";
@@ -1216,6 +1218,20 @@ static void clat_task_exit(struct connman_task *task, int exit_code,
 	clat_data_clear(data);
 }
 
+static void setup_double_nat(struct clat_data *data)
+{
+	if (!data)
+		return;
+
+	if (data->tethering_on && data->state == CLAT_STATE_RUNNING) {
+		DBG("tethering enabled when CLAT is running, override nat");
+
+		if (connman_nat_double_nat_override(TAYGA_CLAT_DEVICE,
+						"192.0.0.0", IPv4ADDR_NETMASK))
+			connman_error("Failed to setup double nat for tether");
+	}
+}
+
 static int clat_run_task(struct clat_data *data)
 {
 	int fd_out;
@@ -1352,6 +1368,8 @@ static int clat_run_task(struct clat_data *data)
 		data->err_ch_id = g_io_add_watch(data->err_ch,
 						G_IO_IN | G_IO_ERR | G_IO_HUP,
 						(GIOFunc)io_channel_cb, data);
+
+		setup_double_nat(data);
 	}
 
 	DBG("in state %d/%s", data->state, state2string(data->state));
@@ -1714,11 +1732,22 @@ onlinecheck:
 	}
 }
 
+static void clat_tethering_changed(struct connman_technology *tech, bool on)
+{
+	struct clat_data *data = get_data();
+
+	/* We just need to know if tethering is enabled or not */
+	data->tethering_on = on;
+
+	setup_double_nat(data);
+}
+
 static struct connman_notifier clat_notifier = {
 	.name			= "clat",
 	.ipconfig_changed	= clat_ipconfig_changed,
 	.default_changed	= clat_default_changed,
 	.service_state_changed	= clat_service_state_changed,
+	.tethering_changed	= clat_tethering_changed,
 };
 
 static int clat_init(void)
