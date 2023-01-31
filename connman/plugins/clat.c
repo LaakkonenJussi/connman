@@ -1249,10 +1249,7 @@ static void setup_double_nat(struct clat_data *data)
 	if (!data)
 		return;
 
-	if (data->state != CLAT_STATE_RUNNING)
-		return;
-
-	if (data->tethering_on) {
+	if (data->tethering_on && data->state == CLAT_STATE_RUNNING) {
 		DBG("tethering enabled when CLAT is running, override nat");
 
 		err = connman_nat_enable_double_nat_override(TAYGA_CLAT_DEVICE,
@@ -1260,9 +1257,22 @@ static void setup_double_nat(struct clat_data *data)
 		if (err && err != -EINPROGRESS)
 			connman_error("Failed to setup double nat for tether");
 	} else {
-		DBG("tethering disabled when CLAT is running, remove override");
+		DBG("Remove nat override");
 		connman_nat_disable_double_nat_override(TAYGA_CLAT_DEVICE);
 	}
+}
+
+static void stop_running(struct clat_data *data)
+{
+	if (!data)
+		return;
+
+	clat_task_stop_periodic_query(data);
+	clat_task_stop_dad(data);
+	clat_task_stop_online_check(data);
+
+	data->tethering_on = false;
+	setup_double_nat(data);
 }
 
 static int clat_run_task(struct clat_data *data)
@@ -1317,9 +1327,7 @@ static int clat_run_task(struct clat_data *data)
 	/* If either running or stopped state and run is called do cleanup */
 	case CLAT_STATE_RUNNING:
 	case CLAT_STATE_STOPPED:
-		clat_task_stop_periodic_query(data);
-		clat_task_stop_dad(data);
-		clat_task_stop_online_check(data);
+		stop_running(data);
 
 		err = clat_task_post_configure(data);
 		if (err) {
@@ -1345,9 +1353,7 @@ static int clat_run_task(struct clat_data *data)
 			connman_error("CLAT failed to create post-configure "
 						"task in failure state");
 
-		clat_task_stop_periodic_query(data);
-		clat_task_stop_dad(data);
-		clat_task_stop_online_check(data);
+		stop_running(data);
 
 		/* Remain in failure state, can be started via clat_start(). */
 		data->state = CLAT_STATE_FAILURE;
