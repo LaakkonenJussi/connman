@@ -234,6 +234,11 @@ enum connman_service_state connman_service_get_state(
 	return 0;
 }
 
+const char *connman_setting_get_string(const char *key)
+{
+	return NULL;
+}
+
 // DBus dummies
 
 gboolean g_dbus_register_interface(DBusConnection *connection,
