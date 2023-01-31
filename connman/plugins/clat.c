@@ -1249,13 +1249,19 @@ static void setup_double_nat(struct clat_data *data)
 	if (!data)
 		return;
 
-	if (data->tethering_on && data->state == CLAT_STATE_RUNNING) {
+	if (data->state != CLAT_STATE_RUNNING)
+		return;
+
+	if (data->tethering_on) {
 		DBG("tethering enabled when CLAT is running, override nat");
 
-		err = connman_nat_double_nat_override(TAYGA_CLAT_DEVICE,
+		err = connman_nat_enable_double_nat_override(TAYGA_CLAT_DEVICE,
 						"192.0.0.0", IPv4ADDR_NETMASK);
 		if (err && err != -EINPROGRESS)
 			connman_error("Failed to setup double nat for tether");
+	} else {
+		DBG("tethering disabled when CLAT is running, remove override");
+		connman_nat_disable_double_nat_override(TAYGA_CLAT_DEVICE);
 	}
 }
 
