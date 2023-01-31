@@ -31,6 +31,7 @@
 #include "../include/nat.h"
 #include <connman/notifier.h>
 #include <connman/rtnl.h>
+#include <connman/setting.h>
 
 #include <gweb/gresolv.h>
 
@@ -105,6 +106,7 @@ static struct {
 	bool resolv_always_succeeds;
 	bool clat_device_use_netmask;
 	bool tayga_use_ipv6_conf;
+	bool tayga_use_strict_frag_hdr;
 } clat_settings = {
 	.tayga_bin = NULL,
 
@@ -119,6 +121,9 @@ static struct {
 
 	/* Write IPv6 address of the interface used to the tayga config */
 	.tayga_use_ipv6_conf = false,
+
+	/* Value for strict-frag-hdr, defaults on */
+	.tayga_use_strict_frag_hdr = true,
 };
 
 #define CLATCONFIGFILE			CONFIGDIR "/clat.conf"
@@ -127,6 +132,7 @@ static struct {
 #define CONF_RESOLV_ALWAYS_SUCCEEDS	"ResolvAlwaysSucceeds"
 #define CONF_CLAT_USE_NETMASK		"ClatDeviceUseNetmask"
 #define CONF_TAYGA_USE_IPV6_CONF	"TaygaRequiresIPv6Address"
+#define CONF_TAYGA_USE_STRICT_FRAG_HDR	"TaygaStrictFragHdr"
 
 struct clat_data *__data = NULL;
 
@@ -203,6 +209,14 @@ static void parse_clat_config(GKeyFile *config)
 						&error);
 	if (!error)
 		clat_settings.tayga_use_ipv6_conf = boolean;
+
+	g_clear_error(&error);
+
+	boolean = g_key_file_get_boolean(config, group,
+						CONF_TAYGA_USE_STRICT_FRAG_HDR,
+						&error);
+	if (!error)
+		clat_settings.tayga_use_strict_frag_hdr = boolean;
 
 	g_clear_error(&error);
 }
@@ -448,6 +462,16 @@ static int clat_create_tayga_config(struct clat_data *data)
 	 */
 	g_string_append_printf(str, "map %s %s\n", CLAT_IPv4ADDR,
 						data->address);
+
+	/* ippool.c apparently defaults to 24 subnet */
+	g_string_append_printf(str, "dynamic-pool %s/%u\n",
+				connman_setting_get_string(
+					"TetheringSubnetBlock"),
+				24);
+
+	g_string_append_printf(str, "strict-frag-hdr %s\n",
+				clat_settings.tayga_use_strict_frag_hdr ?
+					"on" : "off");
 
 	buf = g_string_free(str, FALSE);
 
