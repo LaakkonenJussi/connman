@@ -254,12 +254,17 @@ enum connman_ipconfig_method get_method(struct connman_ipconfig *ipconfig)
 	return ipconfig->method;
 }
 
-int connman_nat_double_nat_override(const char *ifname,
+int connman_nat_enable_double_nat_override(const char *ifname,
 						const char *ipaddr_range,
 						unsigned char ipaddr_netmask)
 {
 	g_assert(ifname);
 	return 0;
+}
+
+void connman_nat_disable_double_nat_override(const char *ifname)
+{
+	g_assert(ifname);
 }
 
 int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
