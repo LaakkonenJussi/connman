@@ -467,6 +467,11 @@ void connman_rtnl_handle_rtprot_ra(bool value)
 	return;
 }
 
+const char *connman_setting_get_string(const char *key)
+{
+	return NULL;
+}
+
 static gchar *option_debug = NULL;
 
 static bool parse_debug(const char *key, const char *value,
