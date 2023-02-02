@@ -183,6 +183,8 @@ static void parse_clat_config(GKeyFile *config)
 	else
 		clat_settings.tayga_bin = g_strdup(DEFAULT_TAYGA_BIN);
 
+	g_clear_error(&error);
+
 	boolean = g_key_file_get_boolean(config, group, CONF_DAD_ENABLED,
 						&error);
 	if (!error)
