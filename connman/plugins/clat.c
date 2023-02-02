@@ -1496,7 +1496,7 @@ static void clat_new_rtnl_gateway(int index, const char *dst,
 
 	DBG("%d dst %s gateway %s metric %d", index, dst, gateway, metric);
 
-	/* Not the cellular device we are monitoring. */
+	/* Not the device we are monitoring. */
 	if (index != data->ifindex)
 		return;
 
@@ -1545,6 +1545,33 @@ static struct connman_rtnl clat_rtnl = {
 	.delgateway6		= clat_del_rtnl_gateway,
 };
 
+static bool is_supported_service_type(struct connman_service *service)
+{
+	enum connman_service_type type;
+
+	if (!service)
+		return false;
+
+	type = connman_service_get_type(service);
+
+	switch (type) {
+	case CONNMAN_SERVICE_TYPE_UNKNOWN:
+	case CONNMAN_SERVICE_TYPE_SYSTEM:
+	case CONNMAN_SERVICE_TYPE_ETHERNET:
+	case CONNMAN_SERVICE_TYPE_BLUETOOTH:
+	case CONNMAN_SERVICE_TYPE_GPS:
+	case CONNMAN_SERVICE_TYPE_VPN:
+	case CONNMAN_SERVICE_TYPE_GADGET:
+	case CONNMAN_SERVICE_TYPE_P2P:
+		break;
+	case CONNMAN_SERVICE_TYPE_WIFI:
+	case CONNMAN_SERVICE_TYPE_CELLULAR:
+		return true;
+	}
+
+	return false;
+}
+
 static void clat_ipconfig_changed(struct connman_service *service,
 					struct connman_ipconfig *ipconfig)
 {
@@ -1558,23 +1585,22 @@ static void clat_ipconfig_changed(struct connman_service *service,
 
 	DBG("service %p ipconfig %p", service, ipconfig);
 
-	/* TODO Support WLAN and VPN as well */
-	if (service != data->service || connman_service_get_type(service) !=
-						CONNMAN_SERVICE_TYPE_CELLULAR) {
-		DBG("Not tracking service %p/%s or not cellular", service,
+	/* TODO Support VPN as well */
+	if (service != data->service || !is_supported_service_type(service)) {
+		DBG("Not tracking service %p/%s or not supported", service,
 				connman_service_get_identifier(service));
 		return;
 	}
 
 	if (connman_ipconfig_get_config_type(ipconfig) ==
 						CONNMAN_IPCONFIG_TYPE_IPV4) {
-		DBG("cellular %p has IPv4 config, stop CLAT", service);
+		DBG("cellular/wifi %p has IPv4 config, stop CLAT", service);
 		clat_stop(data);
 		return;
 	}
 
 	if (service != connman_service_get_default()) {
-		DBG("cellular service %p is not default, stop CLAT", service);
+		DBG("cellular/wifi service %p is not default, stop CLAT", service);
 		clat_stop(data);
 		return;
 	}
@@ -1614,12 +1640,12 @@ static bool has_ipv4_address(struct connman_service *service)
 
 	err = connman_ipaddress_get_ip(ipaddress, &address, &prefixlen);
 	if (err) {
-		DBG("IPv4 is not configured on cellular service %p", service);
+		DBG("IPv4 is not configured on service %p", service);
 		return false;
 	}
 
 	if (!address) {
-		DBG("no IPv4 address on cellular service %p", service);
+		DBG("no IPv4 address on service %p", service);
 		return false;
 	}
 
@@ -1657,7 +1683,7 @@ static void clat_default_changed(struct connman_service *service)
 	}
 
 	if (data->service && data->service != service) {
-		DBG("Tracked cellular service %p is not default, stop CLAT",
+		DBG("Tracked service %p is not default, stop CLAT",
 							data->service);
 		clat_stop(data);
 		return;
@@ -1673,7 +1699,7 @@ static void clat_default_changed(struct connman_service *service)
 	if (connman_network_is_configured(network,
 					CONNMAN_IPCONFIG_TYPE_IPV4) &&
 					has_ipv4_address(data->service)) {
-		DBG("IPv4 is configured on cellular network %p, stop CLAT",
+		DBG("IPv4 is configured on network %p, stop CLAT",
 							network);
 		clat_stop(data);
 		return;
@@ -1689,11 +1715,10 @@ static void clat_service_state_changed(struct connman_service *service,
 	int err;
 
 	// TODO Support also WLAN and VPN
-	if (!service || connman_service_get_type(service) !=
-						CONNMAN_SERVICE_TYPE_CELLULAR)
+	if (!service || !is_supported_service_type(service))
 		return;
 
-	DBG("cellular service %p", service);
+	DBG("cellular/wifi service %p", service);
 
 	switch (state) {
 	/* Not connected */
