@@ -172,6 +172,7 @@ static void parse_clat_config(GKeyFile *config)
 
 	if (!config) {
 		DBG("No CLAT config was found, nothing to parse");
+		clat_settings.tayga_bin = g_strdup(DEFAULT_TAYGA_BIN);
 		return;
 	}
 
