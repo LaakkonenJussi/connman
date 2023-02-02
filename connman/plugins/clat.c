@@ -728,7 +728,13 @@ static void prefix_query_cb(GResolvResultStatus status,
 		break;
 	case -EHOSTDOWN:
 		DBG("failed to resolv %s, CLAT is not started", WKN_ADDRESS);
-		new_state = CLAT_STATE_STOPPED;
+		if (is_running(data->state))
+			new_state = CLAT_STATE_STOPPED;
+
+		/* Go back to idle if doing initial query */
+		if (data->state == CLAT_STATE_PREFIX_QUERY)
+			new_state = CLAT_STATE_IDLE;
+
 		break;
 	default:
 		DBG("failed to assign prefix, error %d", err);
@@ -1149,9 +1155,6 @@ static int clat_task_post_configure(struct clat_data *data)
 	char *netmask = NULL;
 	int index;
 
-	//$ ip link set dev clat up
-	// TODO wait for rtnl notify?
-
 	ipconfig = connman_service_get_ipconfig(data->service, AF_INET6);
 	if (ipconfig)
 		connman_nat6_restore(ipconfig, data->address,
@@ -1160,28 +1163,29 @@ static int clat_task_post_configure(struct clat_data *data)
 	DBG("ipconfig %p", ipconfig);
 
 	index = connman_inet_ifindex(TAYGA_CLAT_DEVICE);
-	if (index >= 0) {
-		ipaddress = connman_ipaddress_alloc(AF_INET);
-		connman_inet_del_network_route_with_metric(index, CLAT_IPv4ADDR,
-							CLAT_IPv4_METRIC);
-
-		if (clat_settings.clat_device_use_netmask)
-			netmask = cidr_to_str(CLAT_IPv4ADDR_NETMASK);
-
-		connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, netmask,
-							NULL);
-		g_free(netmask);
-
-		connman_inet_clear_address(index, ipaddress);
-		connman_inet_del_ipv6_network_route_with_metric(index,
-							data->address,
-							data->addr_prefixlen,
-							CLAT_IPv6_METRIC);
-		connman_inet_ifdown(index);
-		connman_ipaddress_free(ipaddress);
-	} else {
+	if (index < 0) {
 		DBG("CLAT tayga interface not up, nothing to do");
+		return -ENODEV;
 	}
+
+	ipaddress = connman_ipaddress_alloc(AF_INET);
+	connman_inet_del_network_route_with_metric(index, CLAT_IPv4ADDR,
+						CLAT_IPv4_METRIC);
+
+	if (clat_settings.clat_device_use_netmask)
+		netmask = cidr_to_str(CLAT_IPv4ADDR_NETMASK);
+
+	connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, netmask,
+						NULL);
+	g_free(netmask);
+
+	connman_inet_clear_address(index, ipaddress);
+	connman_inet_del_ipv6_network_route_with_metric(index,
+						data->address,
+						data->addr_prefixlen,
+						CLAT_IPv6_METRIC);
+	connman_inet_ifdown(index);
+	connman_ipaddress_free(ipaddress);
 
 	if (create_task(data))
 		return -ENOMEM;
@@ -1209,7 +1213,7 @@ static void clat_task_exit(struct connman_task *task, int exit_code,
 		return;
 	}
 
-	DBG("state %d/%s", data->state, state2string(data->state));
+	DBG("task %p state %d/%s", task, data->state, state2string(data->state));
 
 	if (exit_code)
 		connman_warn("CLAT task failed with code %d", exit_code);
@@ -1450,27 +1454,22 @@ static int clat_start(struct clat_data *data)
 
 static int clat_stop(struct clat_data *data)
 {
-	int err;
-
 	if (!data)
 		return -EINVAL;
 
 	DBG("state %d/%s", data->state, state2string(data->state));
 
-	destroy_task(data);
-
-	/* Run as stopped -> does cleanup */
-	data->state = CLAT_STATE_STOPPED;
-	err = clat_run_task(data);
-	if (err && err != -EALREADY) {
-		connman_error("CLAT failed to start cleanup task");
-		data->state = CLAT_STATE_FAILURE;
+	if (!is_running(data->state)) {
+		DBG("already stopping/stopped");
+		return -EALREADY;
 	}
 
-	/* Sets as idle */
-	clat_data_clear(data);
+	if (data->task)
+		connman_task_stop(data->task);
+	else
+		data->state = CLAT_STATE_STOPPED;
 
-	return err;
+	return 0;
 }
 
 /*static int clat_failure(struct clat_data *data)
@@ -1849,8 +1848,7 @@ static void clat_exit(void)
 {
 	DBG("");
 
-	if (is_running(__data->state))
-		clat_stop(__data);
+	clat_stop(__data);
 
 	connman_notifier_unregister(&clat_notifier);
 	connman_rtnl_handle_rtprot_ra(false);
