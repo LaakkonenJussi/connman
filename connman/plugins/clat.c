@@ -39,8 +39,6 @@
 
 #define CONNMAN_API_SUBJECT_TO_CHANGE
 
-#define WKN_ADDRESS "ipv4only.arpa"
-
 enum clat_state {
 	CLAT_STATE_IDLE = 0,
 	CLAT_STATE_PREFIX_QUERY,
@@ -82,21 +80,25 @@ struct clat_data {
 	bool tethering_on;
 };
 
-#define DEFAULT_TAYGA_BIN		"/usr/local/bin/tayga"
+#define WKN_ADDRESS "ipv4only.arpa"
+#define DEFAULT_TAYGA_BIN		"/usr/sbin/tayga"
 #define TAYGA_CLAT_DEVICE		"clat"
 #define TAYGA_CONF			"tayga.conf"
 #define TAYGA_IPv4ADDR			"192.0.0.2"	/* from RFC 7335 */
+
 #define CLAT_IPv4ADDR			"192.0.0.1"	/* from RFC 7335 */
-#define IPv4ADDR_NETMASK		29		/* from RFC 7335 */
-#define CLAT_INADDR_ANY		"0.0.0.0"
+#define CLAT_IPv4ADDR_NETWORK		"192.0.0.0"	/* from RFC 7335 */
+#define CLAT_IPv4ADDR_NETMASK		29		/* from RFC 7335 */
+#define CLAT_IPv4_INADDR_ANY		"0.0.0.0"
 #define CLAT_IPv4_METRIC		2049		/* Set as value -1 */
 #define CLAT_IPv4_ROUTE_MTU		1260		/* from clatd */
-#define CLAT_IPv6_METRIC		1024
-#define CLAT_SUFFIX			"c1a7"
+#define CLAT_IPv6_METRIC		1024		/* from clatd */
+#define CLAT_IPv6_SUFFIX		"c1a7"
 
 #define PREFIX_QUERY_TIMEOUT		600000		/* 10 seconds */
 #define DAD_TIMEOUT			600000		/* 10 minutes */
 
+/* Globally defined and assigned prefix */
 static const char GLOBAL_PREFIX[] = "64:ff9b::";
 static const unsigned char GLOBAL_PREFIXLEN = 96;
 
@@ -110,19 +112,19 @@ static struct {
 } clat_settings = {
 	.tayga_bin = NULL,
 
-	/* Use DAD for protecting the address, in android this is done */
+	/* Use DAD for protecting the address, default to being on. */
 	.dad_enabled = true,
 
-	/* Resolv result always sets global prefix if fails */
+	/* Resolv result always sets global prefix if fails, default off */
 	.resolv_always_succeeds = false,
 
-	/* Add netmask to the CLAT device IPv4 address */
+	/* Add netmask to the CLAT device IPv4 address, default on */
 	.clat_device_use_netmask = true,
 
-	/* Write IPv6 address of the interface used to the tayga config */
+	/* Write IPv6 address of the interface to tayga config, default off */
 	.tayga_use_ipv6_conf = false,
 
-	/* Value for strict-frag-hdr, defaults on */
+	/* Value for strict-frag-hdr, default on */
 	.tayga_use_strict_frag_hdr = true,
 };
 
@@ -463,7 +465,7 @@ static int clat_create_tayga_config(struct clat_data *data)
 	g_string_append_printf(str, "map %s %s\n", CLAT_IPv4ADDR,
 						data->address);
 
-	/* ippool.c apparently defaults to 24 subnet */
+	/* ippool.c apparently defaults to 24 subnet for tethering */
 	g_string_append_printf(str, "dynamic-pool %s/%u\n",
 				connman_setting_get_string(
 					"TetheringSubnetBlock"),
@@ -556,6 +558,7 @@ static struct prefix_entry *new_prefix_entry(const char *address)
 		entry->prefix = g_strdup(tokens[0]);
 		entry->prefixlen = (unsigned char)g_ascii_strtoull(tokens[1],
 								NULL, 10);
+	/* TODO create proper parser for addresses without prefix */
 	} else {
 		DBG("address does not contain a valid prefix");
 		free_prefix_entry(entry);
@@ -693,8 +696,10 @@ static void prefix_query_cb(GResolvResultStatus status,
 
 	if (status != G_RESOLV_RESULT_STATUS_SUCCESS) {
 		if (clat_settings.resolv_always_succeeds) {
-			DBG("ignore resolv result %d", status);
 			gchar **override = g_new0(char*, 1);
+
+			DBG("ignore resolv result %d", status);
+
 			override[0] = g_strdup("64:ff9b::/96");
 			err = assign_clat_prefix(data, override);
 			g_strfreev(override);
@@ -812,6 +817,10 @@ static int clat_task_start_periodic_query(struct clat_data *data)
 		return -EALREADY;
 	}
 
+	/*
+	 * TODO: make this do the queries with AAAA DNS TTL - 10s, i.e., 10s
+	 * before the record expires as stated by RFC.
+	 */
 	data->prefix_query_id = g_timeout_add(PREFIX_QUERY_TIMEOUT,
 							run_prefix_query, data);
 	if (!data->prefix_query_id) {
@@ -892,7 +901,7 @@ static int derive_ipv6_address(struct clat_data *data, const char *ipv6_addr,
 	 * https://github.com/toreanderson/clatd/blob/master/clatd#L442
 	 * 
 	 */
-	data->address = g_strconcat(ipv6prefix, "::", CLAT_SUFFIX, NULL);
+	data->address = g_strconcat(ipv6prefix, "::", CLAT_IPv6_SUFFIX, NULL);
 	data->addr_prefixlen = 128;
 
 	return 0;
@@ -1031,7 +1040,7 @@ static int clat_task_start_tayga(struct clat_data *data)
 						CLAT_IPv6_METRIC);
 	//$ ip address add 192.0.0.2 dev clat
 	if (clat_settings.clat_device_use_netmask)
-		netmask = cidr_to_str(IPv4ADDR_NETMASK);
+		netmask = cidr_to_str(CLAT_IPv4ADDR_NETMASK);
 
 	ipaddress = connman_ipaddress_alloc(AF_INET);
 	connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, netmask, NULL);
@@ -1039,9 +1048,9 @@ static int clat_task_start_tayga(struct clat_data *data)
 
 	//$ ip -4 route add default dev clat
 	/* Set no address, all traffic should be forwarded to the device */
-	connman_inet_add_network_route_with_metric(index, CLAT_INADDR_ANY,
-							CLAT_INADDR_ANY,
-							CLAT_INADDR_ANY,
+	connman_inet_add_network_route_with_metric(index, CLAT_IPv4_INADDR_ANY,
+							CLAT_IPv4_INADDR_ANY,
+							CLAT_IPv4_INADDR_ANY,
 							CLAT_IPv4_METRIC,
 							CLAT_IPv4_ROUTE_MTU);
 	connman_ipaddress_free(ipaddress);
@@ -1157,7 +1166,7 @@ static int clat_task_post_configure(struct clat_data *data)
 							CLAT_IPv4_METRIC);
 
 		if (clat_settings.clat_device_use_netmask)
-			netmask = cidr_to_str(IPv4ADDR_NETMASK);
+			netmask = cidr_to_str(CLAT_IPv4ADDR_NETMASK);
 
 		connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, netmask,
 							NULL);
@@ -1259,7 +1268,8 @@ static void setup_double_nat(struct clat_data *data)
 		DBG("tethering enabled when CLAT is running, override nat");
 
 		err = connman_nat_enable_double_nat_override(TAYGA_CLAT_DEVICE,
-						"192.0.0.0", IPv4ADDR_NETMASK);
+						CLAT_IPv4ADDR_NETWORK,
+						CLAT_IPv4ADDR_NETMASK);
 		if (err && err != -EINPROGRESS)
 			connman_error("Failed to setup double nat for tether");
 	} else {
@@ -1463,10 +1473,10 @@ static int clat_stop(struct clat_data *data)
 	return err;
 }
 
-static int clat_failure(struct clat_data *data)
+/*static int clat_failure(struct clat_data *data)
 {
 	return 0;
-}
+}*/
 
 static void clat_new_rtnl_gateway(int index, const char *dst,
 						const char *gateway, int metric,
