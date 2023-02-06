@@ -1237,15 +1237,24 @@ static void clat_task_exit(struct connman_task *task, int exit_code,
 	case CLAT_STATE_PREFIX_QUERY:
 	case CLAT_STATE_PRE_CONFIGURE:
 	case CLAT_STATE_RUNNING:
-		if (exit_code)
-			data->state = CLAT_STATE_FAILURE;
-		else
+		if (exit_code) {
+			/*
+			 * If the process segfaults when clat should be running
+			 * do restart.
+			 */
+			if (data->state == CLAT_STATE_RUNNING)
+				data->state = CLAT_STATE_RESTART;
+			else
+				data->state = CLAT_STATE_FAILURE;
+		} else {
 			DBG("run next state %d/%s", data->state + 1,
 						state2string(data->state + 1));
+		}
 
 		err = clat_run_task(data);
 		if (err && err != -EALREADY)
 			connman_error("failed to run CLAT, error %d", err);
+
 		return;
 	case CLAT_STATE_POST_CONFIGURE:
 		DBG("CLAT process ended");
