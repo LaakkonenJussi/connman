@@ -338,7 +338,7 @@ static int create_task(struct clat_data *data)
 	if (!data)
 		return -ENOENT;
 
-	data->task = connman_task_create(clat_settings.tayga_bin, NULL, data);
+	data->task = connman_task_create(clat_settings.tayga_bin, NULL, NULL);
 	if (!data->task)
 		return -ENOMEM;
 
@@ -1003,7 +1003,7 @@ static char *cidr_to_str(unsigned char cidr_netmask)
 	return g_strdup(netmask);
 }
 
-static int clat_task_start_tayga(struct clat_data *data)
+static int clat_task_configure(struct clat_data *data)
 {
 	struct connman_ipconfig *ipconfig;
 	struct connman_ipaddress *ipaddress;
@@ -1337,7 +1337,7 @@ static int clat_run_task(struct clat_data *data)
 		data->state = CLAT_STATE_PRE_CONFIGURE;
 		break;
 	case CLAT_STATE_PRE_CONFIGURE:
-		err = clat_task_start_tayga(data);
+		err = clat_task_configure(data);
 		if (err) {
 			connman_error("CLAT failed to create run task");
 			break;
@@ -1565,6 +1565,8 @@ static bool is_supported_service_type(struct connman_service *service)
 	case CONNMAN_SERVICE_TYPE_P2P:
 		break;
 	case CONNMAN_SERVICE_TYPE_WIFI:
+		// TODO make this work
+		return false;
 	case CONNMAN_SERVICE_TYPE_CELLULAR:
 		return true;
 	}
@@ -1678,6 +1680,21 @@ static void clat_default_changed(struct connman_service *service)
 	DBG("service %p", service);
 
 	if (!is_running(data->state)) {
+		if (data->service && data->service == service) {
+			enum connman_service_state state;
+			int err;
+
+			state = connman_service_get_state(data->service);
+			if (state == CONNMAN_SERVICE_STATE_READY ||
+					state == CONNMAN_SERVICE_STATE_ONLINE) {
+				DBG("Tracked service is default, start CLAT");
+				err = clat_start(data);
+				if (err)
+					connman_error("failed to start CLAT %d",
+									err);
+			}
+		}
+
 		DBG("CLAT not running, default change not affected");
 		return;
 	}
