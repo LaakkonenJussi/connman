@@ -78,6 +78,7 @@ struct clat_data {
 	GIOChannel *err_ch;
 
 	bool tethering_on;
+	bool do_restart;
 };
 
 #define WKN_ADDRESS "ipv4only.arpa"
@@ -1257,6 +1258,24 @@ static void clat_task_exit(struct connman_task *task, int exit_code,
 
 		return;
 	case CLAT_STATE_POST_CONFIGURE:
+		if (data->do_restart) {
+			/*
+			 * RESTART comes after prefix query has been done or
+			 * when the process segfaults, go directly to
+			 * PRE_CONFIGURE state.
+			 */
+			DBG("CLAT process restarting");
+			data->state = CLAT_STATE_PREFIX_QUERY;
+			data->do_restart = false;
+
+			err = clat_run_task(data);
+			if (err && err != -EALREADY)
+				connman_error("failed to run CLAT, error %d",
+									err);
+
+			return;
+		}
+
 		DBG("CLAT process ended");
 		data->state = CLAT_STATE_STOPPED;
 		break;
@@ -1355,6 +1374,9 @@ static int clat_run_task(struct clat_data *data)
 			connman_warn("CLAT failed to start periodic DAD");
 
 		break;
+	case CLAT_STATE_RESTART:
+		data->do_restart = true;
+		/* fall through */
 	/* If either running or stopped state and run is called do cleanup */
 	case CLAT_STATE_RUNNING:
 	case CLAT_STATE_STOPPED:
@@ -1392,23 +1414,6 @@ static int clat_run_task(struct clat_data *data)
 		if (err)
 			return err;
 
-		break;
-	case CLAT_STATE_RESTART:
-		destroy_task(data);
-
-		/* Run as stopped -> does cleanup */
-		data->state = CLAT_STATE_STOPPED;
-		err = clat_run_task(data);
-		if (err && err != -EALREADY) {
-			connman_error("CLAT failed to start cleanup task");
-			data->state = CLAT_STATE_FAILURE;
-		}
-
-		/*
-		 * RESTART comes after prefix query has been done, go directly
-		 * to PRE_CONFIGURE state.
-		 */
-		data->state = CLAT_STATE_PRE_CONFIGURE;
 		break;
 	}
 
@@ -1574,57 +1579,6 @@ static bool is_supported_service_type(struct connman_service *service)
 	return false;
 }
 
-static void clat_ipconfig_changed(struct connman_service *service,
-					struct connman_ipconfig *ipconfig)
-{
-	struct connman_network *network;
-	struct clat_data *data = get_data();
-	enum connman_service_state state;
-	int err;
-
-	if (service || !data->service)
-		return;
-
-	DBG("service %p ipconfig %p", service, ipconfig);
-
-	/* TODO Support VPN as well */
-	if (service != data->service || !is_supported_service_type(service)) {
-		DBG("Not tracking service %p/%s or not supported", service,
-				connman_service_get_identifier(service));
-		return;
-	}
-
-	if (connman_ipconfig_get_config_type(ipconfig) ==
-						CONNMAN_IPCONFIG_TYPE_IPV4) {
-		DBG("cellular/wifi %p has IPv4 config, stop CLAT", service);
-		clat_stop(data);
-		return;
-	}
-
-	if (service != connman_service_get_default()) {
-		DBG("cellular/wifi service %p is not default, stop CLAT", service);
-		clat_stop(data);
-		return;
-	}
-
-	network = connman_service_get_network(service);
-	if (!network || !connman_network_get_connected(network)) {
-		DBG("network %p not connected, stop CLAT", network);
-		clat_stop(data);
-		return;
-	}
-
-	state = connman_service_get_state(service);
-
-	if (state == CONNMAN_SERVICE_STATE_READY ||
-				state == CONNMAN_SERVICE_STATE_ONLINE) {
-		DBG("service %p ready|online, start CLAT", service);
-		err = clat_start(data);
-		if (err && err != -EALREADY)
-			connman_error("CLAT failed to start, error %d", err);
-	}
-}
-
 static bool has_ipv4_address(struct connman_service *service)
 {
 	struct connman_ipconfig *ipconfig;
@@ -1669,40 +1623,149 @@ static bool has_ipv4_address(struct connman_service *service)
 	return true;
 }
 
-static void clat_default_changed(struct connman_service *service)
+static bool is_valid_start_state(enum connman_service_state state)
+{
+	return state == CONNMAN_SERVICE_STATE_READY ||
+				state == CONNMAN_SERVICE_STATE_ONLINE;
+}
+
+static int try_clat_start(struct clat_data *data)
+{
+	struct connman_network *network;
+	char *ifname;
+
+	if (!data || !data->service)
+		return -EINVAL;
+
+	if (!is_valid_start_state(connman_service_get_state(data->service))) {
+		DBG("not ready|online, not starting clat");
+		return -EINVAL;
+	}
+
+	network = connman_service_get_network(data->service);
+	if (!network) {
+		DBG("No network yet, not starting clat");
+		return -ENONET;
+	}
+
+	if (data->ifindex < 0) {
+		DBG("ifindex not set, get it from network");
+		data->ifindex = connman_network_get_index(network);
+	}
+
+	if (data->ifindex < 0) {
+		DBG("Interface not up, not starting clat");
+		return -ENODEV;
+	}
+
+	ifname = connman_inet_ifname(data->ifindex);
+	if (!ifname) {
+		DBG("Interface %d not up, not starting clat", data->ifindex);
+		return -ENODEV;
+	}
+
+	g_free(ifname);
+
+	/* Network may have DHCP/AUTO set without address */
+	if (connman_network_is_configured(network,
+					CONNMAN_IPCONFIG_TYPE_IPV4) &&
+					has_ipv4_address(data->service)) {
+		DBG("Service %p has IPv4 address on interface %d, not "
+						"starting CLAT", data->service,
+						data->ifindex);
+		return 0;
+	}
+
+	return clat_start(data);
+}
+
+static void clat_ipconfig_changed(struct connman_service *service,
+					struct connman_ipconfig *ipconfig)
 {
 	struct connman_network *network;
 	struct clat_data *data = get_data();
+	int err;
 
-	if (!service || !data->service)
+	if (service || !data->service)
+		return;
+
+	DBG("service %p ipconfig %p", service, ipconfig);
+
+	/* TODO Support VPN as well */
+	if (service != data->service || !is_supported_service_type(service)) {
+		DBG("Not tracking service %p/%s or not supported", service,
+				connman_service_get_identifier(service));
+		return;
+	}
+
+	if (connman_ipconfig_get_config_type(ipconfig) ==
+						CONNMAN_IPCONFIG_TYPE_IPV4 &&
+						has_ipv4_address(service)) {
+		DBG("cellular/wifi %p has IPv4 config, stop CLAT", service);
+		clat_stop(data);
+		return;
+	}
+
+	if (data->service != connman_service_get_default()) {
+		DBG("cellular/wifi service %p is not default, stop CLAT",
+								data->service);
+		clat_stop(data);
+		return;
+	}
+
+	network = connman_service_get_network(data->service);
+	if (!network || !connman_network_get_connected(network)) {
+		DBG("network %p not connected, stop CLAT", network);
+		clat_stop(data);
+		return;
+	}
+
+	if (is_valid_start_state(connman_service_get_state(data->service))) {
+		DBG("service %p ready|online, start CLAT", data->service);
+		err = try_clat_start(data);
+		if (err && err != -EALREADY)
+			connman_error("CLAT failed to start, error %d", err);
+	}
+}
+
+static void clat_default_changed(struct connman_service *service)
+{
+	struct connman_network *network;
+	struct clat_data *data;
+	enum connman_service_state state;
+	int err;
+
+	if (!service)
 		return;
 
 	DBG("service %p", service);
 
-	if (!is_running(data->state)) {
-		if (data->service && data->service == service) {
-			enum connman_service_state state;
-			int err;
+	data = get_data();
 
-			state = connman_service_get_state(data->service);
-			if (state == CONNMAN_SERVICE_STATE_READY ||
-					state == CONNMAN_SERVICE_STATE_ONLINE) {
-				DBG("Tracked service is default, start CLAT");
-				err = clat_start(data);
-				if (err)
-					connman_error("failed to start CLAT %d",
-									err);
-			}
+	if (data->service != service) {
+		if (!is_supported_service_type(service)) {
+			DBG("Tracked service %p is not default or valid, "
+								"stop CLAT",
+								data->service);
+			clat_stop(data);
+			return;
 		}
 
-		DBG("CLAT not running, default change not affected");
-		return;
+		DBG("Set supported service %p/%s as tracked service", service,
+					connman_service_get_identifier(service));
+		data->service = service;
 	}
 
-	if (data->service && data->service != service) {
-		DBG("Tracked service %p is not default, stop CLAT",
-							data->service);
-		clat_stop(data);
+	state = connman_service_get_state(data->service);
+
+	/* Tracked service is the default service but is not running -> start */
+	if (!is_running(data->state) &&	is_valid_start_state(state)) {
+		DBG("Tracked service is default, start CLAT");
+
+		err = try_clat_start(data);
+		if (err && err != -EALREADY)
+			connman_error("failed to start CLAT %d", err);
+
 		return;
 	}
 
@@ -1726,9 +1789,7 @@ static void clat_default_changed(struct connman_service *service)
 static void clat_service_state_changed(struct connman_service *service,
 					enum connman_service_state state)
 {
-	struct connman_network *network;
-	struct clat_data *data = get_data();
-	char *ifname;
+	struct clat_data *data;
 	int err;
 
 	// TODO Support also WLAN and VPN
@@ -1736,6 +1797,8 @@ static void clat_service_state_changed(struct connman_service *service,
 		return;
 
 	DBG("cellular/wifi service %p", service);
+
+	data = get_data();
 
 	switch (state) {
 	/* Not connected */
@@ -1792,43 +1855,10 @@ static void clat_service_state_changed(struct connman_service *service,
 		goto onlinecheck;
 	}
 
-	network = connman_service_get_network(service);
-	if (!network) {
-		DBG("No network yet, not starting clat");
-		return;
+	err = try_clat_start(data);
+	if (err && err != -EALREADY) {
+		connman_error("CLAT failed to start");
 	}
-
-	if (data->ifindex < 0) {
-		DBG("ifindex not set, get it from network");
-		data->ifindex = connman_network_get_index(network);
-	}
-
-	if (data->ifindex < 0) {
-		DBG("Interface not up, not starting clat");
-		return;
-	}
-
-	ifname = connman_inet_ifname(data->ifindex);
-	if (!ifname) {
-		DBG("Interface %d not up, not starting clat", data->ifindex);
-		return;
-	}
-
-	g_free(ifname);
-
-	/* Network may have DHCP/AUTO set without address */
-	if (connman_network_is_configured(network,
-					CONNMAN_IPCONFIG_TYPE_IPV4) &&
-					has_ipv4_address(data->service)) {
-		DBG("Service %p has IPv4 address on interface %d, not "
-						"starting CLAT", data->service,
-						data->ifindex);
-		return;
-	}
-
-	err = clat_start(data);
-	if (err && err != -EALREADY)
-		connman_error("failed to start CLAT, error %d", err);
 
 onlinecheck:
 	if (state == CONNMAN_SERVICE_STATE_ONLINE &&
