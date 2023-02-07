@@ -29,6 +29,9 @@
 #include "src/connman.h"
 #include <gweb/gresolv.h>
 
+#define CLAT_DEV_INDEX 1
+#define CLAT_DEV_NAME "clat"
+
 extern struct connman_plugin_desc __connman_builtin_clat;
 
 /* Dummies */
@@ -54,6 +57,10 @@ int connman_inet_ifindex(const char *name)
 char *connman_inet_ifname(int index)
 {
 	g_assert_cmpint(index, >, 0);
+
+	if (index == CLAT_DEV_INDEX)
+		return g_strdup(CLAT_DEV_NAME);
+
 	return NULL;
 }
 
@@ -61,7 +68,7 @@ int connman_inet_add_ipv6_network_route_with_metric(int index, const char *host,
 					const char *gateway,
 					unsigned char prefix_len, short metric)
 {
-	g_assert_cmpint(index, >, 0);
+	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
 	g_assert(host);
 
 	DBG("index %d host %s gateway %s prefix_len %u metric %d", index, host,
@@ -80,7 +87,7 @@ int connman_inet_add_ipv6_network_route(int index, const char *host,
 int connman_inet_del_ipv6_network_route_with_metric(int index, const char *host,
 					unsigned char prefix_len, short metric)
 {
-	g_assert_cmpint(index, >, 0);
+	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
 	g_assert(host);
 
 	DBG("index %d host %s prefix_len %u metric %d", index, host,
@@ -97,7 +104,7 @@ int connman_inet_del_ipv6_network_route(int index, const char *host,
 
 int connman_inet_set_address(int index, struct connman_ipaddress *ipaddress)
 {
-	g_assert_cmpint(index, >, 0);
+	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
 	g_assert(ipaddress);
 	return 0;
 }
@@ -105,7 +112,7 @@ int connman_inet_set_address(int index, struct connman_ipaddress *ipaddress)
 int connman_inet_add_host_route(int index, const char *host,
 						const char *gateway)
 {
-	g_assert_cmpint(index, >, 0);
+	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
 	g_assert(host);
 	return 0;
 }
@@ -115,7 +122,7 @@ int connman_inet_add_network_route_with_metric(int index, const char *host,
 					const char *netmask, short metric,
 					unsigned long mtu)
 {
-	g_assert_cmpint(index, >, 0);
+	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
 	g_assert(host);
 	return 0;
 }
@@ -130,7 +137,7 @@ int connman_inet_add_network_route(int index, const char *host,
 
 int connman_inet_del_host_route(int index, const char *host)
 {
-	g_assert_cmpint(index, >, 0);
+	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
 	g_assert(host);
 	return 0;
 }
@@ -138,7 +145,7 @@ int connman_inet_del_host_route(int index, const char *host)
 int connman_inet_del_network_route_with_metric(int index, const char *host,
 					short metric)
 {
-	g_assert_cmpint(index, >, 0);
+	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
 	g_assert(host);
 	return 0;
 }
@@ -150,7 +157,7 @@ int connman_inet_del_network_route(int index, const char *host)
 
 int connman_inet_clear_address(int index, struct connman_ipaddress *ipaddress)
 {
-	g_assert_cmpint(index, >, 0);
+	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
 	g_assert(ipaddress);
 	return 0;
 }
@@ -164,7 +171,7 @@ int connman_inet_check_ipaddress(const char *host)
 int connman_inet_ipv6_do_dad(int index, int timeout_ms, struct in6_addr *addr,
 				connman_inet_ns_cb_t callback, void *user_data)
 {
-	g_assert_cmpint(index, >, 0);
+	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
 	g_assert(addr);
 	g_assert(callback);
 
@@ -179,8 +186,28 @@ struct connman_task {
 	bool running;
 };
 
-static struct connman_task __task = { 0 };
+static struct connman_task *__task = NULL;
 static int __task_exit_value = 0;
+static int __task_run_count = 0;
+static char *__last_set_contents_write = NULL;
+
+static void free_pointer(gpointer data, gpointer user_data)
+{
+	g_free(data);
+}
+
+static void free_task()
+{
+	g_free(__task->path);
+
+	if (__task->argv) {
+		g_ptr_array_foreach(__task->argv, free_pointer, NULL);
+		g_ptr_array_free(__task->argv, TRUE);
+	}
+
+	g_free(__task);
+	__task = NULL;
+}
 
 struct connman_task *connman_task_create(const char *program,
 					connman_task_setup_t custom_task_setup,
@@ -191,10 +218,18 @@ struct connman_task *connman_task_create(const char *program,
 	g_assert_null(setup_data);
 
 	g_assert_true(g_str_has_suffix(program, "tayga"));
-	__task.path = g_strdup(program);
-	__task.argv = g_ptr_array_new();
 
-	return &__task;
+	if (__task)
+		free_task();
+
+	__task = g_new0(struct connman_task, 1);
+	g_assert(__task);
+	
+	__task->path = g_strdup(program);
+	__task->argv = g_ptr_array_new();
+	__task->running = false;
+
+	return __task;
 }
 
 int connman_task_add_argument(struct connman_task *task,
@@ -202,7 +237,7 @@ int connman_task_add_argument(struct connman_task *task,
 					const char *format, ...)
 {
 	g_assert(task);
-	g_assert(task == &__task);
+	g_assert(task == __task);
 	g_assert(name);
 
 	va_list ap;
@@ -225,11 +260,6 @@ int connman_task_add_argument(struct connman_task *task,
 	return 0;
 }
 
-static void free_pointer(gpointer data, gpointer user_data)
-{
-	g_free(data);
-}
-
 #define TASK_STDOUT 1
 #define TASK_STDERR 2
 
@@ -240,12 +270,13 @@ int connman_task_run(struct connman_task *task,
 	DBG("task %p function %p user_data %p", task, function, user_data);
 
 	g_assert(task);
-	g_assert(task == &__task);
+	g_assert(task == __task);
 
 	g_assert(function);
-	__task.exit_func = function;
-	__task.exit_data = user_data;
-	__task.running = true;
+	__task->exit_func = function;
+	__task->exit_data = user_data;
+	__task->running = true;
+	__task_run_count++;
 
 	if (stdout_fd)
 		*stdout_fd = TASK_STDOUT;
@@ -265,11 +296,11 @@ int connman_task_stop(struct connman_task *task)
 	DBG("task %p", task);
 
 	g_assert(task);
-	g_assert(task == &__task);
+	g_assert(task == __task);
 
-	if (__task.running) {
-		__task.running = false;
-		__task.exit_func(&__task, __task_exit_value, __task.exit_data);
+	if (task->running) {
+		task->running = false;
+		task->exit_func(task, __task_exit_value, task->exit_data);
 	}
 
 	return 0;
@@ -280,14 +311,19 @@ void connman_task_destroy(struct connman_task *task)
 	DBG("task %p", task);
 
 	g_assert(task);
-	g_assert(task == &__task);
+	g_assert(task == __task);
 
-	if (__task.running)
+	if (task->running)
 		connman_task_stop(task);
 
 	g_free(task->path);
+	task->path = NULL;
+
 	g_ptr_array_foreach(task->argv, free_pointer, NULL);
 	g_ptr_array_free(task->argv, TRUE);
+	task->argv = NULL;
+
+	/* don't free internal __task, that is cleared in test cleanup */
 
 	return;
 }
@@ -297,24 +333,25 @@ enum task_setup {
 	TASK_SETUP_PRE,
 	TASK_SETUP_CONF,
 	TASK_SETUP_POST,
+	TASK_SETUP_STOPPED,
 };
 
 static enum task_setup get_task_setup()
 {
-	g_assert(__task.path);
+	g_assert(__task->path);
 
-	g_assert_true(g_ptr_array_find_with_equal_func(__task.argv, "--config",
+	g_assert_true(g_ptr_array_find_with_equal_func(__task->argv, "--config",
 						g_str_equal, NULL));
 
-	if (g_ptr_array_find_with_equal_func(__task.argv, "--mktun",
+	if (g_ptr_array_find_with_equal_func(__task->argv, "--mktun",
 							g_str_equal, NULL))
 		return TASK_SETUP_PRE;
 
-	if (g_ptr_array_find_with_equal_func(__task.argv, "--rmtun",
+	if (g_ptr_array_find_with_equal_func(__task->argv, "--rmtun",
 							g_str_equal, NULL))
 		return TASK_SETUP_POST;
 
-	if (g_ptr_array_find_with_equal_func(__task.argv, "--nodetach",
+	if (g_ptr_array_find_with_equal_func(__task->argv, "--nodetach",
 							g_str_equal, NULL))
 		return TASK_SETUP_CONF;
 
@@ -323,16 +360,51 @@ static enum task_setup get_task_setup()
 
 static void call_task_exit(int exit_code)
 {
-	g_assert(__task.exit_func);
-	if (__task.running) {
-		__task.running = false;
-		__task.exit_func(&__task, exit_code, __task.exit_data);
+	DBG("exit_code %d", exit_code);
+
+	g_assert(__task->exit_func);
+	if (__task->running) {
+		__task->running = false;
+		__task->exit_func(__task, exit_code, __task->exit_data);
 	}
 }
 
-static gboolean check_task_running()
+static gboolean check_task_running(enum task_setup setup, int restarts)
 {
-	return __task.path && __task.running;
+	int add_run_count = restarts * 3;
+
+	DBG("setup %d restarts %d", setup, restarts);
+
+	switch (setup) {
+	case TASK_SETUP_PRE:
+		g_assert_cmpint(get_task_setup(), ==, TASK_SETUP_PRE);
+		g_assert_cmpint(__task_run_count, ==, 1 + add_run_count);
+		g_assert(__last_set_contents_write);
+		g_assert_true(g_str_has_suffix(__last_set_contents_write,
+								"tayga.conf"));
+		g_free(__last_set_contents_write);
+		__last_set_contents_write = NULL;
+		break;
+	case TASK_SETUP_CONF:
+		g_assert_cmpint(get_task_setup(), ==, TASK_SETUP_CONF);
+		g_assert_cmpint(__task_run_count, ==, 2 + add_run_count);
+		g_assert_null(__last_set_contents_write);
+		break;
+	case TASK_SETUP_POST:
+		g_assert_cmpint(get_task_setup(), ==, TASK_SETUP_POST);
+		g_assert_cmpint(__task_run_count, ==, 3 + add_run_count);
+		g_assert_null(__last_set_contents_write);
+		break;
+	case TASK_SETUP_STOPPED:
+		g_assert_cmpint(__task_run_count, ==, 3 + add_run_count);
+		g_assert_null(__last_set_contents_write);
+		return __task->running;
+	case TASK_SETUP_UNKNOWN:
+		/* No assert checks */
+		break;
+	}
+
+	return __task->path && __task->running;
 }
 
 struct connman_ipconfig {
@@ -678,8 +750,6 @@ static void call_resolv_result(GResolvResultStatus status)
 	g_strfreev(r);
 }
 
-static char *__last_write = NULL;
-
 gboolean g_file_set_contents(const gchar* filename, const gchar* contents,
 						gssize length, GError** error)
 {
@@ -688,8 +758,8 @@ gboolean g_file_set_contents(const gchar* filename, const gchar* contents,
 	g_assert(filename);
 	g_assert(contents);
 
-	g_free(__last_write);
-	__last_write = g_strdup(filename);
+	g_free(__last_set_contents_write);
+	__last_set_contents_write = g_strdup(filename);
 
 	/* TODO parse contents */
 
@@ -706,7 +776,7 @@ static gpointer stderr_data = NULL;
 
 GIOChannel* g_io_channel_unix_new(int fd)
 {
-	DBG("fd %d", fd);
+	//DBG("fd %d", fd);
 
 	g_assert_cmpint(fd, >, 0);
 
@@ -724,7 +794,7 @@ static unsigned int io_watch_id = 0;
 guint g_io_add_watch(GIOChannel* channel, GIOCondition condition, GIOFunc func,
 							gpointer user_data)
 {
-	DBG("channel %p func %p user_data %p", channel, func, user_data);
+	//DBG("channel %p func %p user_data %p", channel, func, user_data);
 
 	g_assert(channel);
 	g_assert(func);
@@ -745,7 +815,7 @@ guint g_io_add_watch(GIOChannel* channel, GIOCondition condition, GIOFunc func,
 GIOStatus g_io_channel_shutdown(GIOChannel* channel, gboolean flush,
 								GError** error)
 {
-	DBG("channel %p", channel);
+	//DBG("channel %p", channel);
 
 	if (channel == (GIOChannel *)&stdout_fd_ch_ptr ||
 				channel == (GIOChannel *)&stderr_fd_ch_ptr)
@@ -756,7 +826,7 @@ GIOStatus g_io_channel_shutdown(GIOChannel* channel, gboolean flush,
 
 void g_io_channel_unref(GIOChannel* channel)
 {
-	DBG("channel %p", channel);
+	//DBG("channel %p", channel);
 
 	if (channel == (GIOChannel *)&stdout_fd_ch_ptr) {
 		stdout_func = NULL;
@@ -771,7 +841,7 @@ void g_io_channel_unref(GIOChannel* channel)
 
 gboolean g_source_remove(guint id)
 {
-	DBG("id %u", id);
+	//DBG("id %u", id);
 	return true;
 }
 
@@ -805,28 +875,27 @@ const char *connman_setting_get_string(const char *key)
 	return NULL;
 }
 
-static gchar *option_debug = NULL;
+static void test_reset() {
+	__task_run_count = 0;
+	__task_exit_value = 0;
+	if (__task)
+		free_task();
 
-static bool parse_debug(const char *key, const char *value,
-					gpointer user_data, GError **error)
-{
-	if (value)
-		option_debug = g_strdup(value);
-	else
-		option_debug = g_strdup("*");
+	__def_service = NULL;
 
-	return true;
+	g_free(__last_set_contents_write);
+	__last_set_contents_write = NULL;
+
+	rtprot_ra = false;
+	resolv_id = 0;
+
+	if (__resolv)
+		g_resolv_unref(__resolv);
 }
-
-static GOptionEntry options[] = {
-	{ "debug", 'd', G_OPTION_FLAG_OPTIONAL_ARG,
-				G_OPTION_ARG_CALLBACK, parse_debug,
-				"Specify debug options to enable", "DEBUG" },
-	{ NULL },
-};
 
 #define TEST_PREFIX "/clat/"
 
+/* No default service bug state goes up to failure */
 static void clat_plugin_test1()
 {
 	struct connman_network network = { 0 };
@@ -850,9 +919,9 @@ static void clat_plugin_test1()
 	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
 					state <= CONNMAN_SERVICE_STATE_FAILURE;
 					state++) {
-		n->service_state_changed(&service, state);
 		service.state = state;
-		g_assert_null(__task.path);
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
 		g_assert_null(__resolv);
 	}
 
@@ -861,13 +930,14 @@ static void clat_plugin_test1()
 	g_assert_false(rtprot_ra);
 	g_assert_null(n);
 	g_assert_null(r);
+	test_reset();
 }
 
 /* SErvice goes to ready state and then becomes default */
 static void clat_plugin_test2()
 {
 	struct connman_network network = {
-			.index = 1,
+			.index = CLAT_DEV_INDEX,
 	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -894,50 +964,40 @@ static void clat_plugin_test2()
 	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
 					state <= CONNMAN_SERVICE_STATE_READY;
 					state++) {
-		n->service_state_changed(&service, state);
 		service.state = state;
-		g_assert_null(__task.path);
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
 		g_assert_null(__resolv);
 	}
 
 	__def_service = &service;
 	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
 
 	/* Query is made -> call with success */
 	g_assert(__resolv);
-	g_assert_null(__last_write);
+	g_assert_null(__last_set_contents_write);
 	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
 
 	/* This transitions state to pre-configure */
-	g_assert_true(check_task_running());
-	g_assert_cmpint(get_task_setup(), ==, TASK_SETUP_PRE);
-	g_assert(__last_write);
-	g_assert_true(g_str_has_suffix(__last_write, "tayga.conf"));
-	g_free(__last_write);
-	__last_write = NULL;
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
 
 	/* State transition to running */
 	DBG("PRE CONFIGURE stops");
 	call_task_exit(0);
-
-	g_assert_true(check_task_running());
-	g_assert_cmpint(get_task_setup(), ==, TASK_SETUP_CONF);
-	g_assert_null(__last_write);
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
 
 	/* State transition to post-configure */
 	DBG("RUNNING STOPS");
 	call_task_exit(0);
 
-	g_assert_true(check_task_running());
-	g_assert_cmpint(get_task_setup(), ==, TASK_SETUP_POST);
-	g_assert_null(__last_write);
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
 
 	/* Task is ended */
 	DBG("POST CONFIGURE stops");
 	call_task_exit(0);
 
-	g_assert_false(check_task_running());
-	g_assert_null(__last_write);
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
 
 	__connman_builtin_clat.exit();
 
@@ -946,7 +1006,787 @@ static void clat_plugin_test2()
 	g_assert_false(rtprot_ra);
 	g_assert_null(n);
 	g_assert_null(r);
+	test_reset();
 }
+
+/*
+ * Mobile data goes first to ready, then comes default and comes online during
+ * pre conf.
+ */
+static void clat_plugin_test3()
+{
+	struct connman_network network = {
+			.index = CLAT_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_READY;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* This has no effect during pre-conf */
+	state = CONNMAN_SERVICE_STATE_ONLINE;
+	service.state = state;
+	n->service_state_changed(&service, state);
+
+	g_assert_true(check_task_running(TASK_SETUP_UNKNOWN, 0));
+	g_assert_cmpint(get_task_setup(), ==, TASK_SETUP_PRE);
+	g_assert_cmpint(__task_run_count, ==, 1);
+	g_assert_null(__last_set_contents_write);
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* State transition to post-configure */
+	DBG("RUNNING STOPS");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+/*
+ * Mobile data goes first to ready, then comes default and comes online while
+ * running.
+ */
+static void clat_plugin_test4()
+{
+	struct connman_network network = {
+			.index = CLAT_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_READY;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* This has no effect while running */
+	state = CONNMAN_SERVICE_STATE_ONLINE;
+	service.state = state;
+	n->service_state_changed(&service, state);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* State transition to post-configure */
+	DBG("RUNNING STOPS");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+/*
+ * Mobile data goes first to ready, then comes default and comes online
+ * during post-configure.
+ */
+static void clat_plugin_test5()
+{
+	struct connman_network network = {
+			.index = CLAT_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_READY;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* State transition to post-configure */
+	DBG("RUNNING STOPS");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* This has no effect during post-configure */
+	state = CONNMAN_SERVICE_STATE_ONLINE;
+	service.state = state;
+	n->service_state_changed(&service, state);
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+/* service goes ready -> not default -> online -> default */
+static void clat_plugin_test6()
+{
+	struct connman_network network = {
+			.index = CLAT_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_ONLINE;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* State transition to post-configure */
+	DBG("RUNNING STOPS");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+/* service goes ready when set already as default */
+static void clat_plugin_test7()
+{
+	struct connman_network network = {
+			.index = CLAT_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	/* Service is default before becoming ready */
+	__def_service = &service;
+	n->default_changed(&service);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state < CONNMAN_SERVICE_STATE_READY;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	state = CONNMAN_SERVICE_STATE_READY;
+	service.state = state;
+	n->service_state_changed(&service, state);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* State transition to post-configure */
+	DBG("RUNNING STOPS");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+// service goes online -> failure when online
+static void clat_plugin_test_failure1()
+{
+	struct connman_network network = {
+			.index = CLAT_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_ONLINE;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* Downgraded to ready, no change */
+	state = CONNMAN_SERVICE_STATE_READY;
+	service.state = state;
+	n->service_state_changed(&service, state);
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* Goes to failure -> stops throug post-conf */
+	DBG("RUNNING STOPS by state FAILURE");
+	state = CONNMAN_SERVICE_STATE_FAILURE;
+	service.state = state;
+	n->service_state_changed(&service, state);
+
+	/* State transition to post-configure */
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+/* pre-config shuts down with error */
+static void clat_plugin_test_failure2()
+{
+	struct connman_network network = {
+			.index = CLAT_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_ONLINE;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* Error in pre-configure */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(1);
+
+	/* Goes to cleanup */
+	g_assert_cmpint(get_task_setup(), ==, TASK_SETUP_POST);
+	g_assert_cmpint(__task_run_count, ==, 2);
+	g_assert_null(__last_set_contents_write);
+	g_assert_true(check_task_running(TASK_SETUP_UNKNOWN, 0));
+
+	/* Goes to failure -> stops throug post-conf */
+	DBG("RUNNING STOPS by FAILURE");
+	call_task_exit(1);
+
+	g_assert_cmpint(__task_run_count, ==, 2);
+	g_assert_null(__last_set_contents_write);
+	g_assert_false(check_task_running(TASK_SETUP_UNKNOWN, 0));
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+/* When running state process returns with 1 -> restart case */
+static void clat_plugin_test_failure3()
+{
+	struct connman_network network = {
+			.index = CLAT_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_ONLINE;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* State transition to post-configure */
+	DBG("RUNNING STOPS with SEGFAULT");
+	call_task_exit(1);
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* Task is ended -> does restart*/
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	/* Back to pre-conf */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 1));
+
+	/* pre-conf ends and process starts */
+	DBG("PRE CONFIGURE stops (restart)");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 1));
+
+	/* State transition to post-configure */
+	DBG("RUNNING STOPS");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 1));
+
+	/* Task is ended -> does restart*/
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 1));
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+/* post conf segfaults */
+static void clat_plugin_test_failure4()
+{
+	struct connman_network network = {
+			.index = CLAT_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_ONLINE;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* State transition to post-configure */
+	DBG("RUNNING STOPS");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* Task is ended with segfault */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(1);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+// Other service types
+// Default service changes to other service types
+// resolv returns error
+
+static gchar *option_debug = NULL;
+
+static bool parse_debug(const char *key, const char *value,
+					gpointer user_data, GError **error)
+{
+	if (value)
+		option_debug = g_strdup(value);
+	else
+		option_debug = g_strdup("*");
+
+	return true;
+}
+
+static GOptionEntry options[] = {
+	{ "debug", 'd', G_OPTION_FLAG_OPTIONAL_ARG,
+				G_OPTION_ARG_CALLBACK, parse_debug,
+				"Specify debug options to enable", "DEBUG" },
+	{ NULL },
+};
 
 int main (int argc, char *argv[])
 {
@@ -974,6 +1814,16 @@ int main (int argc, char *argv[])
 
 	g_test_add_func(TEST_PREFIX "test1", clat_plugin_test1);
 	g_test_add_func(TEST_PREFIX "test2", clat_plugin_test2);
+	g_test_add_func(TEST_PREFIX "test3", clat_plugin_test3);
+	g_test_add_func(TEST_PREFIX "test4", clat_plugin_test4);
+	g_test_add_func(TEST_PREFIX "test5", clat_plugin_test5);
+	g_test_add_func(TEST_PREFIX "test6", clat_plugin_test6);
+	g_test_add_func(TEST_PREFIX "test7", clat_plugin_test7);
+
+	g_test_add_func(TEST_PREFIX "test_failure1", clat_plugin_test_failure1);
+	g_test_add_func(TEST_PREFIX "test_failure2", clat_plugin_test_failure2);
+	g_test_add_func(TEST_PREFIX "test_failure3", clat_plugin_test_failure3);
+	g_test_add_func(TEST_PREFIX "test_failure4", clat_plugin_test_failure4);
 
 	return g_test_run();
 }
