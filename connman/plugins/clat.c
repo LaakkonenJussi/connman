@@ -576,7 +576,11 @@ static struct prefix_entry *new_prefix_entry(const char *address)
 	if (tokens)
 		g_strfreev(tokens);
 
-	if (entry->prefixlen > 128 || entry->prefixlen < 16) {
+	/*
+	 * Addresses with < 16 prefixlen should not be possible, also ignore
+	 * single address prefixes as there is no room for additional address.
+	 */
+	if (entry->prefixlen > 120 || entry->prefixlen < 16) {
 		DBG("Invalid prefixlen %u", entry->prefixlen);
 		g_free(entry);
 		return NULL;
@@ -644,7 +648,7 @@ static int assign_clat_prefix(struct clat_data *data, char **results)
 
 	/* A prefix exists already */
 	if (data->clat_prefix) {
-		if (g_strcmp0(data->clat_prefix, entry->prefix) &&
+		if (g_strcmp0(data->clat_prefix, entry->prefix) ||
 				data->clat_prefixlen != entry->prefixlen) {
 			DBG("changing existing prefix %s/%u -> %s/%u",
 						data->clat_prefix,
