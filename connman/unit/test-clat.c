@@ -168,6 +168,11 @@ int connman_inet_check_ipaddress(const char *host)
 	return 0;
 }
 
+static int dad_reply_ptr = 0x87654321;
+static connman_inet_ns_cb_t __dad_callback = NULL;
+static struct in6_addr dad_addr = { 0 };
+static void *__dad_user_data = NULL;
+
 int connman_inet_ipv6_do_dad(int index, int timeout_ms, struct in6_addr *addr,
 				connman_inet_ns_cb_t callback, void *user_data)
 {
@@ -175,7 +180,25 @@ int connman_inet_ipv6_do_dad(int index, int timeout_ms, struct in6_addr *addr,
 	g_assert(addr);
 	g_assert(callback);
 
+	__dad_callback = callback;
+	memcpy(&dad_addr, addr, sizeof(struct in6_addr));
+	__dad_user_data = user_data;
+
 	return 0;
+}
+
+static bool call_dad_callback()
+{
+	if (!__dad_callback)
+		return false;
+
+	__dad_callback((struct nd_neighbor_advert*)&dad_reply_ptr, 1, &dad_addr,
+							__dad_user_data);
+
+	__dad_callback = NULL;
+	__dad_user_data = NULL;
+
+	return true;
 }
 
 struct connman_task {
@@ -774,22 +797,62 @@ static GIOFunc stderr_func = NULL;
 static gpointer stdout_data = NULL;
 static gpointer stderr_data = NULL;
 
+struct timeout_function {
+	guint interval;
+	GSourceFunc function;
+	gpointer data;
+	bool removed;
+	bool called;
+};
+
+static GHashTable *__timeouts = NULL;
+
+static guint __timeout_id = 0;
+
 GIOChannel* g_io_channel_unix_new(int fd)
 {
 	//DBG("fd %d", fd);
 
 	g_assert_cmpint(fd, >, 0);
 
-	if (fd == TASK_STDOUT)
+	if (fd == TASK_STDOUT) {
+		stdout_fd_ch_ptr++;
 		return (GIOChannel *)&stdout_fd_ch_ptr;
+	}
 
-	if (fd == TASK_STDERR)
+	if (fd == TASK_STDERR) {
+		stderr_fd_ch_ptr++;
 		return (GIOChannel *)&stderr_fd_ch_ptr;
+	}
 
 	return NULL;
 }
 
-static unsigned int io_watch_id = 0;
+/* Keep all source id's in the same place */
+static guint add_timeout(guint interval, GSourceFunc function, gpointer data)
+{	struct timeout_function *tf;
+
+	tf = g_new0(struct timeout_function, 1);
+	g_assert(tf);
+
+	tf->interval = interval;
+	tf->function = function;
+	tf->data = data;
+
+	if (!__timeouts) {
+		/* Uses guints to ptr */
+		__timeouts = g_hash_table_new_full(g_direct_hash,
+						g_direct_equal, NULL, g_free);
+		__timeout_id = 0;
+	}
+
+	__timeout_id++;
+
+	g_hash_table_replace(__timeouts, GUINT_TO_POINTER(__timeout_id), tf);
+
+	return __timeout_id;
+
+}
 
 guint g_io_add_watch(GIOChannel* channel, GIOCondition condition, GIOFunc func,
 							gpointer user_data)
@@ -809,7 +872,7 @@ guint g_io_add_watch(GIOChannel* channel, GIOCondition condition, GIOFunc func,
 		stderr_data = user_data;
 	}
 
-	return ++io_watch_id;
+	return add_timeout(0, NULL, user_data);
 }
 
 GIOStatus g_io_channel_shutdown(GIOChannel* channel, gboolean flush,
@@ -841,8 +904,132 @@ void g_io_channel_unref(GIOChannel* channel)
 
 gboolean g_source_remove(guint id)
 {
-	//DBG("id %u", id);
+	gpointer value;
+
+	DBG("id %u", id);
+
+	if (!__timeouts)
+		return false;
+
+	value = g_hash_table_lookup(__timeouts, GUINT_TO_POINTER(id));
+	if (value) {
+		struct timeout_function *tf = value;
+
+		DBG("found, marked as removed");
+		tf->removed = true;
+
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+guint g_timeout_add(guint interval, GSourceFunc function, gpointer data)
+{
+	guint id;
+
+	g_assert(function);
+	g_assert(data);
+
+	id = add_timeout(interval, function, data);
+
+	DBG("added id %d", id);
+
+	return id;
+}
+
+static bool call_timeout(gpointer key, gpointer value)
+{
+	struct timeout_function *tf;
+	guint id;
+
+	id = GPOINTER_TO_UINT(key);
+	tf = value;
+
+	if (tf->removed) {
+		DBG("id %u already removed, not calling callback", id);
+		return false;
+	}
+
+	if (tf->called) {
+		DBG("id %u already called", id);
+		return false;
+	}
+
+
+	DBG("call id %u", id);
+
+	g_assert(tf);
+
+	if (!tf->function)
+		return false;
+
+	tf->function(tf->data);
+	tf->called = true;
+
 	return true;
+}
+
+
+static guint call_all_timeouts()
+{
+	GList *keys;
+	GList *iter;
+	guint count = 0;
+
+	DBG("%p", __timeouts);
+
+	if (!__timeouts || !g_hash_table_size(__timeouts))
+		return 0;
+
+	/*
+	 * Get the keys at the time we're about to call the callbacks. New
+	 * timeout functions may be added when callback is called and, thus
+	 * the hash table is altered. This way it is safe to call only those
+	 * that are now scheduled
+	 */
+	keys = g_hash_table_get_keys(__timeouts);
+	DBG("%d keys", g_list_length(keys));
+
+	for (iter = keys; iter; iter = g_list_next(iter)) {
+		gpointer key;
+		gpointer value;
+
+		key = iter->data;
+
+		value = g_hash_table_lookup(__timeouts, key);
+		g_assert(value);
+
+		if (call_timeout(key, value))
+			count++;
+	}
+
+	DBG("called %u timeout functions", count);
+
+	return count;
+}
+
+static guint pending_timeouts()
+{
+	GHashTableIter iter;
+	gpointer key;
+	gpointer value;
+	guint count = 0;
+
+	if (!__timeouts)
+		return count;
+
+	g_hash_table_iter_init(&iter, __timeouts);
+	while (g_hash_table_iter_next(&iter, &key, &value)) {
+		struct timeout_function *tf;
+
+		tf = value;
+
+		if (tf->function && !tf->called && !tf->removed)
+			count++;
+	}
+
+	return count;
 }
 
 static struct connman_rtnl *r = NULL;
@@ -889,8 +1076,15 @@ static void test_reset() {
 	rtprot_ra = false;
 	resolv_id = 0;
 
+	__dad_callback = NULL;
+	__dad_user_data = NULL;
+
 	if (__resolv)
 		g_resolv_unref(__resolv);
+
+	if (__timeouts)
+		g_hash_table_destroy(__timeouts);
+	__timeouts = NULL;
 }
 
 #define TEST_PREFIX "/clat/"
@@ -924,6 +1118,10 @@ static void clat_plugin_test1()
 		g_assert_null(__task);
 		g_assert_null(__resolv);
 	}
+
+	/* No timeouts have been called */
+	g_assert_null(__timeouts);
+	g_assert_null(__dad_callback);
 
 	__connman_builtin_clat.exit();
 
@@ -982,10 +1180,25 @@ static void clat_plugin_test2()
 	/* This transitions state to pre-configure */
 	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
 
+	/* GResolv removal is added, call it */
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
 	/* State transition to running */
 	DBG("PRE CONFIGURE stops");
 	call_task_exit(0);
 	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* Callbacks are added, called and then re-added */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
 
 	/* State transition to post-configure */
 	DBG("RUNNING STOPS");
@@ -993,11 +1206,19 @@ static void clat_plugin_test2()
 
 	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
 
+	/* Timeouts are removed */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
 	/* Task is ended */
 	DBG("POST CONFIGURE stops");
 	call_task_exit(0);
 
 	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
 
 	__connman_builtin_clat.exit();
 
@@ -1061,6 +1282,12 @@ static void clat_plugin_test3()
 	/* This transitions state to pre-configure */
 	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
 
+	/* GResolv removal is added, call it */
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
 	/* This has no effect during pre-conf */
 	state = CONNMAN_SERVICE_STATE_ONLINE;
 	service.state = state;
@@ -1077,17 +1304,35 @@ static void clat_plugin_test3()
 
 	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
 
+	/* Callbacks are added, called and then re-added */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+
 	/* State transition to post-configure */
 	DBG("RUNNING STOPS");
 	call_task_exit(0);
 
 	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
 
+	/* Timeouts are removed */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
 	/* Task is ended */
 	DBG("POST CONFIGURE stops");
 	call_task_exit(0);
 
 	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
 
 	__connman_builtin_clat.exit();
 
@@ -1151,11 +1396,27 @@ static void clat_plugin_test4()
 	/* This transitions state to pre-configure */
 	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
 
+	/* GResolv removal is added, call it */
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
 	/* State transition to running */
 	DBG("PRE CONFIGURE stops");
 	call_task_exit(0);
 
 	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* Callbacks are added, called and then re-added */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
 
 	/* This has no effect while running */
 	state = CONNMAN_SERVICE_STATE_ONLINE;
@@ -1163,18 +1424,26 @@ static void clat_plugin_test4()
 	n->service_state_changed(&service, state);
 
 	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
 
 	/* State transition to post-configure */
 	DBG("RUNNING STOPS");
 	call_task_exit(0);
 
 	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
 
 	/* Task is ended */
 	DBG("POST CONFIGURE stops");
 	call_task_exit(0);
 
 	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
 
 	__connman_builtin_clat.exit();
 
@@ -1238,15 +1507,34 @@ static void clat_plugin_test5()
 	/* This transitions state to pre-configure */
 	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
 
+	/* GResolv removal is added, call it */
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
 	/* State transition to running */
 	DBG("PRE CONFIGURE stops");
 	call_task_exit(0);
 
 	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
 
+	/* Callbacks are added, called and then re-added */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+
 	/* State transition to post-configure */
 	DBG("RUNNING STOPS");
 	call_task_exit(0);
+
+	/* Timeouts are removed */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
 
 	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
 
@@ -1256,12 +1544,18 @@ static void clat_plugin_test5()
 	n->service_state_changed(&service, state);
 
 	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
 
 	/* Task is ended */
 	DBG("POST CONFIGURE stops");
 	call_task_exit(0);
 
 	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
 
 	__connman_builtin_clat.exit();
 
@@ -1322,14 +1616,35 @@ static void clat_plugin_test6()
 	/* This transitions state to pre-configure */
 	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
 
+	/* GResolv removal is added, call it */
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
 	/* State transition to running */
 	DBG("PRE CONFIGURE stops");
 	call_task_exit(0);
 	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
 
+	/* Callbacks are added, called and then re-added */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+
 	/* State transition to post-configure */
 	DBG("RUNNING STOPS");
 	call_task_exit(0);
+
+	/* Timeouts are removed */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
 
 	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
 
@@ -1338,6 +1653,9 @@ static void clat_plugin_test6()
 	call_task_exit(0);
 
 	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
 
 	__connman_builtin_clat.exit();
 
@@ -1404,10 +1722,26 @@ static void clat_plugin_test7()
 	/* This transitions state to pre-configure */
 	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
 
+	/* GResolv removal is added, call it */
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
 	/* State transition to running */
 	DBG("PRE CONFIGURE stops");
 	call_task_exit(0);
 	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* Callbacks are added, called and then re-added */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
 
 	/* State transition to post-configure */
 	DBG("RUNNING STOPS");
@@ -1415,11 +1749,19 @@ static void clat_plugin_test7()
 
 	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
 
+	/* Timeouts are removed */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
 	/* Task is ended */
 	DBG("POST CONFIGURE stops");
 	call_task_exit(0);
 
 	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
 
 	__connman_builtin_clat.exit();
 
@@ -1766,7 +2108,7 @@ static void clat_plugin_test_failure4()
 
 // Other service types
 // Default service changes to other service types
-// resolv returns error
+// resolv returns error (first ok, then ok, then error)
 
 static gchar *option_debug = NULL;
 
