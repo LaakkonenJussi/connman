@@ -213,6 +213,8 @@ static struct connman_task *__task = NULL;
 static int __task_exit_value = 0;
 static int __task_run_count = 0;
 static char *__last_set_contents_write = NULL;
+static char *__last_set_contents = NULL;
+
 
 static void free_pointer(gpointer data, gpointer user_data)
 {
@@ -754,14 +756,48 @@ bool g_resolv_set_address_family(GResolv *resolv, int family)
 	return true;
 }
 
+enum resolv_result_type {
+	RESOLV_RESULT_GLOBAL = 0,
+	RESOLV_RESULT_ONE_64,
+	RESOLV_RESULT_ONE_96,
+	RESOLV_RESULT_SORT
+};
+
+static enum resolv_result_type __resolv_result_type = RESOLV_RESULT_GLOBAL;
+
 static void call_resolv_result(GResolvResultStatus status)
 {
 	/* TODO add more and make configurable */
 	char **r = g_new0(char*, 4);
-	r[0] = g_strdup("64:ff9b::c000:aa");
-	r[1] = g_strdup("64:ff9b::c000:ab");
-	r[2] = g_strdup("64:ff9b::/96");
-	r[3] = g_strdup("dead:beef:0000:feed:abba:cabb:1234:");
+
+	switch (__resolv_result_type) {
+	case RESOLV_RESULT_GLOBAL:
+		r[0] = g_strdup("64:ff9b::c000:aa");
+		r[1] = g_strdup("64:ff9b::c000:ab");
+		r[2] = g_strdup("64:ff9b::/96");
+		r[3] = g_strdup("dead:beef:0000:feed:abba:cabb:1234:");
+		break;
+	case RESOLV_RESULT_ONE_64:
+		r[0] = g_strdup("66:ff9b::c000:aa");
+		r[1] = g_strdup("65:ff9b::c000:ab");
+		r[2] = g_strdup("63:ff9b::/96");
+		r[3] = g_strdup("dead:beef:0000:feed:abba:cabb:1234:5555/64");
+		break;
+	case RESOLV_RESULT_ONE_96:
+		r[0] = g_strdup("66:ff9b:c000:aa:aba:abab:baaa:aaaa");
+		r[1] = g_strdup("65:ff9b:c000:ab:1:2:3:4");
+		r[2] = g_strdup("63:ff9b::/64");
+		r[3] = g_strdup("dead:beef:0000:feed:abba:cabb:1234:5555/96");
+		break;
+	case RESOLV_RESULT_SORT:
+		r[0] = g_strdup("dead:beef:0000:feed:abba:cabb:1234:5556/64");
+		r[1] = g_strdup("dead:beef:0000:feed:abba:cabb:1234:5557/96");
+		r[2] = g_strdup("dead:beef:0000:feed:abba:cabb:1234:5558/72");
+		r[3] = g_strdup("dead:beef:0000:feed:abba:cabb:1234:5559/128");
+		break;
+	default:
+		break;
+	}
 
 	g_assert(__resolv);
 	g_assert(__resolv->hostname);
@@ -771,6 +807,56 @@ static void call_resolv_result(GResolvResultStatus status)
 	__resolv->result_func(status, r, __resolv->result_data);
 
 	g_strfreev(r);
+}
+
+static gboolean check_set_prefix()
+{
+	char **tokens;
+	char *addr;
+	bool result = true;
+	int i;
+
+	if (!__last_set_contents)
+		return false;
+
+	tokens = g_strsplit(__last_set_contents, "\n", 7);
+	if (!tokens)
+		return false;
+
+	for (i = 0; tokens[i]; i++) {
+		if (g_str_has_prefix(tokens[i], "prefix"))
+			break;
+	}
+
+	/* TODO make this better */
+	switch (__resolv_result_type) {
+	case RESOLV_RESULT_GLOBAL:
+		addr = g_strdup("prefix 64:ff9b::/96");
+		break;
+	case RESOLV_RESULT_ONE_64:
+		addr = g_strdup("prefix 63:ff9b::/96");
+		break;
+	case RESOLV_RESULT_ONE_96:
+		addr = g_strdup(
+			"prefix dead:beef:0000:feed:abba:cabb:1234:5555/96");
+		break;
+	case RESOLV_RESULT_SORT:
+		addr = g_strdup(
+			"prefix dead:beef:0000:feed:abba:cabb:1234:5557/96");
+		break;
+	default:
+		addr = NULL;
+	}
+
+	if (g_strcmp0(tokens[i], addr)) {
+		DBG("prefix %s is not expected %s", tokens[i], addr);
+		result = false;
+	}
+
+	g_strfreev(tokens);
+	g_free(addr);
+
+	return result;
 }
 
 gboolean g_file_set_contents(const gchar* filename, const gchar* contents,
@@ -784,7 +870,8 @@ gboolean g_file_set_contents(const gchar* filename, const gchar* contents,
 	g_free(__last_set_contents_write);
 	__last_set_contents_write = g_strdup(filename);
 
-	/* TODO parse contents */
+	g_free(__last_set_contents);
+	__last_set_contents = g_strdup(contents);
 
 	return TRUE;
 }
@@ -970,7 +1057,6 @@ static bool call_timeout(gpointer key, gpointer value)
 	return true;
 }
 
-
 static guint call_all_timeouts()
 {
 	GList *keys;
@@ -1073,6 +1159,9 @@ static void test_reset() {
 	g_free(__last_set_contents_write);
 	__last_set_contents_write = NULL;
 
+	g_free(__last_set_contents);
+	__last_set_contents = NULL;
+
 	rtprot_ra = false;
 	resolv_id = 0;
 
@@ -1085,6 +1174,8 @@ static void test_reset() {
 	if (__timeouts)
 		g_hash_table_destroy(__timeouts);
 	__timeouts = NULL;
+
+	__resolv_result_type = RESOLV_RESULT_GLOBAL;
 }
 
 #define TEST_PREFIX "/clat/"
@@ -1197,6 +1288,7 @@ static void clat_plugin_test2()
 	g_assert(__resolv);
 	g_assert(__dad_callback);
 	g_assert_true(call_dad_callback());
+
 	/* There should be always 2 callbacks, prefix query and DAD */
 	g_assert_cmpint(pending_timeouts(), ==, 2);
 
@@ -2110,6 +2202,268 @@ static void clat_plugin_test_failure4()
 // Default service changes to other service types
 // resolv returns error (first ok, then ok, then error)
 
+// resolv returns different prefix_len
+
+/*  resolv returns different prefix_len -> restart case */
+static void clat_plugin_test_restart1()
+{
+	struct connman_network network = {
+			.index = CLAT_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_ONLINE;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* GResolv removal is added, call it */
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* Callbacks are added, called and then re-added */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+
+	/* State transition to post-configure as a result of changed prefix */
+	DBG("RUNNING STOPS different prefix");
+	__resolv_result_type = RESOLV_RESULT_ONE_64;
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* Resolv query is the one that remains */
+	g_assert(__resolv);
+	g_assert_cmpint(pending_timeouts(), ==, 1);
+	g_assert_null(__dad_callback);
+
+	/* Task is ended -> does restart*/
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	/* Back to pre-conf */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 1));
+
+	/* resolv is re-added, call it */
+	g_assert(__resolv);
+	g_assert_cmpint(pending_timeouts(), ==, 1);
+	g_assert_null(__dad_callback);
+
+	/* pre-conf ends and process starts */
+	DBG("PRE CONFIGURE stops (restart)");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 1));
+
+	/* Callbacks are added, called and then re-added, the callback for
+	 * resolv also exists */
+	g_assert_cmpint(call_all_timeouts(), ==, 3);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* When called they re-add themselves */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+
+	/* State transition to post-configure */
+	DBG("RUNNING STOPS");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 1));
+
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 1));
+
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+// test different prefixes
+static void clat_plugin_test_prefix(gconstpointer data)
+{
+	struct connman_network network = {
+			.index = CLAT_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+
+	__resolv_result_type = GPOINTER_TO_INT(data);
+
+	DBG("resolv type %d", __resolv_result_type);
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_READY;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* TODO check correct prefix from config */
+
+	/* GResolv removal is added, call it */
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+	g_assert_true(check_set_prefix());
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* Callbacks are added, called and then re-added */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+
+	/* This has no effect while running */
+	state = CONNMAN_SERVICE_STATE_ONLINE;
+	service.state = state;
+	n->service_state_changed(&service, state);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+
+	/* State transition to post-configure */
+	DBG("RUNNING STOPS");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
 static gchar *option_debug = NULL;
 
 static bool parse_debug(const char *key, const char *value,
@@ -2166,6 +2520,18 @@ int main (int argc, char *argv[])
 	g_test_add_func(TEST_PREFIX "test_failure2", clat_plugin_test_failure2);
 	g_test_add_func(TEST_PREFIX "test_failure3", clat_plugin_test_failure3);
 	g_test_add_func(TEST_PREFIX "test_failure4", clat_plugin_test_failure4);
+	
+	g_test_add_func(TEST_PREFIX "test_restart1", clat_plugin_test_restart1);
+
+	g_test_add_data_func(TEST_PREFIX "test_prefix1",
+					GINT_TO_POINTER(RESOLV_RESULT_ONE_64),
+					clat_plugin_test_prefix);
+	g_test_add_data_func(TEST_PREFIX "test_prefix2",
+					GINT_TO_POINTER(RESOLV_RESULT_ONE_96),
+					clat_plugin_test_prefix);
+	g_test_add_data_func(TEST_PREFIX "test_prefix3",
+					GINT_TO_POINTER(RESOLV_RESULT_SORT),
+					clat_plugin_test_prefix);
 
 	return g_test_run();
 }
