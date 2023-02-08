@@ -809,12 +809,21 @@ static gboolean run_prefix_query(gpointer user_data)
 	if (!data)
 		return G_SOURCE_REMOVE;
 
+	data->prefix_query_id = 0;
+
 	if (clat_task_do_prefix_query(data)) {
 		DBG("failed to run prefix query");
 		return G_SOURCE_REMOVE;
 	}
 
-	return G_SOURCE_CONTINUE;
+	data->prefix_query_id = g_timeout_add(PREFIX_QUERY_TIMEOUT,
+							run_prefix_query, data);
+	if (!data->prefix_query_id) {
+		connman_error("CLAT failed to continue periodic prefix query");
+		return G_SOURCE_REMOVE;
+	}
+
+	return G_SOURCE_REMOVE;
 }
 
 static int clat_task_start_periodic_query(struct clat_data *data)
