@@ -31,35 +31,72 @@
 
 #define CLAT_DEV_INDEX 1
 #define CLAT_DEV_NAME "clat"
+#define SERVICE_DEV_INDEX 2
+#define SERVICE_DEV_NAME "if"
 
 extern struct connman_plugin_desc __connman_builtin_clat;
 
 /* Dummies */
 
+static bool __clat_dev_set = false;
+static bool __clat_dev_up = false;
+
 int connman_inet_ifup(int index)
 {
 	g_assert_cmpint(index, >, 0);
-	return 0;
+
+	if (index == CLAT_DEV_INDEX && __clat_dev_set) {
+		if (__clat_dev_up)
+			return -EALREADY;
+
+		__clat_dev_up = true;
+		return 0;
+	}
+
+	return -ENODEV;
 }
 
 int connman_inet_ifdown(int index)
 {
 	g_assert_cmpint(index, >, 0);
-	return 0;
+
+	if (index == CLAT_DEV_INDEX && __clat_dev_set) {
+		if (!__clat_dev_up)
+			return -EALREADY;
+
+		__clat_dev_up = false;
+		return 0;
+	}
+
+	return -ENODEV;
 }
 
 int connman_inet_ifindex(const char *name)
 {
 	g_assert(name);
-	return 1;
+
+	if (!g_strcmp0(name, CLAT_DEV_NAME) && __clat_dev_set)
+		return CLAT_DEV_INDEX;
+
+	if (g_str_has_prefix(name, SERVICE_DEV_NAME)) {
+		if (g_str_has_suffix(name, "2"))
+			return 2;
+		if (g_str_has_suffix(name, "3"))
+			return 3;
+	}
+
+	return -1;
 }
 
 char *connman_inet_ifname(int index)
 {
 	g_assert_cmpint(index, >, 0);
 
-	if (index == CLAT_DEV_INDEX)
+	if (index == CLAT_DEV_INDEX && __clat_dev_set)
 		return g_strdup(CLAT_DEV_NAME);
+
+	if (index == SERVICE_DEV_INDEX || index == SERVICE_DEV_INDEX + 1)
+		return g_strdup_printf("%s%d", SERVICE_DEV_NAME, index);
 
 	return NULL;
 }
@@ -176,7 +213,7 @@ static void *__dad_user_data = NULL;
 int connman_inet_ipv6_do_dad(int index, int timeout_ms, struct in6_addr *addr,
 				connman_inet_ns_cb_t callback, void *user_data)
 {
-	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
+	g_assert_cmpint(index, ==, SERVICE_DEV_INDEX);
 	g_assert(addr);
 	g_assert(callback);
 
@@ -369,12 +406,16 @@ static enum task_setup get_task_setup()
 						g_str_equal, NULL));
 
 	if (g_ptr_array_find_with_equal_func(__task->argv, "--mktun",
-							g_str_equal, NULL))
+							g_str_equal, NULL)) {
+		__clat_dev_set = true;
 		return TASK_SETUP_PRE;
+	}
 
 	if (g_ptr_array_find_with_equal_func(__task->argv, "--rmtun",
-							g_str_equal, NULL))
+							g_str_equal, NULL)) {
+		__clat_dev_set = false;
 		return TASK_SETUP_POST;
+	}
 
 	if (g_ptr_array_find_with_equal_func(__task->argv, "--nodetach",
 							g_str_equal, NULL))
@@ -399,6 +440,9 @@ static gboolean check_task_running(enum task_setup setup, int restarts)
 	int add_run_count = restarts * 3;
 
 	DBG("setup %d restarts %d", setup, restarts);
+
+	if (!__task)
+		return false;
 
 	switch (setup) {
 	case TASK_SETUP_PRE:
@@ -547,6 +591,7 @@ int connman_network_get_index(struct connman_network *network)
 	DBG("network %p", network);
 
 	g_assert(network);
+	DBG("index %d", network->index);
 	return network->index;
 }
 
@@ -1057,7 +1102,21 @@ static bool call_timeout(gpointer key, gpointer value)
 	return true;
 }
 
-static guint call_all_timeouts()
+static gint compare_uint(gconstpointer a, gconstpointer b)
+{
+	guint int_a = GPOINTER_TO_UINT(a);
+	guint int_b = GPOINTER_TO_UINT(b);
+
+	if (int_a < int_b)
+		return -1;
+
+	if (int_a > int_b)
+		return 1;
+
+	return 0;
+}
+
+static guint call_all_timeouts(void)
 {
 	GList *keys;
 	GList *iter;
@@ -1072,9 +1131,10 @@ static guint call_all_timeouts()
 	 * Get the keys at the time we're about to call the callbacks. New
 	 * timeout functions may be added when callback is called and, thus
 	 * the hash table is altered. This way it is safe to call only those
-	 * that are now scheduled
+	 * that are now scheduled. Use sorted list as the keys increase at
+	 * each new timeout and the last would be normally returned as first.
 	 */
-	keys = g_hash_table_get_keys(__timeouts);
+	keys = g_list_sort(g_hash_table_get_keys(__timeouts), compare_uint);
 	DBG("%d keys", g_list_length(keys));
 
 	for (iter = keys; iter; iter = g_list_next(iter)) {
@@ -1095,7 +1155,7 @@ static guint call_all_timeouts()
 	return count;
 }
 
-static guint pending_timeouts()
+static guint pending_timeouts(void)
 {
 	GHashTableIter iter;
 	gpointer key;
@@ -1148,7 +1208,7 @@ const char *connman_setting_get_string(const char *key)
 	return NULL;
 }
 
-static void test_reset() {
+static void test_reset(void) {
 	__task_run_count = 0;
 	__task_exit_value = 0;
 	if (__task)
@@ -1176,6 +1236,9 @@ static void test_reset() {
 	__timeouts = NULL;
 
 	__resolv_result_type = RESOLV_RESULT_GLOBAL;
+
+	__clat_dev_up = false;
+	__clat_dev_set = false;
 }
 
 #define TEST_PREFIX "/clat/"
@@ -1222,11 +1285,11 @@ static void clat_plugin_test1()
 	test_reset();
 }
 
-/* SErvice goes to ready state and then becomes default */
+/* Service goes to ready state and then becomes default */
 static void clat_plugin_test2()
 {
 	struct connman_network network = {
-			.index = CLAT_DEV_INDEX,
+			.index = SERVICE_DEV_INDEX,
 	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -1329,7 +1392,7 @@ static void clat_plugin_test2()
 static void clat_plugin_test3()
 {
 	struct connman_network network = {
-			.index = CLAT_DEV_INDEX,
+			.index = SERVICE_DEV_INDEX,
 	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -1443,7 +1506,7 @@ static void clat_plugin_test3()
 static void clat_plugin_test4()
 {
 	struct connman_network network = {
-			.index = CLAT_DEV_INDEX,
+			.index = SERVICE_DEV_INDEX,
 	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -1554,7 +1617,7 @@ static void clat_plugin_test4()
 static void clat_plugin_test5()
 {
 	struct connman_network network = {
-			.index = CLAT_DEV_INDEX,
+			.index = SERVICE_DEV_INDEX,
 	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -1663,7 +1726,7 @@ static void clat_plugin_test5()
 static void clat_plugin_test6()
 {
 	struct connman_network network = {
-			.index = CLAT_DEV_INDEX,
+			.index = SERVICE_DEV_INDEX,
 	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -1763,7 +1826,7 @@ static void clat_plugin_test6()
 static void clat_plugin_test7()
 {
 	struct connman_network network = {
-			.index = CLAT_DEV_INDEX,
+			.index = SERVICE_DEV_INDEX,
 	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -1869,7 +1932,7 @@ static void clat_plugin_test7()
 static void clat_plugin_test_failure1()
 {
 	struct connman_network network = {
-			.index = CLAT_DEV_INDEX,
+			.index = SERVICE_DEV_INDEX,
 	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -1954,7 +2017,7 @@ static void clat_plugin_test_failure1()
 static void clat_plugin_test_failure2()
 {
 	struct connman_network network = {
-			.index = CLAT_DEV_INDEX,
+			.index = SERVICE_DEV_INDEX,
 	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -2031,7 +2094,7 @@ static void clat_plugin_test_failure2()
 static void clat_plugin_test_failure3()
 {
 	struct connman_network network = {
-			.index = CLAT_DEV_INDEX,
+			.index = SERVICE_DEV_INDEX,
 	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -2126,7 +2189,7 @@ static void clat_plugin_test_failure3()
 static void clat_plugin_test_failure4()
 {
 	struct connman_network network = {
-			.index = CLAT_DEV_INDEX,
+			.index = SERVICE_DEV_INDEX,
 	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -2198,9 +2261,166 @@ static void clat_plugin_test_failure4()
 	test_reset();
 }
 
-// Other service types
-// Default service changes to other service types
 // resolv returns error (first ok, then ok, then error)
+static void clat_plugin_test_failure5()
+{
+	// TODO !
+}
+
+static bool is_retry_case(GResolvResultStatus status)
+{
+	return (status == G_RESOLV_RESULT_STATUS_NO_RESPONSE ||
+			status == G_RESOLV_RESULT_STATUS_SERVER_FAILURE);
+}
+
+// resolv returns error as first message
+static void clat_plugin_test_failure6()
+{
+	struct connman_network network = {
+			.index = SERVICE_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+	GResolvResultStatus status;
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state < CONNMAN_SERVICE_STATE_ONLINE;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	bool expect_resolv = false;
+	int timeout_count = 0;
+
+	/*
+	 * Do each status individually by first going online, then default,
+	 * then report status, then leave as default and go ready as in normal
+	 * use.
+	 */
+	for (status = G_RESOLV_RESULT_STATUS_ERROR;
+				status <= G_RESOLV_RESULT_STATUS_NO_ANSWER;
+				status++) {
+		DBG("test resolv result status %d", status);
+
+		/* Nothing done as not being the default */
+		service.state = CONNMAN_SERVICE_STATE_ONLINE;
+		n->service_state_changed(&service, service.state);
+
+		g_assert_false(check_task_running(TASK_SETUP_UNKNOWN, 0));
+		g_assert_cmpint(__task_run_count, ==, 0);
+
+		if (expect_resolv)
+			g_assert(__resolv);
+		else
+			g_assert_null(__resolv);
+
+		g_assert_null(__dad_callback);
+		g_assert_cmpint(pending_timeouts(), ==, timeout_count);
+
+		/* Default service and is online */
+		__def_service = &service;
+		n->default_changed(&service);
+		g_assert_cmpint(__task_run_count, ==, 0);
+
+		/* Query is made -> call with error */
+		g_assert(__resolv);
+		g_assert_null(__last_set_contents_write);
+		call_resolv_result(status);
+
+		g_assert_false(check_task_running(TASK_SETUP_UNKNOWN, 0));
+		g_assert_cmpint(__task_run_count, ==, 0);
+
+		if (is_retry_case(status)) {
+			DBG("retry case");
+
+			/* This adds timeouts for retry remove resolv */
+			g_assert_cmpint(call_all_timeouts(), ==, 2);
+			g_assert(__resolv);
+			g_assert_null(__dad_callback);
+			g_assert_cmpint(pending_timeouts(), ==, 1);
+
+			g_assert_false(check_task_running(TASK_SETUP_STOPPED,
+									0));
+			expect_resolv = true;
+			timeout_count = 1;
+		} else {
+			DBG("failure case");
+
+			/* This calls only the remove resolv timeout */
+			g_assert_cmpint(call_all_timeouts(), ==, 1);
+			g_assert_null(__resolv);
+			g_assert_null(__dad_callback);
+			g_assert_cmpint(pending_timeouts(), ==, 0);
+
+			g_assert_false(check_task_running(TASK_SETUP_STOPPED,
+									0));
+
+			expect_resolv = false;
+			timeout_count = 0;
+		}
+
+		/* Resetting default service changes nothing */
+		__def_service = NULL;
+		n->default_changed(NULL);
+
+		g_assert_false(check_task_running(TASK_SETUP_UNKNOWN, 0));
+		g_assert_cmpint(__task_run_count, ==, 0);
+
+		if (expect_resolv)
+			g_assert(__resolv);
+		else
+			g_assert_null(__resolv);
+
+		g_assert_null(__dad_callback);
+		g_assert_cmpint(pending_timeouts(), ==, timeout_count);
+
+		/* Going back to ready changes nothing */
+		service.state = CONNMAN_SERVICE_STATE_READY;
+		n->service_state_changed(&service, service.state);
+
+		g_assert_false(check_task_running(TASK_SETUP_UNKNOWN, 0));
+		g_assert_cmpint(__task_run_count, ==, 0);
+
+		if (expect_resolv)
+			g_assert(__resolv);
+		else
+			g_assert_null(__resolv);
+
+		g_assert_null(__dad_callback);
+		g_assert_cmpint(pending_timeouts(), ==, timeout_count);
+	}
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
 
 // resolv returns different prefix_len
 
@@ -2208,7 +2428,7 @@ static void clat_plugin_test_failure4()
 static void clat_plugin_test_restart1()
 {
 	struct connman_network network = {
-			.index = CLAT_DEV_INDEX,
+			.index = SERVICE_DEV_INDEX,
 	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -2355,7 +2575,7 @@ static void clat_plugin_test_restart1()
 static void clat_plugin_test_prefix(gconstpointer data)
 {
 	struct connman_network network = {
-			.index = CLAT_DEV_INDEX,
+			.index = SERVICE_DEV_INDEX,
 	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -2464,6 +2684,398 @@ static void clat_plugin_test_prefix(gconstpointer data)
 	test_reset();
 }
 
+/*
+ * Each service type, except cellular goes through all states, in online state
+ * service pops as a default service.
+ */
+static void clat_plugin_test_service1()
+{
+	struct connman_network network = { 0 };
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_UNKNOWN,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+
+	DBG("");
+
+	service.network = &network;
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	__def_service = NULL;
+	n->default_changed(NULL);
+
+	for (service.type = CONNMAN_SERVICE_TYPE_UNKNOWN;
+				service.type < MAX_CONNMAN_SERVICE_TYPES;
+				service.type++)
+	{
+		/* Ignore cellular in this test */
+		if (service.type == CONNMAN_SERVICE_TYPE_CELLULAR)
+			continue;
+
+		/* There is no default service, nothing will get done */
+		for (service.state = CONNMAN_SERVICE_STATE_UNKNOWN;
+				service.state <= CONNMAN_SERVICE_STATE_FAILURE;
+				service.state++) {
+
+			/* Set default service to NULL after online change */
+			if (service.state ==
+					(CONNMAN_SERVICE_STATE_ONLINE + 1)) {
+				__def_service = NULL;
+				n->default_changed(NULL);
+			}
+
+			n->service_state_changed(&service, service.state);
+
+			g_assert_null(__task);
+			g_assert_null(__resolv);
+
+			/* No timeouts have been called */
+			g_assert_null(__timeouts);
+			g_assert_null(__dad_callback);
+
+			/* Try default with online state sarvice */
+			if (service.state == CONNMAN_SERVICE_STATE_ONLINE) {
+				__def_service = &service;
+				n->default_changed(&service);
+
+				g_assert_null(__task);
+				g_assert_null(__resolv);
+
+				/* No timeouts have been called */
+				g_assert_null(__timeouts);
+				g_assert_null(__dad_callback);
+			}
+		}
+	}
+
+	__connman_builtin_clat.exit();
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+/*
+ * Mobile data goes first to ready, then comes default and comes online while
+ * running. Then another service becomes online and default -> mobile data
+ * goes to ready.
+ */
+static void clat_plugin_test_service2()
+{
+	struct connman_network network1 = {
+			.index = SERVICE_DEV_INDEX,
+	};
+	struct connman_network network2 = {
+			.index = SERVICE_DEV_INDEX + 1,
+	};
+	struct connman_ipconfig ipv6config1 = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_ipconfig ipv6config2 = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service1 = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	/* In service_sort() WIFI > CELLULAR */
+	struct connman_service service2 = {
+			.type = CONNMAN_SERVICE_TYPE_WIFI,
+			.state = CONNMAN_SERVICE_STATE_ONLINE,
+	};
+	enum connman_service_state state;
+
+	DBG("");
+
+	service1.network = &network1;
+	service1.ipconfig_ipv6 = &ipv6config1;
+	assign_ipaddress(&ipv6config1);
+
+	service2.network = &network2;
+	service2.ipconfig_ipv6 = &ipv6config2;
+	assign_ipaddress(&ipv6config2);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_READY;
+					state++) {
+		service1.state = state;
+		n->service_state_changed(&service1, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service1;
+	n->default_changed(&service1);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* GResolv removal is added, call it */
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+	g_assert_cmpint(__task_run_count, ==, 1);
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* Callbacks are added, called and then re-added */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+	g_assert_cmpint(__task_run_count, ==, 2);
+
+	/* This has no effect while running */
+	state = CONNMAN_SERVICE_STATE_ONLINE;
+	service1.state = state;
+	n->service_state_changed(&service1, state);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+	g_assert_cmpint(__task_run_count, ==, 2);
+
+	/* Another service befomes default */
+	__def_service = &service2;
+	n->default_changed(&service2);
+
+	/* CLAT stops, state transition to post-configure */
+	DBG("RUNNING STOPS");
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+	g_assert_cmpint(__task_run_count, ==, 3);
+
+	/* Timeouts are removed */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* Cellular is downgraded to ready -> no change */
+	service1.state = CONNMAN_SERVICE_STATE_READY;
+	n->service_state_changed(&service1, state);
+
+	/* No timeouts are added */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(__task_run_count, ==, 3);
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config1.ipaddress);
+	connman_ipaddress_free(ipv6config2.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+/*
+ * Another service is default and then mobile data goes to ready, then comes
+ * default and comes online while running. Then another service becomes default
+ * -> mobile data goes to ready.
+ */
+static void clat_plugin_test_service3()
+{
+	struct connman_network network1 = {
+			.index = SERVICE_DEV_INDEX,
+	};
+	struct connman_network network2 = {
+			.index = SERVICE_DEV_INDEX + 1,
+	};
+	struct connman_ipconfig ipv6config1 = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_ipconfig ipv6config2 = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service1 = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	/* In service_sort() WIFI > CELLULAR */
+	struct connman_service service2 = {
+			.type = CONNMAN_SERVICE_TYPE_WIFI,
+			.state = CONNMAN_SERVICE_STATE_ONLINE,
+	};
+	enum connman_service_state state;
+
+	DBG("");
+
+	service1.network = &network1;
+	service1.ipconfig_ipv6 = &ipv6config1;
+	assign_ipaddress(&ipv6config1);
+
+	service2.network = &network2;
+	service2.ipconfig_ipv6 = &ipv6config2;
+	assign_ipaddress(&ipv6config2);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_READY;
+					state++) {
+		service1.state = state;
+		n->service_state_changed(&service1, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service2;
+	n->default_changed(&service2);
+
+	/* Nothing is done */
+	g_assert_false(check_task_running(TASK_SETUP_UNKNOWN, 0));
+	g_assert_cmpint(__task_run_count, ==, 0);
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* This has no effect while not being default yet */
+	state = CONNMAN_SERVICE_STATE_ONLINE;
+	service1.state = state;
+	n->service_state_changed(&service1, state);
+
+	/* Nothing is still done */
+	g_assert_false(check_task_running(TASK_SETUP_UNKNOWN, 0));
+	g_assert_cmpint(__task_run_count, ==, 0);
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* Cellular service befomes default */
+	__def_service = &service1;
+	n->default_changed(&service1);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* GResolv removal is added, call it */
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+	g_assert_cmpint(__task_run_count, ==, 1);
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* Callbacks are added, called and then re-added */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+	g_assert_cmpint(__task_run_count, ==, 2);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+	g_assert_cmpint(__task_run_count, ==, 2);
+
+	/* Another service befomes default again */
+	__def_service = &service2;
+	n->default_changed(&service2);
+
+	/* CLAT stops, state transition to post-configure */
+	DBG("RUNNING STOPS");
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+	g_assert_cmpint(__task_run_count, ==, 3);
+
+	/* Timeouts are removed */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* Cellular is downgraded to ready -> no change */
+	service1.state = CONNMAN_SERVICE_STATE_READY;
+	n->service_state_changed(&service1, state);
+
+	/* No timeouts are added */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(__task_run_count, ==, 3);
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config1.ipaddress);
+	connman_ipaddress_free(ipv6config2.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+/* TODO ipconfig tests */
+
 static gchar *option_debug = NULL;
 
 static bool parse_debug(const char *key, const char *value,
@@ -2520,6 +3132,8 @@ int main (int argc, char *argv[])
 	g_test_add_func(TEST_PREFIX "test_failure2", clat_plugin_test_failure2);
 	g_test_add_func(TEST_PREFIX "test_failure3", clat_plugin_test_failure3);
 	g_test_add_func(TEST_PREFIX "test_failure4", clat_plugin_test_failure4);
+	g_test_add_func(TEST_PREFIX "test_failure5", clat_plugin_test_failure5);
+	g_test_add_func(TEST_PREFIX "test_failure6", clat_plugin_test_failure6);
 	
 	g_test_add_func(TEST_PREFIX "test_restart1", clat_plugin_test_restart1);
 
@@ -2532,6 +3146,10 @@ int main (int argc, char *argv[])
 	g_test_add_data_func(TEST_PREFIX "test_prefix3",
 					GINT_TO_POINTER(RESOLV_RESULT_SORT),
 					clat_plugin_test_prefix);
+
+	g_test_add_func(TEST_PREFIX "test_service1", clat_plugin_test_service1);
+	g_test_add_func(TEST_PREFIX "test_service2", clat_plugin_test_service2);
+	g_test_add_func(TEST_PREFIX "test_service3", clat_plugin_test_service3);
 
 	return g_test_run();
 }
