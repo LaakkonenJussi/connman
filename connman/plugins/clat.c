@@ -96,7 +96,8 @@ struct clat_data {
 #define CLAT_IPv6_METRIC		1024		/* from clatd */
 #define CLAT_IPv6_SUFFIX		"c1a7"
 
-#define PREFIX_QUERY_TIMEOUT		600000		/* 10 seconds */
+#define PREFIX_QUERY_TIMEOUT		600000		/* 10 minutes */
+#define PREFIX_QUERY_RETRY_TIMEOUT	60000		/* 1 minute */
 #define DAD_TIMEOUT			600000		/* 10 minutes */
 
 /* Globally defined and assigned prefix */
@@ -677,12 +678,14 @@ static int assign_clat_prefix(struct clat_data *data, char **results)
 	return err;
 }
 
+static int clat_task_start_periodic_query(struct clat_data *data);
+
 static void prefix_query_cb(GResolvResultStatus status,
 					char **results, gpointer user_data)
 {
 	struct clat_data *data = user_data;
 	enum clat_state new_state = data->state;
-	int err;
+	int err = 0;
 
 	DBG("state %d/%s status %d GResolv %p", data->state,
 						state2string(data->state),
@@ -701,21 +704,41 @@ static void prefix_query_cb(GResolvResultStatus status,
 	data->remove_resolv_id = g_timeout_add(0, remove_resolv, data);
 	data->resolv_query_id = 0;
 
-	if (status != G_RESOLV_RESULT_STATUS_SUCCESS) {
-		if (clat_settings.resolv_always_succeeds) {
-			gchar **override = g_new0(char*, 1);
-
-			DBG("ignore resolv result %d", status);
-
-			override[0] = g_strdup("64:ff9b::/96");
-			err = assign_clat_prefix(data, override);
-			g_strfreev(override);
-		} else {
-			err = -EHOSTDOWN;
-		}
-	} else {
+	switch (status) {
+	case G_RESOLV_RESULT_STATUS_SUCCESS:
 		DBG("resolv of %s success, parse prefix", WKN_ADDRESS);
 		err = assign_clat_prefix(data, results);
+		break;
+	/* request timeouts not an error, try again */
+	case G_RESOLV_RESULT_STATUS_NO_RESPONSE:
+	/* server had an issue, try again */
+	case G_RESOLV_RESULT_STATUS_SERVER_FAILURE:
+		err = -EHOSTDOWN;
+		break;
+	/* Consider these as non-continuable errors */
+	case G_RESOLV_RESULT_STATUS_ERROR:
+	case G_RESOLV_RESULT_STATUS_FORMAT_ERROR:
+	case G_RESOLV_RESULT_STATUS_NAME_ERROR:
+	case G_RESOLV_RESULT_STATUS_NOT_IMPLEMENTED:
+		err = -EINVAL;
+		break;
+	case G_RESOLV_RESULT_STATUS_REFUSED:
+		err = -ECONNREFUSED;
+		break;
+	case G_RESOLV_RESULT_STATUS_NO_ANSWER:
+		err = -ENOENT;
+		break;
+	}
+
+	if (status != G_RESOLV_RESULT_STATUS_SUCCESS &&
+					clat_settings.resolv_always_succeeds) {
+		gchar **override = g_new0(char*, 1);
+
+		DBG("ignore resolv result %d", status);
+
+		override[0] = g_strdup("64:ff9b::/96");
+		err = assign_clat_prefix(data, override);
+		g_strfreev(override);
 	}
 
 	switch (err) {
@@ -734,17 +757,24 @@ static void prefix_query_cb(GResolvResultStatus status,
 		new_state = CLAT_STATE_RESTART;
 		break;
 	case -EHOSTDOWN:
-		DBG("failed to resolv %s, CLAT is not started", WKN_ADDRESS);
-		if (is_running(data->state))
+		if (is_running(data->state)) {
+			DBG("failed to resolv %s, CLAT is stopped",
+								WKN_ADDRESS);
 			new_state = CLAT_STATE_STOPPED;
+		}
 
-		/* Go back to idle if doing initial query */
-		if (data->state == CLAT_STATE_PREFIX_QUERY)
-			new_state = CLAT_STATE_IDLE;
+		/* Start periodic query if this is the initial query */
+		if (data->state == CLAT_STATE_PREFIX_QUERY) {
+			DBG("failed to resolv %s during initial query, "
+						"continue periodic query",
+						WKN_ADDRESS);
+			clat_task_start_periodic_query(data);
+			return;
+		}
 
 		break;
 	default:
-		DBG("failed to assign prefix, error %d", err);
+		DBG("failed to assign prefix/resolv host, error %d", err);
 		new_state = CLAT_STATE_FAILURE;
 		break;
 	}
@@ -804,6 +834,17 @@ static int clat_task_do_prefix_query(struct clat_data *data)
 	return 0;
 }
 
+static guint get_pq_timeout(struct clat_data *data)
+{
+	if (!data)
+		return 0;
+
+	if (data->state == CLAT_STATE_PREFIX_QUERY)
+		return PREFIX_QUERY_RETRY_TIMEOUT;
+
+	return PREFIX_QUERY_TIMEOUT;
+}
+
 static gboolean run_prefix_query(gpointer user_data)
 {
 	struct clat_data *data = user_data;
@@ -820,7 +861,7 @@ static gboolean run_prefix_query(gpointer user_data)
 		return G_SOURCE_REMOVE;
 	}
 
-	data->prefix_query_id = g_timeout_add(PREFIX_QUERY_TIMEOUT,
+	data->prefix_query_id = g_timeout_add(get_pq_timeout(data),
 							run_prefix_query, data);
 	if (!data->prefix_query_id) {
 		connman_error("CLAT failed to continue periodic prefix query");
@@ -843,7 +884,7 @@ static int clat_task_start_periodic_query(struct clat_data *data)
 	 * TODO: make this do the queries with AAAA DNS TTL - 10s, i.e., 10s
 	 * before the record expires as stated by RFC.
 	 */
-	data->prefix_query_id = g_timeout_add(PREFIX_QUERY_TIMEOUT,
+	data->prefix_query_id = g_timeout_add(get_pq_timeout(data),
 							run_prefix_query, data);
 	if (!data->prefix_query_id) {
 		connman_error("CLAT failed to start periodic prefix query");
@@ -1667,7 +1708,8 @@ static int try_clat_start(struct clat_data *data)
 	}
 
 	if (data->ifindex < 0) {
-		DBG("Interface not up, not starting clat");
+		DBG("Interface not up (index %d), not starting clat",
+						data->ifindex);
 		return -ENODEV;
 	}
 
