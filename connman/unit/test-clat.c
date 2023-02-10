@@ -1,7 +1,7 @@
 /*
- *  ConnMan blacklist monitor plugin unit tests
+ *  ConnMan clat plugin unit tests
  *
- *  Copyright (C) 2022 Jolla Ltd. All rights reserved..
+ *  Copyright (C) 2023 Jolla Ltd. All rights reserved..
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2 as
@@ -355,6 +355,7 @@ int connman_task_run(struct connman_task *task,
 
 int connman_task_stop(struct connman_task *task)
 {
+	connman_task_exit_t exit_func;
 	DBG("task %p", task);
 
 	g_assert(task);
@@ -362,7 +363,14 @@ int connman_task_stop(struct connman_task *task)
 
 	if (task->running) {
 		task->running = false;
-		task->exit_func(task, __task_exit_value, task->exit_data);
+
+		/* Allow to run exit only once from a process */
+		exit_func = task->exit_func;
+		task->exit_func = NULL;
+
+		if (exit_func) {
+			exit_func(task, __task_exit_value, task->exit_data);
+		}
 	}
 
 	return 0;
@@ -930,6 +938,7 @@ static gpointer stdout_data = NULL;
 static gpointer stderr_data = NULL;
 
 struct timeout_function {
+	guint id; /* Only for debugs */
 	guint interval;
 	GSourceFunc function;
 	gpointer data;
@@ -979,6 +988,7 @@ static guint add_timeout(guint interval, GSourceFunc function, gpointer data)
 	}
 
 	__timeout_id++;
+	tf->id = __timeout_id;
 
 	g_hash_table_replace(__timeouts, GUINT_TO_POINTER(__timeout_id), tf);
 
@@ -1075,8 +1085,10 @@ static bool call_timeout(gpointer key, gpointer value)
 	struct timeout_function *tf;
 	guint id;
 
-	id = GPOINTER_TO_UINT(key);
 	tf = value;
+	id = GPOINTER_TO_UINT(key);
+	if (!id)
+		id = tf->id;
 
 	if (tf->removed) {
 		DBG("id %u already removed, not calling callback", id);
@@ -1088,15 +1100,18 @@ static bool call_timeout(gpointer key, gpointer value)
 		return false;
 	}
 
-
-	DBG("call id %u", id);
-
 	g_assert(tf);
 
-	if (!tf->function)
+	if (!tf->function) {
+		DBG("id %u does not have function (GIO)", id);
 		return false;
+	}
 
-	tf->function(tf->data);
+	DBG("call id %u (interval %u)", id, tf->interval);
+
+	if (tf->function(tf->data) == G_SOURCE_REMOVE)
+		tf->removed = true;
+
 	tf->called = true;
 
 	return true;
@@ -1147,6 +1162,66 @@ static guint call_all_timeouts(void)
 		g_assert(value);
 
 		if (call_timeout(key, value))
+			count++;
+	}
+
+	DBG("called %u timeout functions", count);
+
+	return count;
+}
+
+static gint compare_timeout_function(gconstpointer a, gconstpointer b)
+{
+	const struct timeout_function *tf_a = a;
+	const struct timeout_function *tf_b = b;
+
+	if (tf_a->interval < tf_b->interval)
+		return -1;
+
+	if (tf_a->interval > tf_b->interval)
+		return 1;
+
+	return 0;
+}
+
+static guint call_all_timeouts_timed(void)
+{
+	GList *timeouts_sorted = NULL;
+	GList *keys;
+	GList *iter;
+	guint count = 0;
+
+	DBG("%p", __timeouts);
+
+	if (!__timeouts || !g_hash_table_size(__timeouts))
+		return 0;
+
+	/*
+	 * Get the keys at the time we're about to call the callbacks. New
+	 * timeout functions may be added when callback is called and, thus
+	 * the hash table is altered. This way it is safe to call only those
+	 * that are now scheduled.
+	 */
+	keys = g_hash_table_get_keys(__timeouts);
+	DBG("%d keys", g_list_length(keys));
+
+	for (iter = keys; iter; iter = g_list_next(iter)) {
+		gpointer key;
+		gpointer value;
+
+		key = iter->data;
+
+		value = g_hash_table_lookup(__timeouts, key);
+		g_assert(value);
+
+		/* Sort using the timeout */
+		timeouts_sorted = g_list_insert_sorted(timeouts_sorted, value,
+					compare_timeout_function);
+	}
+
+	for (iter = timeouts_sorted; iter; iter = g_list_next(iter))
+	{
+		if (call_timeout(0, iter->data))
 			count++;
 	}
 
@@ -2264,16 +2339,139 @@ static void clat_plugin_test_failure4()
 // resolv returns error (first ok, then ok, then error)
 static void clat_plugin_test_failure5()
 {
-	// TODO !
+	struct connman_network network = {
+			.index = SERVICE_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+	int i;
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_READY;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* GResolv removal is added, call it */
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* This has no effect during pre-conf */
+	state = CONNMAN_SERVICE_STATE_ONLINE;
+	service.state = state;
+	n->service_state_changed(&service, state);
+
+	g_assert_true(check_task_running(TASK_SETUP_UNKNOWN, 0));
+	g_assert_cmpint(get_task_setup(), ==, TASK_SETUP_PRE);
+	g_assert_cmpint(__task_run_count, ==, 1);
+	g_assert_null(__last_set_contents_write);
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* Callbacks are added, called and then re-added */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+
+	for (i = 0; i < 10 ; i++) {
+		/* No change */
+		call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+		g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+		/* Callbacks are added + remove resolv */
+		g_assert_cmpint(call_all_timeouts_timed(), ==, 3);
+
+		g_assert(__resolv);
+		g_assert(__dad_callback);
+		g_assert_true(call_dad_callback());
+
+		/* There should be always 2 callbacks, prefix query and DAD */
+		g_assert_cmpint(pending_timeouts(), ==, 2);
+	}
+
+	/* Error with resolv, process is stopped */
+	DBG("Resolv error NO_ANSWER");
+	call_resolv_result(G_RESOLV_RESULT_STATUS_NO_ANSWER);
+
+	/* State transition to post-configure */
+	DBG("RUNNING STOPS");
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* remove resolv exists */
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+
+	/* Timeouts are removed */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
 }
 
-static bool is_retry_case(GResolvResultStatus status)
-{
-	return (status == G_RESOLV_RESULT_STATUS_NO_RESPONSE ||
-			status == G_RESOLV_RESULT_STATUS_SERVER_FAILURE);
-}
-
-// resolv returns error as first message
+// loop over all resolv returns
 static void clat_plugin_test_failure6()
 {
 	struct connman_network network = {
@@ -2352,8 +2550,8 @@ static void clat_plugin_test_failure6()
 		g_assert_false(check_task_running(TASK_SETUP_UNKNOWN, 0));
 		g_assert_cmpint(__task_run_count, ==, 0);
 
-		if (is_retry_case(status)) {
-			DBG("retry case");
+		if (status == G_RESOLV_RESULT_STATUS_NO_RESPONSE) {
+			DBG("retry case (timeout)");
 
 			/* This adds timeouts for retry remove resolv */
 			g_assert_cmpint(call_all_timeouts(), ==, 2);
@@ -2422,9 +2620,307 @@ static void clat_plugin_test_failure6()
 	test_reset();
 }
 
-// resolv returns different prefix_len
+/*
+ * Resolv returns timeout during initial query, then ok and then loops 7 times
+ * with timeout resulting in error
+ */
+static void clat_plugin_test_failure7()
+{
+	struct connman_network network = {
+			.index = SERVICE_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+	int i;
 
-/*  resolv returns different prefix_len -> restart case */
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_READY;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with no response = timeout */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_NO_RESPONSE);
+
+	/* This transitions state to pre-configure */
+	g_assert_false(check_task_running(TASK_SETUP_UNKNOWN, 0));
+
+	/* GResolv removal and prefix query is restarted are added*/
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+	g_assert(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* Second resolv is a success */
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* This has no effect during pre-conf */
+	state = CONNMAN_SERVICE_STATE_ONLINE;
+	service.state = state;
+	n->service_state_changed(&service, state);
+
+	g_assert_true(check_task_running(TASK_SETUP_UNKNOWN, 0));
+	g_assert_cmpint(get_task_setup(), ==, TASK_SETUP_PRE);
+	g_assert_cmpint(__task_run_count, ==, 1);
+	g_assert_null(__last_set_contents_write);
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* Callbacks are added, called and then re-added + remove resolv */
+	g_assert_cmpint(call_all_timeouts_timed(), ==, 3);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+
+	/* 6 timeouts is ok */
+	for (i = 0; i < 6 ; i++) {
+		DBG("timeout %d", i);
+
+		/* Timeout that adds new query with shorter interval */
+		call_resolv_result(G_RESOLV_RESULT_STATUS_NO_RESPONSE);
+
+		/* Does not yet go off */ 
+		g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+		/* Callbacks are added + remove resolv */
+		g_assert_cmpint(call_all_timeouts_timed(), ==, 3);
+
+		g_assert(__resolv);
+		g_assert(__dad_callback);
+		g_assert_true(call_dad_callback());
+
+		/* There should be always 2 callbacks, prefix query and DAD */
+		g_assert_cmpint(pending_timeouts(), ==, 2);
+	}
+
+	/* 7th makes process to stop */
+	DBG("Resolv error NO_RESPONSE");
+	call_resolv_result(G_RESOLV_RESULT_STATUS_NO_ANSWER);
+
+	/* State transition to post-configure */
+	DBG("RUNNING STOPS");
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* remove resolv exists */
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+
+	/* Timeouts are removed */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+/*
+ * Resolv returns timeout during initial query, then ok and then loops 4 times
+ * with timeout resulting in error
+ */
+static void clat_plugin_test_failure8()
+{
+	struct connman_network network = {
+			.index = SERVICE_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+	int i;
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_READY;
+					state++) {
+		service.state = state;
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with no response = timeout */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_NO_RESPONSE);
+
+	/* This transitions state to pre-configure */
+	g_assert_false(check_task_running(TASK_SETUP_UNKNOWN, 0));
+
+	/* GResolv removal and prefix query is restarted are added*/
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+	g_assert(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* Second resolv is a success */
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* This has no effect during pre-conf */
+	state = CONNMAN_SERVICE_STATE_ONLINE;
+	service.state = state;
+	n->service_state_changed(&service, state);
+
+	g_assert_true(check_task_running(TASK_SETUP_UNKNOWN, 0));
+	g_assert_cmpint(get_task_setup(), ==, TASK_SETUP_PRE);
+	g_assert_cmpint(__task_run_count, ==, 1);
+	g_assert_null(__last_set_contents_write);
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* Callbacks are added, called and then re-added + remove resolv */
+	g_assert_cmpint(call_all_timeouts_timed(), ==, 3);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+
+	/* 4 timeouts */
+	for (i = 0; i < 4 ; i++) {
+		DBG("timeout %d", i);
+
+		/* Timeout that adds new query with shorter interval */
+		call_resolv_result(G_RESOLV_RESULT_STATUS_NO_RESPONSE);
+
+		/* Does not yet go off */ 
+		g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+		/* Callbacks are added + remove resolv */
+		g_assert_cmpint(call_all_timeouts_timed(), ==, 3);
+
+		g_assert(__resolv);
+		g_assert(__dad_callback);
+		g_assert_true(call_dad_callback());
+
+		/* There should be always 2 callbacks, prefix query and DAD */
+		g_assert_cmpint(pending_timeouts(), ==, 2);
+	}
+
+	/* And continue as normal */
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* Callbacks are added, called and then re-added + remove resolv */
+	g_assert_cmpint(call_all_timeouts_timed(), ==, 3);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+
+	/* State transition to post-configure */
+	DBG("RUNNING STOPS");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* Timeouts are removed */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+/* resolv returns different prefix_len -> restart case */
 static void clat_plugin_test_restart1()
 {
 	struct connman_network network = {
@@ -3134,6 +3630,8 @@ int main (int argc, char *argv[])
 	g_test_add_func(TEST_PREFIX "test_failure4", clat_plugin_test_failure4);
 	g_test_add_func(TEST_PREFIX "test_failure5", clat_plugin_test_failure5);
 	g_test_add_func(TEST_PREFIX "test_failure6", clat_plugin_test_failure6);
+	g_test_add_func(TEST_PREFIX "test_failure7", clat_plugin_test_failure7);
+	g_test_add_func(TEST_PREFIX "test_failure8", clat_plugin_test_failure8);
 	
 	g_test_add_func(TEST_PREFIX "test_restart1", clat_plugin_test_restart1);
 
