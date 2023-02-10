@@ -821,7 +821,7 @@ static enum resolv_result_type __resolv_result_type = RESOLV_RESULT_GLOBAL;
 static void call_resolv_result(GResolvResultStatus status)
 {
 	/* TODO add more and make configurable */
-	char **r = g_new0(char*, 4);
+	char **r = g_new0(char*, 5);
 
 	switch (__resolv_result_type) {
 	case RESOLV_RESULT_GLOBAL:
@@ -829,6 +829,7 @@ static void call_resolv_result(GResolvResultStatus status)
 		r[1] = g_strdup("64:ff9b::c000:ab");
 		r[2] = g_strdup("64:ff9b::/96");
 		r[3] = g_strdup("dead:beef:0000:feed:abba:cabb:1234:");
+		r[4] = NULL;
 		break;
 	case RESOLV_RESULT_ONE_64:
 		r[0] = g_strdup("66:ff9b::c000:aa");
@@ -851,6 +852,7 @@ static void call_resolv_result(GResolvResultStatus status)
 	default:
 		break;
 	}
+	r[4] = NULL;
 
 	g_assert(__resolv);
 	g_assert(__resolv->hostname);
@@ -927,6 +929,18 @@ gboolean g_file_set_contents(const gchar* filename, const gchar* contents,
 	__last_set_contents = g_strdup(contents);
 
 	return TRUE;
+}
+
+// TODO config loading tests
+gboolean g_key_file_load_from_file(GKeyFile *keyfile, const gchar *file,
+					GKeyFileFlags flags, GError** error)
+{
+	g_assert(keyfile);
+	g_assert(file);
+
+	*error = g_error_new_literal(1, G_FILE_ERROR_NOENT, "no file in test");
+
+	return false;
 }
 
 static int stdout_fd_ch_ptr = 0x12345678;
@@ -1165,6 +1179,8 @@ static guint call_all_timeouts(void)
 			count++;
 	}
 
+	g_list_free(keys);
+
 	DBG("called %u timeout functions", count);
 
 	return count;
@@ -1224,6 +1240,9 @@ static guint call_all_timeouts_timed(void)
 		if (call_timeout(0, iter->data))
 			count++;
 	}
+
+	g_list_free(keys);
+	g_list_free(timeouts_sorted);
 
 	DBG("called %u timeout functions", count);
 
