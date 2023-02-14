@@ -346,8 +346,8 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 	rules = g_new0(char*, 2);
 	rules[0] = g_strdup_printf("-i %s -o %s -j ACCEPT", nat->interface,
 								nat->ifname);
-	rules[1] = g_strdup_printf("-i %s -o %s -j ACCEPT", nat->interface,
-								ifname_in);
+	rules[1] = g_strdup_printf("-i %s -o %s -j ACCEPT", nat->ifname,
+								nat->interface);
 
 	for (i = 0; i < 2; i++) {
 		DBG("Enable firewall rule -I FORWARD %s", rules[i]);
@@ -504,8 +504,11 @@ int connman_nat_enable_double_nat_override(const char *ifname,
 	nat->dst_prefixlen = 24; /* Default by ippool.c */
 	nat->ifname = g_strdup(ifname);
 	nat->family = AF_INET;
-	/* TODO the tether interface should be in main conf */
-	nat->interface = "tether"; /* by define BRIDGE_NAME in tethering.c */
+	/*
+	 * TODO the tether interface should be in main conf. As of now it is as
+	 * a define BRIDGE_NAME in tethering.c
+	 */
+	nat->interface = g_strdup("tether");
 
 	g_hash_table_replace(nat_hash, g_strdup(ifname), nat);
 
