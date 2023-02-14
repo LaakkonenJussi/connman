@@ -1411,6 +1411,9 @@ static void clat_plugin_test2()
 					state <= CONNMAN_SERVICE_STATE_READY;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -1514,6 +1517,9 @@ static void clat_plugin_test3()
 					state <= CONNMAN_SERVICE_STATE_READY;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -1628,6 +1634,9 @@ static void clat_plugin_test4()
 					state <= CONNMAN_SERVICE_STATE_READY;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -1739,6 +1748,9 @@ static void clat_plugin_test5()
 					state <= CONNMAN_SERVICE_STATE_READY;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -1848,6 +1860,9 @@ static void clat_plugin_test6()
 					state <= CONNMAN_SERVICE_STATE_ONLINE;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -1961,6 +1976,7 @@ static void clat_plugin_test7()
 
 	state = CONNMAN_SERVICE_STATE_READY;
 	service.state = state;
+	network.connected = true;
 	n->service_state_changed(&service, state);
 
 	/* Query is made -> call with success */
@@ -2054,6 +2070,9 @@ static void clat_plugin_test_failure1()
 					state <= CONNMAN_SERVICE_STATE_ONLINE;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -2139,6 +2158,9 @@ static void clat_plugin_test_failure2()
 					state <= CONNMAN_SERVICE_STATE_ONLINE;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -2216,6 +2238,9 @@ static void clat_plugin_test_failure3()
 					state <= CONNMAN_SERVICE_STATE_ONLINE;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -2311,6 +2336,9 @@ static void clat_plugin_test_failure4()
 					state <= CONNMAN_SERVICE_STATE_ONLINE;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -2388,6 +2416,9 @@ static void clat_plugin_test_failure5()
 					state <= CONNMAN_SERVICE_STATE_READY;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -2523,6 +2554,9 @@ static void clat_plugin_test_failure6()
 					state < CONNMAN_SERVICE_STATE_ONLINE;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -2675,6 +2709,9 @@ static void clat_plugin_test_failure7()
 					state <= CONNMAN_SERVICE_STATE_READY;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -2821,6 +2858,9 @@ static void clat_plugin_test_failure8()
 					state <= CONNMAN_SERVICE_STATE_READY;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -2971,6 +3011,9 @@ static void clat_plugin_test_restart1()
 					state <= CONNMAN_SERVICE_STATE_ONLINE;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -3120,6 +3163,9 @@ static void clat_plugin_test_prefix(gconstpointer data)
 					state <= CONNMAN_SERVICE_STATE_READY;
 					state++) {
 		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
 		n->service_state_changed(&service, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -3244,6 +3290,9 @@ static void clat_plugin_test_service1()
 				n->default_changed(NULL);
 			}
 
+			if (service.state == CONNMAN_SERVICE_STATE_READY)
+				network.connected = true;
+
 			n->service_state_changed(&service, service.state);
 
 			g_assert_null(__task);
@@ -3328,6 +3377,9 @@ static void clat_plugin_test_service2()
 					state <= CONNMAN_SERVICE_STATE_READY;
 					state++) {
 		service1.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network1.connected = true;
+
 		n->service_state_changed(&service1, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
@@ -3476,6 +3528,9 @@ static void clat_plugin_test_service3()
 					state <= CONNMAN_SERVICE_STATE_READY;
 					state++) {
 		service1.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network1.connected = true;
+
 		n->service_state_changed(&service1, state);
 		g_assert_null(__task);
 		g_assert_null(__resolv);
