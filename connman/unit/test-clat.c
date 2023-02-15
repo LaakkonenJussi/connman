@@ -205,6 +205,18 @@ int connman_inet_check_ipaddress(const char *host)
 	return 0;
 }
 
+int connman_inet_rmtun(const char *ifname)
+{
+	g_assert_cmpstr(ifname, ==, CLAT_DEV_NAME);
+	return 0;
+}
+
+int connman_inet_mktun(const char *ifname)
+{
+	g_assert_cmpstr(ifname, ==, CLAT_DEV_NAME);
+	return 0;
+}
+
 static int dad_reply_ptr = 0x87654321;
 static connman_inet_ns_cb_t __dad_callback = NULL;
 static struct in6_addr dad_addr = { 0 };
