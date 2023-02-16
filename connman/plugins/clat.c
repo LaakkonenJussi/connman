@@ -35,6 +35,8 @@
 
 #include <gweb/gresolv.h>
 
+#include <linux/if_tun.h>
+
 #include <glib.h>
 
 #define CONNMAN_API_SUBJECT_TO_CHANGE
@@ -337,7 +339,8 @@ static int force_rmtun(const char *ifname)
 		connman_error("Cannot put %s down, trying to remove anyway",
 									ifname);
 
-	err = connman_inet_rmtun(TAYGA_CLAT_DEVICE);
+	/* tayga in tayga.c sets IFF_TUN as only flag for the interface */
+	err = connman_inet_rmtun(TAYGA_CLAT_DEVICE, IFF_TUN);
 	if (err) {
 		connman_error("Failed to remove tun device %s",	ifname);
 		return err;
@@ -353,6 +356,7 @@ static gboolean io_channel_cb(GIOChannel *source, GIOCondition condition,
 {
 	struct clat_data *data = user_data;
 	const char dev_busy_suffix[] = "aborting: Device or resource busy";
+	const char dev_invalid[] = "aborting: Invalid argument";
 	const char bad_state_suffix[] = "File descriptor in bad state";
 	char *str;
 	const char *type = (source == data->out_ch ? "STDOUT" :
@@ -371,10 +375,16 @@ static gboolean io_channel_cb(GIOChannel *source, GIOCondition condition,
 
 		str[strlen(str) - 1] = '\0';
 
-		connman_info("CLAT %s: %s", clat_settings.tayga_bin, str);
+		if (source == data->out_ch)
+			connman_info("CLAT %s: %s", clat_settings.tayga_bin,
+									str);
+		else
+			connman_error("CLAT %s: %s", clat_settings.tayga_bin,
+									str);
 
 		/* This requires real hard removal of the device */
-		if (g_str_has_suffix(str, dev_busy_suffix)) {
+		if (g_str_has_suffix(str, dev_busy_suffix) ||
+					g_str_has_suffix(str, dev_invalid)) {
 			switch (data->state) {
 			case CLAT_STATE_IDLE:
 			case CLAT_STATE_PREFIX_QUERY:
@@ -1597,6 +1607,7 @@ static int clat_run_task(struct clat_data *data)
 				 * and stop the task to it call exit function.
 				 * This will make tayga use existing settings.
 				 */
+				data->do_restart = false;
 				data->state = CLAT_STATE_PREFIX_QUERY;
 				if (data->task)
 					connman_task_stop(data->task);
