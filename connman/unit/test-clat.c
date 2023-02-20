@@ -240,13 +240,22 @@ int connman_inet_ipv6_do_dad(int index, int timeout_ms, struct in6_addr *addr,
 	return 0;
 }
 
+static bool __dad_succeeds = true;
+
 static bool call_dad_callback()
 {
+	struct nd_neighbor_advert *na = NULL;
+	unsigned int length = 0;
+
 	if (!__dad_callback)
 		return false;
 
-	__dad_callback((struct nd_neighbor_advert*)&dad_reply_ptr, 1, &dad_addr,
-							__dad_user_data);
+	if (!__dad_succeeds) {
+		na = (struct nd_neighbor_advert*)&dad_reply_ptr;
+		length = 1;
+	}
+
+	__dad_callback(na, length, &dad_addr, __dad_user_data);
 
 	__dad_callback = NULL;
 	__dad_user_data = NULL;
@@ -1113,21 +1122,6 @@ void g_io_channel_unref(GIOChannel* channel)
 		stderr_func = NULL;
 		stderr_data = NULL;
 	}
-}
-
-static gboolean call_g_io_stdout(GIOCondition cond, const char *str)
-{
-	gboolean ret;
-
-	g_assert(stdout_func);
-
-	__io_str = g_strdup(str);
-	ret = stdout_func((GIOChannel *)&stdout_fd_ch_ptr, cond, stderr_data);
-
-	g_free(__io_str);
-	__io_str = NULL;
-
-	return ret;
 }
 
 static bool call_g_io_stderr(GIOCondition cond, const char *str)
@@ -2618,13 +2612,24 @@ static void clat_plugin_test_failure6()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_network network2 = {
+			.index = SERVICE_DEV_INDEX + 1,
+	};
 	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_ipconfig ipv6config2 = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
 	};
 	struct connman_service service = {
 			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
 			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	struct connman_service service2 = {
+			.type = CONNMAN_SERVICE_TYPE_WIFI,
+			.state = CONNMAN_SERVICE_STATE_ONLINE,
 	};
 	enum connman_service_state state;
 	GResolvResultStatus status;
@@ -2634,6 +2639,10 @@ static void clat_plugin_test_failure6()
 	service.network = &network;
 	service.ipconfig_ipv6 = &ipv6config;
 	assign_ipaddress(&ipv6config);
+
+	service2.network = &network2;
+	service2.ipconfig_ipv6 = &ipv6config2;
+	assign_ipaddress(&ipv6config2);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -2655,6 +2664,7 @@ static void clat_plugin_test_failure6()
 
 	bool expect_resolv = false;
 	int timeout_count = 0;
+	int gresolv_timeouts = 0;
 
 	/*
 	 * Do each status individually by first going online, then default,
@@ -2662,9 +2672,15 @@ static void clat_plugin_test_failure6()
 	 * use.
 	 */
 	for (status = G_RESOLV_RESULT_STATUS_ERROR;
-				status <= G_RESOLV_RESULT_STATUS_NO_ANSWER;
+			status <= G_RESOLV_RESULT_STATUS_NO_ANSWER;
+			status == G_RESOLV_RESULT_STATUS_NO_RESPONSE &&
+				gresolv_timeouts < 6 ?
+				status = G_RESOLV_RESULT_STATUS_NO_RESPONSE :
 				status++) {
 		DBG("test resolv result status %d", status);
+
+		if (status == G_RESOLV_RESULT_STATUS_NO_RESPONSE + 1)
+			g_assert_cmpint(gresolv_timeouts, ==, 6);
 
 		/* Nothing done as not being the default */
 		service.state = CONNMAN_SERVICE_STATE_ONLINE;
@@ -2695,10 +2711,12 @@ static void clat_plugin_test_failure6()
 		g_assert_cmpint(__task_run_count, ==, 0);
 
 		if (status == G_RESOLV_RESULT_STATUS_NO_RESPONSE) {
-			DBG("retry case (timeout)");
+			gresolv_timeouts++;
+
+			DBG("retry case (timeout) #%d", gresolv_timeouts);
 
 			/* This adds timeouts for retry remove resolv */
-			g_assert_cmpint(call_all_timeouts(), ==, 2);
+			g_assert_cmpint(call_all_timeouts_timed(), ==, 2);
 			g_assert(__resolv);
 			g_assert_null(__dad_callback);
 			g_assert_cmpint(pending_timeouts(), ==, 1);
@@ -2711,7 +2729,7 @@ static void clat_plugin_test_failure6()
 			DBG("failure case");
 
 			/* This calls only the remove resolv timeout */
-			g_assert_cmpint(call_all_timeouts(), ==, 1);
+			g_assert_cmpint(call_all_timeouts_timed(), ==, 1);
 			g_assert_null(__resolv);
 			g_assert_null(__dad_callback);
 			g_assert_cmpint(pending_timeouts(), ==, 0);
@@ -2721,35 +2739,34 @@ static void clat_plugin_test_failure6()
 
 			expect_resolv = false;
 			timeout_count = 0;
+
+			/* Default service changes and cellular goes to READY */
+			__def_service = &service2;
+			n->default_changed(&service2);
 		}
 
-		/* Resetting default service changes nothing */
-		__def_service = NULL;
-		n->default_changed(NULL);
-
-		g_assert_false(check_task_running(TASK_SETUP_UNKNOWN, 0));
 		g_assert_cmpint(__task_run_count, ==, 0);
 
 		if (expect_resolv)
-			g_assert(__resolv);
+			g_assert(__resolv); /* Retry in place */
 		else
-			g_assert_null(__resolv);
+			g_assert_null(__resolv); /* Stopped */
 
 		g_assert_null(__dad_callback);
 		g_assert_cmpint(pending_timeouts(), ==, timeout_count);
 
-		/* Going back to ready changes nothing */
+		/* To next timeout */
+		if (expect_resolv)
+			continue;
+
+		/* Going back to ready changes nothing as not being default */
 		service.state = CONNMAN_SERVICE_STATE_READY;
 		n->service_state_changed(&service, service.state);
 
 		g_assert_false(check_task_running(TASK_SETUP_UNKNOWN, 0));
 		g_assert_cmpint(__task_run_count, ==, 0);
 
-		if (expect_resolv)
-			g_assert(__resolv);
-		else
-			g_assert_null(__resolv);
-
+		g_assert_null(__resolv);
 		g_assert_null(__dad_callback);
 		g_assert_cmpint(pending_timeouts(), ==, timeout_count);
 	}
@@ -2757,6 +2774,7 @@ static void clat_plugin_test_failure6()
 	__connman_builtin_clat.exit();
 
 	connman_ipaddress_free(ipv6config.ipaddress);
+	connman_ipaddress_free(ipv6config2.ipaddress);
 
 	g_assert_false(rtprot_ra);
 	g_assert_null(n);
@@ -3891,6 +3909,142 @@ static void clat_plugin_test_service3()
 	test_reset();
 }
 
+/* Stop with null service as default */
+/*
+ * Mobile data goes first to ready, then comes default and comes online while
+ * running. Then another service becomes online and default -> mobile data
+ * goes to ready.
+ */
+static void clat_plugin_test_service4()
+{
+	struct connman_network network1 = {
+			.index = SERVICE_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv6config1 = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service1 = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+
+	enum connman_service_state state;
+
+	DBG("");
+
+	service1.network = &network1;
+	service1.ipconfig_ipv6 = &ipv6config1;
+	assign_ipaddress(&ipv6config1);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_READY;
+					state++) {
+		service1.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network1.connected = true;
+
+		n->service_state_changed(&service1, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service1;
+	n->default_changed(&service1);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* GResolv removal is added, call it */
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+	g_assert_cmpint(__task_run_count, ==, 1);
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* Callbacks are added, called and then re-added */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+	g_assert_cmpint(__task_run_count, ==, 2);
+
+	/* This has no effect while running */
+	state = CONNMAN_SERVICE_STATE_ONLINE;
+	service1.state = state;
+	n->service_state_changed(&service1, state);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+	g_assert_cmpint(__task_run_count, ==, 2);
+
+	/* NULL service befomes default and CLAT stops*/
+	__def_service = NULL;
+	n->default_changed(NULL);
+
+	/* CLAT stops, state transition to post-configure */
+	DBG("RUNNING STOPS");
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+	g_assert_cmpint(__task_run_count, ==, 3);
+
+	/* Timeouts are removed */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* Cellular is downgraded to ready -> no change */
+	service1.state = CONNMAN_SERVICE_STATE_READY;
+	n->service_state_changed(&service1, state);
+
+	/* No timeouts are added */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(__task_run_count, ==, 3);
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv6config1.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
 /* Clat device error during pre-configure */
 static void clat_plugin_test_if_error1(gconstpointer data)
 {
@@ -4138,7 +4292,282 @@ static void clat_plugin_test_if_error2(gconstpointer data)
 	test_reset();
 }
 
-/* TODO ipconfig tests */
+/* Different service reports something -> nothing done */
+static void clat_plugin_test_ipconfig1()
+{
+	struct connman_network network = {
+			.index = SERVICE_DEV_INDEX,
+	};
+	struct connman_network network_wifi = {
+			.index = SERVICE_DEV_INDEX + 1,
+	};
+	struct connman_ipconfig ipv6config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
+	struct connman_ipconfig ipv6config_wifi = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_ipconfig ipv4config_wifi = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	struct connman_service service_wifi = {
+			.type = CONNMAN_SERVICE_TYPE_WIFI,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	struct connman_ipconfig *wifi_confs[] = {
+						NULL,
+						&ipv4config_wifi,
+						&ipv6config_wifi
+	};
+	enum connman_service_state state;
+	int i;
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv4config);
+	assign_ipaddress(&ipv6config);
+
+	service_wifi.network = &network_wifi;
+	service_wifi.ipconfig_ipv4 = &ipv4config_wifi;
+	service_wifi.ipconfig_ipv6 = &ipv6config_wifi;
+	assign_ipaddress(&ipv4config_wifi);
+	assign_ipaddress(&ipv6config_wifi);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_READY;
+					state++) {
+		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* GResolv removal is added, call it */
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+
+	/* Callbacks are added, called and then re-added */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(call_all_timeouts_timed(), ==, 2);
+	g_assert_cmpint(__task_run_count, ==, 2);
+
+	/* Ignored: null ipconf, different service */
+	for (i = 0; i < 3; i++) {
+		DBG("wifi conf id %d", i);
+
+		n->ipconfig_changed(&service_wifi, wifi_confs[i]);
+
+		g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+		g_assert(__resolv);
+		g_assert(__dad_callback);
+
+		/* Simulate time */
+		g_assert_true(call_dad_callback());
+		g_assert_cmpint(call_all_timeouts_timed(), ==, 2);
+		g_assert_cmpint(__task_run_count, ==, 2);
+	}
+
+	/* State transition to post-configure */
+	DBG("RUNNING STOPS");
+	call_task_exit(0);
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* Timeouts are removed */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+
+	__connman_builtin_clat.exit();
+
+	connman_ipaddress_free(ipv4config.ipaddress);
+	connman_ipaddress_free(ipv6config.ipaddress);
+	connman_ipaddress_free(ipv4config_wifi.ipaddress);
+	connman_ipaddress_free(ipv6config_wifi.ipaddress);
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
+
+/* Cellular is not default or network is not connected */
+
+/* Running: IPv4 address is added and clat stops */
+/* Running: IPv6 address is removed and clat stops */
+static void clat_plugin_test_ipconfig_type(gconstpointer data)
+{
+	struct connman_network network = {
+			.index = SERVICE_DEV_INDEX,
+	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
+	struct connman_ipconfig ipv6config = { 
+			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
+			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_service service = {
+			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
+			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+	};
+	enum connman_service_state state;
+	int type = GPOINTER_TO_INT(data);
+
+	DBG("");
+
+	service.network = &network;
+	service.ipconfig_ipv6 = &ipv6config;
+	assign_ipaddress(&ipv6config);
+
+	g_assert(__connman_builtin_clat.init() == 0);
+
+	g_assert(n);
+	g_assert(r);
+	g_assert_true(rtprot_ra);
+
+	for (state = CONNMAN_SERVICE_STATE_UNKNOWN;
+					state <= CONNMAN_SERVICE_STATE_READY;
+					state++) {
+		service.state = state;
+		if (state == CONNMAN_SERVICE_STATE_READY)
+			network.connected = true;
+
+		n->service_state_changed(&service, state);
+		g_assert_null(__task);
+		g_assert_null(__resolv);
+	}
+
+	__def_service = &service;
+	n->default_changed(&service);
+	g_assert_cmpint(__task_run_count, ==, 0);
+
+	/* Query is made -> call with success */
+	g_assert(__resolv);
+	g_assert_null(__last_set_contents_write);
+	call_resolv_result(G_RESOLV_RESULT_STATUS_SUCCESS);
+
+	/* This transitions state to pre-configure */
+	g_assert_true(check_task_running(TASK_SETUP_PRE, 0));
+
+	/* GResolv removal is added, call it */
+	g_assert(__timeouts);
+	g_assert_cmpint(call_all_timeouts(), ==, 1);
+	g_assert_null(__resolv);
+	g_assert_null(__dad_callback);
+
+	/* State transition to running */
+	DBG("PRE CONFIGURE stops");
+	call_task_exit(0);
+
+	/* Callbacks are added, called and then re-added */
+	g_assert_cmpint(call_all_timeouts(), ==, 2);
+
+	g_assert(__resolv);
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback());
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(call_all_timeouts_timed(), ==, 2);
+	g_assert_cmpint(__task_run_count, ==, 2);
+
+	/* State transition to post-configure because of ipconfig change */
+	DBG("RUNNING STOPS, ipconfig changed");
+
+	/* Setup ipconfig */
+	if (type == AF_INET) {
+		/* IPv4 address is present -> stop */
+		service.ipconfig_ipv4 = &ipv4config;
+		assign_ipaddress(&ipv4config);
+		n->ipconfig_changed(&service, &ipv4config);
+	} else if (type == AF_INET6) {
+		/* IPv6 address is lost -> stop */
+		connman_ipaddress_clear(ipv6config.ipaddress);
+		n->ipconfig_changed(&service, &ipv6config);
+	}
+
+	g_assert_true(check_task_running(TASK_SETUP_POST, 0));
+
+	/* Timeouts are removed */
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+
+	/* Task is ended */
+	DBG("POST CONFIGURE stops");
+	call_task_exit(0);
+
+	g_assert_false(check_task_running(TASK_SETUP_STOPPED, 0));
+	g_assert_cmpint(pending_timeouts(), ==, 0);
+	g_assert_null(__resolv);
+
+	__connman_builtin_clat.exit();
+
+	if (type == AF_INET)
+		connman_ipaddress_free(ipv4config.ipaddress);
+
+	connman_ipaddress_free(ipv6config.ipaddress);
+
+
+	g_assert_false(rtprot_ra);
+	g_assert_null(n);
+	g_assert_null(r);
+	test_reset();
+}
 
 static gchar *option_debug = NULL;
 
@@ -4217,6 +4646,16 @@ int main (int argc, char *argv[])
 	g_test_add_func(TEST_PREFIX "test_service1", clat_plugin_test_service1);
 	g_test_add_func(TEST_PREFIX "test_service2", clat_plugin_test_service2);
 	g_test_add_func(TEST_PREFIX "test_service3", clat_plugin_test_service3);
+	g_test_add_func(TEST_PREFIX "test_service4", clat_plugin_test_service4);
+
+	g_test_add_func(TEST_PREFIX "test_ipconfig1",
+						clat_plugin_test_ipconfig1);
+	g_test_add_data_func(TEST_PREFIX "test_ipconfig_ipv6_lost",
+						GINT_TO_POINTER(AF_INET6),
+						clat_plugin_test_ipconfig_type);
+	g_test_add_data_func(TEST_PREFIX "test_ipconfig_ipv4_added",
+						GINT_TO_POINTER(AF_INET),
+						clat_plugin_test_ipconfig_type);
 
 	g_test_add_data_func(TEST_PREFIX "test_if_error1.1",
 						GUINT_TO_POINTER(1),
