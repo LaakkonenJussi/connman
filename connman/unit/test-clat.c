@@ -609,9 +609,7 @@ int connman_nat6_prepare(struct connman_ipconfig *ipconfig,
 	return 0;
 }
 
-void connman_nat6_restore(struct connman_ipconfig *ipconfig,
-						const char *ipv6address,
-						unsigned char ipv6prefixlen)
+void connman_nat6_restore(struct connman_ipconfig *ipconfig)
 {
 	g_assert(ipconfig);
 }
