@@ -1173,6 +1173,12 @@ guint g_timeout_add(guint interval, GSourceFunc function, gpointer data)
 	return id;
 }
 
+guint connman_wakeup_timer_add(guint interval, GSourceFunc function,
+								gpointer data)
+{
+	return g_timeout_add(interval, function, data);
+}
+
 static bool call_timeout(gpointer key, gpointer value)
 {
 	struct timeout_function *tf;
