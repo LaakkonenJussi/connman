@@ -164,11 +164,52 @@ int connman_inet_set_address(int index, struct connman_ipaddress *ipaddress)
 	return 0;
 }
 
+struct route_entry {
+	int index;
+	char *host;
+	char *gateway;
+	char *netmask;
+	short metric;
+	unsigned long mtu;
+};
+
+static struct route_entry *__route_entry_vpn = NULL;
+
 int connman_inet_add_host_route(int index, const char *host,
 						const char *gateway)
 {
+	DBG("index %d host %s gateway %s", index, host, gateway);
+
 	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
 	g_assert(host);
+
+	g_assert_null(__route_entry_vpn); /* CLAT should set only one IPv4 route */
+
+	__route_entry_vpn = g_new0(struct route_entry, 1);
+	__route_entry_vpn->index = index;
+	__route_entry_vpn->host = g_strdup(host);
+	__route_entry_vpn->gateway = g_strdup(gateway);
+
+	return 0;
+}
+
+int connman_inet_del_host_route(int index, const char *host)
+{
+	DBG("index %d host %s", index ,host);
+
+	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
+	g_assert(host);
+
+	g_assert(__route_entry_vpn);
+	g_assert_cmpint(__route_entry_vpn->index, ==, index);
+	g_assert_cmpstr(__route_entry_vpn->host, ==, host);
+
+	g_free(__route_entry_vpn->host);
+	g_free(__route_entry_vpn->gateway);
+
+	g_free(__route_entry_vpn);
+	__route_entry_vpn = NULL;
+
 	return 0;
 }
 
@@ -179,15 +220,6 @@ struct dual_nat {
 };
 
 static struct dual_nat *__dual_nat = NULL;
-
-struct route_entry {
-	int index;
-	char *host;
-	char *gateway;
-	char *netmask;
-	short metric;
-	unsigned long mtu;
-};
 
 static struct route_entry *__route_entry = NULL;
 
@@ -201,6 +233,7 @@ int connman_inet_add_network_route_with_metric(int index, const char *host,
 	
 	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
 	g_assert(host);
+
 	g_assert_null(__route_entry); /* CLAT should set only one IPv4 route */
 
 	__route_entry = g_new0(struct route_entry, 1);
@@ -530,10 +563,13 @@ static gboolean task_running(enum task_setup setup, int add_run_count)
 		g_assert_true(__clat_dev_up);
 		g_assert_cmpint(__task_run_count, ==, 2 + add_run_count);
 		g_assert_null(__last_set_contents_write);
-		if (__vpn_mode)
+		if (__vpn_mode) {
 			g_assert_null(__route_entry);
-		else
+			g_assert(__route_entry_vpn);
+		} else {
 			g_assert(__route_entry);
+			g_assert_null(__route_entry_vpn);
+		}
 		break;
 	case TASK_SETUP_POST:
 		g_assert_cmpint(get_task_setup(), ==, TASK_SETUP_POST);
@@ -633,6 +669,15 @@ bool connman_ipconfig_has_ipaddress_set(struct connman_ipconfig *ipconfig)
 	DBG("IP address %s set", address);
 
 	return true;
+}
+
+const char *connman_ipconfig_get_gateway_from_index(int index,
+					enum connman_ipconfig_type type)
+{
+	g_assert_cmpint(index, >, 0);
+	g_assert_cmpint(type, ==, CONNMAN_IPCONFIG_TYPE_IPV4);
+
+	return "10.10.0.0";
 }
 
 enum connman_ipconfig_method get_method(struct connman_ipconfig *ipconfig)
@@ -783,9 +828,11 @@ struct connman_service {
 	struct connman_ipconfig *ipconfig_ipv4;
 	struct connman_ipconfig *ipconfig_ipv6;
 	struct connman_network *network;
+	
 };
 
 static struct connman_service *__def_service = NULL;
+static struct connman_service *__vpn_transport = NULL;
 
 struct connman_ipconfig *connman_service_get_ipconfig(
 					struct connman_service *service,
@@ -795,8 +842,10 @@ struct connman_ipconfig *connman_service_get_ipconfig(
 
 	g_assert(service);
 
-	if (family == AF_INET)
+	if (family == AF_INET) {
+		DBG("IPv4 config %p", service->ipconfig_ipv4);
 		return service->ipconfig_ipv4;
+	}
 
 	if (family == AF_INET6)
 		return service->ipconfig_ipv6;
@@ -840,7 +889,6 @@ const char *connman_service_get_identifier(struct connman_service *service)
 	return service->identifier;
 }
 
-
 enum connman_service_type connman_service_get_type(
 					struct connman_service *service)
 {
@@ -866,6 +914,87 @@ struct connman_network *connman_service_get_network(
 
 	g_assert(service);
 	return service->network;
+}
+
+const char *connman_service_get_vpn_transport_identifier(
+						struct connman_service *service)
+{
+	g_assert(service);
+
+	if (!__vpn_transport)
+		return NULL;
+
+	return __vpn_transport->identifier;
+}
+
+struct connman_service *
+connman_service_ref_debug(struct connman_service *service,
+			const char *file, int line, const char *caller)
+{
+	g_assert(service);
+	return service;
+}
+
+void connman_service_unref_debug(struct connman_service *service,
+			const char *file, int line, const char *caller)
+{
+	g_assert(service);
+	return;
+}
+
+struct connman_provider {
+	const char *hostip;
+	bool split_routing;
+};
+
+static struct connman_provider __provider = { "1.2.3.4", false };
+
+struct connman_provider *connman_service_get_vpn_provider(
+						struct connman_service *service)
+{
+	g_assert(service);
+	return &__provider;
+}
+
+struct connman_service *connman_service_lookup_from_identifier(
+						const char *identifier)
+{
+	if (!identifier)
+		return NULL;
+
+	if (__vpn_transport)
+		g_assert_cmpstr(identifier, ==, __vpn_transport->identifier);
+
+	return __vpn_transport;
+}
+
+const char *connman_provider_get_string(struct connman_provider *provider,
+							const char *key)
+{
+	g_assert(provider == &__provider);
+	g_assert_cmpstr(key, ==, "HostIP");
+
+	if (__vpn_transport)
+		return __provider.hostip;
+
+	return NULL;
+}
+
+bool connman_provider_is_split_routing(struct connman_provider *provider)
+{
+	g_assert(provider == &__provider);
+
+	if (__vpn_transport)
+		return __provider.split_routing;
+
+	return false;
+}
+
+int connman_provider_disconnect(struct connman_provider *provider)
+{
+	g_assert(provider == &__provider);
+
+	return 0;
 }
 
 static bool __service_nameservers_set = true;
@@ -1544,6 +1673,8 @@ static void test_reset(void) {
 	__io_str = NULL;
 
 	__service_nameservers_set = true;
+
+	__vpn_transport = NULL;
 }
 
 #define TEST_PREFIX "/clat/"
@@ -5283,6 +5414,7 @@ void clat_plugin_test_vpn1(gconstpointer data)
 	struct connman_service service = {
 			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
 			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+			.identifier = "cellular123",
 	};
 	struct connman_service vpn_service = {
 			.type = CONNMAN_SERVICE_TYPE_VPN,
@@ -5300,6 +5432,8 @@ void clat_plugin_test_vpn1(gconstpointer data)
 
 	vpn_service.ipconfig_ipv4 = &ipv4config;
 	assign_ipaddress(&ipv4config);
+
+	__vpn_transport = &service;
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -5500,6 +5634,7 @@ void clat_plugin_test_vpn2()
 	struct connman_service service = {
 			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
 			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
+			.identifier = "cellular123",
 	};
 	struct connman_service vpn_service = {
 			.type = CONNMAN_SERVICE_TYPE_VPN,
@@ -5516,6 +5651,8 @@ void clat_plugin_test_vpn2()
 
 	vpn_service.ipconfig_ipv6 = &vpn_ipv6config;
 	assign_ipaddress(&vpn_ipv6config);
+
+	__vpn_transport = &service;
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
