@@ -33,6 +33,7 @@
 #include <connman/rtnl.h>
 #include <connman/setting.h>
 #include <connman/wakeup_timer.h>
+#include <connman/provider.h>
 
 #include <gweb/gresolv.h>
 
@@ -63,6 +64,7 @@ struct clat_data {
 	struct connman_service *service;
 	struct connman_ipconfig *ipv6config;
 	struct connman_task *task;
+	struct connman_service *vpn_service;
 	enum clat_state state;
 	char *isp_64gateway;
 
@@ -93,6 +95,7 @@ struct clat_data {
 	bool do_restart;
 	bool task_is_stopping;
 	bool ipv4_default_route_on;
+	bool vpn_mode_on;
 };
 
 #define WKN_ADDRESS "ipv4only.arpa"
@@ -1950,12 +1953,35 @@ static int clat_start(struct clat_data *data)
 	return 0;
 }
 
+static void handle_vpn_service(struct clat_data *data)
+{
+	struct connman_provider *provider;
+
+	DBG("");
+
+	if (!data || !data->vpn_service)
+		return;
+
+	provider = connman_service_get_vpn_provider(data->vpn_service);
+	if (provider && !connman_provider_is_split_routing(provider)) {
+		DBG("Disconnecting VPN service %p using CLAT as transport",
+							data->vpn_service);
+		connman_provider_disconnect(provider);
+	}
+
+	connman_service_unref(data->vpn_service);
+	data->vpn_service = NULL;
+}
+
 static int clat_stop(struct clat_data *data)
 {
 	if (!data)
 		return -EINVAL;
 
 	DBG("state %d/%s", data->state, state2string(data->state));
+
+	/* Do not leave the VPN hanging */
+	handle_vpn_service(data);
 
 	if (!clat_is_running(data)) {
 		DBG("already stopping/stopped");
@@ -2066,17 +2092,52 @@ static bool has_ip_address(struct connman_service *service,
 	return connman_ipconfig_has_ipaddress_set(ipconfig);
 }
 
-static enum clat_service_type check_service_type(
+static bool check_vpn_transport(struct connman_service *service,
+					struct connman_service *vpn_service)
+{
+	struct connman_service *transport;
+	const char *identifier;
+
+	DBG("service %p VPN service %p", service, vpn_service);
+
+	if (!service || !vpn_service)
+		return false;
+
+	if (connman_service_get_type(vpn_service) != CONNMAN_SERVICE_TYPE_VPN) {
+		DBG("not a VPN service %p", vpn_service);
+		return false;
+	}
+
+	identifier = connman_service_get_vpn_transport_identifier(vpn_service);
+	if (!identifier) {
+		DBG("No transport set for VPN %p", vpn_service);
+		return false;
+	}
+
+	transport = connman_service_lookup_from_identifier(identifier);
+	if (transport != service) {
+		DBG("Different VPN transport %s", identifier);
+		return false;
+	}
+
+	return true;
+}
+
+static enum clat_service_type check_service_type(struct clat_data *data,
 						struct connman_service *service)
 {
+	struct connman_service *default_service;
 	enum connman_service_type type;
-	enum clat_service_type;
 
-	if (!service)
+	DBG("data %p service %p", data, service);
+
+	if (!data || !service)
 		return CLAT_SERVICE_IGNORE;
 
-	type = connman_service_get_type(service);
+	default_service = connman_service_get_default();
+	DBG("default service %p", default_service);
 
+	type = connman_service_get_type(service);
 	switch (type) {
 	case CONNMAN_SERVICE_TYPE_UNKNOWN:
 	case CONNMAN_SERVICE_TYPE_SYSTEM:
@@ -2090,13 +2151,22 @@ static enum clat_service_type check_service_type(
 		/*
 		 * When VPN is the default with an IPv4 address and CLAT is
 		 * running it means that VPN is going over CLAT and specific
-		 * mode is being required.
+		 * mode is being required. 
 		 */
-		if (connman_service_get_default() == service &&
+		if (default_service == service &&
 					has_ip_address(service,
-						CONNMAN_IPCONFIG_TYPE_IPV4)) {
-			DBG("Enabling CLAT VPN mode");
+						CONNMAN_IPCONFIG_TYPE_IPV4) &&
+					check_vpn_transport(data->service,
+						service)) {
+			DBG("Enabling CLAT VPN mode, VPN service %p", service);
+
+			if (data->vpn_service)
+				connman_service_unref(data->vpn_service);
+			data->vpn_service = connman_service_ref(service);
+
 			return CLAT_SERVICE_VPNMODE;
+		} else {
+			DBG("VPN service %p is not default", service);
 		}
 
 		break;
@@ -2104,6 +2174,30 @@ static enum clat_service_type check_service_type(
 		// TODO make this work
 		return CLAT_SERVICE_IGNORE;
 	case CONNMAN_SERVICE_TYPE_CELLULAR:
+		/*
+		 * Check of VPN is running as a default service with IPv4
+		 * address and using the cellular service as transport.
+		 */
+		if (service != default_service &&
+					check_vpn_transport(service,
+						default_service) &&
+					has_ip_address(default_service,
+						CONNMAN_IPCONFIG_TYPE_IPV4)) {
+			DBG("VPN mode active, tracked service %p is used as "
+						"transport for IPv4 VPN %p",
+						data->service, default_service);
+			
+			if (data->vpn_service)
+				connman_service_unref(data->vpn_service);
+			data->vpn_service = connman_service_ref(
+						default_service);
+
+			return CLAT_SERVICE_VPNMODE;
+		}
+
+		/* Cellular, do default checks elsewhere */
+		DBG("Accept cellular service %p", service);
+
 		return CLAT_SERVICE_ACCEPT;
 	}
 
@@ -2178,6 +2272,7 @@ static void clat_ipconfig_changed(struct connman_service *service,
 {
 	struct connman_network *network;
 	struct clat_data *data = get_data();
+	enum clat_service_type type;
 
 	DBG("service %p ipconfig %p", service, ipconfig);
 
@@ -2185,8 +2280,8 @@ static void clat_ipconfig_changed(struct connman_service *service,
 		return;
 
 	/* TODO Support VPN as well */
-	if (service != data->service || check_service_type(service) !=
-						CLAT_SERVICE_ACCEPT) {
+	type = check_service_type(data, service);
+	if (service != data->service || type == CLAT_SERVICE_IGNORE) {
 		DBG("Not tracking service %p/%s or not supported", service,
 				connman_service_get_identifier(service));
 		return;
@@ -2210,13 +2305,6 @@ static void clat_ipconfig_changed(struct connman_service *service,
 					!has_ip_address(service,
 						CONNMAN_IPCONFIG_TYPE_IPV6)) {
 		DBG("cellular %p has lost IPv6 config, stop CLAT", service);
-		clat_stop(data);
-		return;
-	}
-
-	if (data->service != connman_service_get_default()) {
-		DBG("cellular service %p is not default, stop CLAT",
-								data->service);
 		clat_stop(data);
 		return;
 	}
@@ -2267,6 +2355,64 @@ static int set_clat_service(struct clat_data *data,
 	return 0;
 }
 
+static bool setup_ipv4_vpn_route(struct clat_data *data, bool enable)
+{
+	struct connman_ipconfig *vpn_ipv4config;
+	struct connman_provider *vpn_provider;
+	const char *vpn_host_ip;
+	const char *transport_gw;
+	int clat_index;
+	int err;
+
+	vpn_provider = connman_service_get_vpn_provider(data->vpn_service);
+	if (!vpn_provider) {
+		DBG("No VPN provider set for VPN %p", data->vpn_service);
+		return false;
+	}
+
+	/* get VPN service IPv4config */
+	vpn_ipv4config = connman_service_get_ipconfig(data->vpn_service,
+								AF_INET);
+	if (!vpn_ipv4config) {
+		DBG("VPN %p is missing IPv4 config", data->vpn_service);
+		return false;
+	}
+
+	/* get VPN service host IP */
+	vpn_host_ip = connman_provider_get_string(vpn_provider, "HostIP");
+	if (!vpn_host_ip) {
+		DBG("VPN has no HostIP set");
+		return false;
+	}
+
+	clat_index = connman_inet_ifindex(TAYGA_CLAT_DEVICE);
+	if (clat_index < 0) {
+		DBG("CLAT interface not up");
+		return false;
+	}
+
+	transport_gw = connman_ipconfig_get_gateway_from_index(data->ifindex,
+						CONNMAN_IPCONFIG_TYPE_IPV4);
+	if (!transport_gw) {
+		DBG("No gateway set for transport index %d", data->ifindex);
+		return false;
+	}
+
+	DBG("%s route index %d host %s gw %s", enable ? "enable" : "disable",
+					clat_index, vpn_host_ip, transport_gw);
+
+	if (enable)
+		err = connman_inet_add_host_route(clat_index, vpn_host_ip,
+								transport_gw);
+	else
+		err = connman_inet_del_host_route(clat_index, vpn_host_ip);
+
+	if (!err)
+		data->vpn_mode_on = enable;
+
+	return err ? false : true;
+}
+
 static void clat_default_changed(struct connman_service *service)
 {
 	struct connman_network *network;
@@ -2289,7 +2435,7 @@ static void clat_default_changed(struct connman_service *service)
 	}
 
 	if (data->service != service) {
-		switch (check_service_type(service)) {
+		switch (check_service_type(data, service)) {
 		case CLAT_SERVICE_ACCEPT:
 			DBG("Set service %p/%s as tracked service", service,
 					connman_service_get_identifier(service));
@@ -2306,6 +2452,17 @@ static void clat_default_changed(struct connman_service *service)
 
 				clat_data_clear(data);
 			}
+
+			if (data->vpn_mode_on) {
+				if (!setup_ipv4_vpn_route(data, false))
+					connman_error("CLAT failed to del VPN "
+							"IPv4 host route");
+				else
+					DBG("Dropped IPv4 host route for VPN");
+
+				handle_vpn_service(data);
+			}
+
 			break;
 		/*
 		 * If clat is running and VPN is getting set as default
@@ -2334,8 +2491,29 @@ static void clat_default_changed(struct connman_service *service)
 				DBG("Dropped IPv4 default route for VPN");
 			}
 
+			if (data->vpn_mode_on) {
+				DBG("VPN mode already set, skip host route");
+				return;
+			}
+
+			if (!setup_ipv4_vpn_route(data, true))
+				connman_error("CLAT failed to add VPN IPv4 "
+						"host route");
+			else
+				DBG("Added IPv4 host route for VPN");
+
 			return;
 		case CLAT_SERVICE_IGNORE:
+			if (data->vpn_mode_on) {
+				if (!setup_ipv4_vpn_route(data, false))
+					connman_error("CLAT failed to del VPN "
+							"IPv4 host route");
+				else
+					DBG("Dropped IPv4 host route for VPN");
+
+				handle_vpn_service(data);
+			}
+
 			DBG("Tracked service %p is not default or valid, "
 								"stop CLAT",
 								data->service);
@@ -2375,6 +2553,17 @@ static void clat_default_changed(struct connman_service *service)
 	/* VPN disconnected case, turn default route for IPv4 on */
 	if (data->state == CLAT_STATE_RUNNING && is_valid_start_state(state) &&
 						!data->ipv4_default_route_on) {
+
+		if (data->vpn_mode_on) {
+			if (!setup_ipv4_vpn_route(data, false))
+				connman_error("CLAT failed to del VPN IPv4 "
+							"host route");
+			else
+				DBG("Dropped IPv4 host route for VPN");
+
+			handle_vpn_service(data);
+		}
+
 		err = setup_ipv4_default_route(data, true);
 		if (err && err != -EALREADY) {
 			connman_error("Failed to enable IPv4 default route: %d "
@@ -2396,15 +2585,26 @@ static void clat_service_state_changed(struct connman_service *service,
 					enum connman_service_state state)
 {
 	struct clat_data *data;
+	enum clat_service_type type;
 	int err;
 
-	// TODO Support also WLAN and VPN
-	if (!service || check_service_type(service) != CLAT_SERVICE_ACCEPT)
-		return;
-
-	DBG("cellular service %p", service);
-
 	data = get_data();
+
+	/*
+	 * State changes are monitored only on the accepted type service or
+	 * when in VPN mode
+	 */
+	type = check_service_type(data, service);
+	switch (type) {
+	case CLAT_SERVICE_ACCEPT:
+		DBG("cellular service %p", service);
+		break;
+	case CLAT_SERVICE_VPNMODE:
+		DBG("cellular service %p as VPN transport", service);
+		break;
+	case CLAT_SERVICE_IGNORE:
+		return;
+	};
 
 	switch (state) {
 	/* Not connected */
