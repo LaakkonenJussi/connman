@@ -1388,6 +1388,7 @@ static int clat_task_configure(struct clat_data *data)
 {
 	struct connman_ipconfig *ipconfig;
 	struct connman_ipaddress *ipaddress;
+	enum connman_service_state new_state;
 	char *netmask = NULL;
 	int err;
 	int index;
@@ -1438,13 +1439,37 @@ static int clat_task_configure(struct clat_data *data)
 	if (clat_settings.clat_device_use_netmask)
 		netmask = cidr_to_str(CLAT_IPv4ADDR_NETMASK);
 
-	ipaddress = connman_ipaddress_alloc(AF_INET);
-	connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, netmask, NULL);
-	connman_inet_set_address(index, ipaddress);
+	err = connman_service_reset_ipconfig_to_address(data->service,
+						&new_state,
+						CONNMAN_IPCONFIG_TYPE_IPV4,
+						CONNMAN_IPCONFIG_METHOD_MANUAL,
+						index,
+						CLAT_IPv4ADDR,
+						netmask,
+						NULL,
+						0);
 
-	/* Set no address, all traffic should be forwarded to the device */
-	connman_ipaddress_free(ipaddress);
-	g_free(netmask);
+	if (err) {
+		connman_error("Failed to set CLAT IPv4 address for service %p",
+								data->service);
+		return err;
+	}
+
+	DBG("Set service %p to new state %d using CLAT IPv4 address %s",
+				data->service, new_state, CLAT_IPv4ADDR);
+
+	ipconfig = connman_service_get_ipconfig(data->service, AF_INET);
+	ipaddress = connman_ipconfig_get_ipaddress(ipconfig);
+	if (ipaddress) {
+		connman_inet_set_address(index, ipaddress);
+		g_free(netmask);
+	}
+
+	if (!ipaddress) {
+		connman_error("No IPv4config on service %p cannot setup CLAT",
+								data->service);
+		return -ENOENT;
+	}
 
 	err = setup_ipv4_default_route(data, true);
 	if (err && err != -EALREADY) {
@@ -1555,8 +1580,9 @@ static int clat_task_stop_dad(struct clat_data *data)
 
 static int clat_task_post_configure(struct clat_data *data)
 {
+	struct connman_ipconfig *ipconfig;
 	struct connman_ipaddress *ipaddress;
-	char *netmask = NULL;
+	enum connman_service_state new_state;
 	int index;
 	int err;
 
@@ -1574,27 +1600,36 @@ static int clat_task_post_configure(struct clat_data *data)
 		return -ENODEV;
 	}
 
-	ipaddress = connman_ipaddress_alloc(AF_INET);
+	ipconfig = connman_service_get_ipconfig(data->service, AF_INET);
+	ipaddress = connman_ipconfig_get_ipaddress(ipconfig);
+
 	err = setup_ipv4_default_route(data, false);
 	if (err && err != -EALREADY) {
 		connman_error("CLAT failed to delete IPv4 default route: %d",
 									err);
 	}
 
-	if (clat_settings.clat_device_use_netmask)
-		netmask = cidr_to_str(CLAT_IPv4ADDR_NETMASK);
+	if (ipaddress) {
+		connman_inet_clear_address(index, ipaddress);
+	} else {
+		connman_warn("Cannot clear CLAT IPv4 address in interface %d",
+									index);
+	}
 
-	connman_ipaddress_set_ipv4(ipaddress, CLAT_IPv4ADDR, netmask,
-						NULL);
-	g_free(netmask);
+	err = connman_service_reset_ipconfig_to_address(data->service,
+						&new_state,
+						CONNMAN_IPCONFIG_TYPE_IPV4,
+						CONNMAN_IPCONFIG_METHOD_OFF,
+						index, NULL, NULL, NULL, 0);
+	if (err)
+		connman_error("Cannot reset service %p IPv4config, err %d",
+							data->service, err);
 
-	connman_inet_clear_address(index, ipaddress);
 	connman_inet_del_ipv6_network_route_with_metric(index,
 						data->address,
 						data->addr_prefixlen,
 						CLAT_IPv6_METRIC);
 	connman_inet_ifdown(index);
-	connman_ipaddress_free(ipaddress);
 
 	if (create_task(data))
 		return -ENOMEM;
