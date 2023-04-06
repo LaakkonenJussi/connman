@@ -1600,21 +1600,19 @@ static int clat_task_post_configure(struct clat_data *data)
 		return -ENODEV;
 	}
 
-	ipconfig = connman_service_get_ipconfig(data->service, AF_INET);
-	ipaddress = connman_ipconfig_get_ipaddress(ipconfig);
-
 	err = setup_ipv4_default_route(data, false);
 	if (err && err != -EALREADY) {
 		connman_error("CLAT failed to delete IPv4 default route: %d",
 									err);
 	}
 
-	if (ipaddress) {
+	ipconfig = connman_service_get_ipconfig(data->service, AF_INET);
+	ipaddress = connman_ipconfig_get_ipaddress(ipconfig);
+	if (ipaddress)
 		connman_inet_clear_address(index, ipaddress);
-	} else {
+	else
 		connman_warn("Cannot clear CLAT IPv4 address in interface %d",
 									index);
-	}
 
 	err = connman_service_reset_ipconfig_to_address(data->service,
 						&new_state,
@@ -2308,6 +2306,8 @@ static void clat_ipconfig_changed(struct connman_service *service,
 	struct connman_network *network;
 	struct clat_data *data = get_data();
 	enum clat_service_type type;
+	int ipconfig_index;
+	int clat_index;
 
 	DBG("service %p ipconfig %p", service, ipconfig);
 
@@ -2323,12 +2323,25 @@ static void clat_ipconfig_changed(struct connman_service *service,
 	}
 
 	if (connman_ipconfig_get_config_type(ipconfig) ==
-					CONNMAN_IPCONFIG_TYPE_IPV4 &&
-					has_ip_address(service,
-						CONNMAN_IPCONFIG_TYPE_IPV4)) {
-		DBG("cellular %p has IPv4 config, stop CLAT", service);
-		clat_stop(data);
-		return;
+					CONNMAN_IPCONFIG_TYPE_IPV4) {
+		if (data->state == CLAT_STATE_RUNNING) {
+			clat_index = connman_inet_ifindex(TAYGA_CLAT_DEVICE);
+			ipconfig_index = connman_ipconfig_get_index(ipconfig);
+
+			if (clat_index >= 0 && ipconfig_index >= 0 &&
+						clat_index == ipconfig_index) {
+				DBG("Ignoring change of CLAT ipconfig");
+				return;
+			}
+
+			DBG("Not CLAT IPv4config change");
+		}
+
+		if (has_ip_address(service, CONNMAN_IPCONFIG_TYPE_IPV4)) {
+			DBG("cellular %p has IPv4 config, stop CLAT", service);
+			clat_stop(data);
+			return;
+		}
 	}
 
 	/*
