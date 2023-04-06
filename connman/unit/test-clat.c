@@ -89,6 +89,8 @@ int connman_inet_mktun(const char *ifname, int flags)
 	return 0;
 }
 
+#define SERVICE_DEV_INDEX_VPN 10
+
 int connman_inet_ifindex(const char *name)
 {
 	g_assert(name);
@@ -101,6 +103,14 @@ int connman_inet_ifindex(const char *name)
 			return 2;
 		if (g_str_has_suffix(name, "3"))
 			return 3;
+	}
+
+	if (g_str_has_prefix(name, "vpn")) {
+		int index = (int)name[strlen(name) - 1] + 10;
+
+		DBG("vpn \"%s\" index %d", name, index);
+
+		return index;
 	}
 
 	return -1;
@@ -615,7 +625,17 @@ struct connman_ipconfig {
 	struct connman_ipaddress *ipaddress;
 	enum connman_ipconfig_type type;
 	enum connman_ipconfig_method method;
+	int index;
 };
+
+int connman_ipconfig_get_index(struct connman_ipconfig * ipconfig)
+{
+	DBG("ipconfig %p", ipconfig);
+
+	g_assert(ipconfig);
+
+	return ipconfig->index;
+}
 
 enum connman_ipconfig_type connman_ipconfig_get_config_type(
 					struct connman_ipconfig *ipconfig)
@@ -925,6 +945,52 @@ const char *connman_service_get_vpn_transport_identifier(
 		return NULL;
 
 	return __vpn_transport->identifier;
+}
+
+static bool __ipconfig_address_change_notified = false;
+
+int connman_service_reset_ipconfig_to_address(struct connman_service *service,
+					enum connman_service_state *new_state,
+					enum connman_ipconfig_type type,
+					enum connman_ipconfig_method new_method,
+					int index,
+					const char *address,
+					const char *netmask,
+					const char *gateway,
+					const unsigned char prefix_length)
+{
+	struct connman_ipconfig *ipconfig;
+
+	g_assert(service);
+	g_assert(new_state);
+	g_assert_cmpint(index, >, 0);
+	g_assert_cmpint(type, ==, CONNMAN_IPCONFIG_TYPE_IPV4);
+	g_assert(new_method == CONNMAN_IPCONFIG_METHOD_MANUAL ||
+				new_method == CONNMAN_IPCONFIG_METHOD_OFF);
+	g_assert_cmpint(prefix_length, ==, 0);
+
+	if (new_method == CONNMAN_IPCONFIG_METHOD_MANUAL)
+		g_assert(address);
+
+	ipconfig = connman_service_get_ipconfig(service, AF_INET);
+	g_assert(ipconfig);
+
+	if (!ipconfig->ipaddress)
+		ipconfig->ipaddress = connman_ipaddress_alloc(AF_INET);
+
+	g_assert(ipconfig->ipaddress);
+
+	connman_ipaddress_set_ipv4(ipconfig->ipaddress, address, netmask,
+								gateway);
+
+	if (new_state && ipconfig->method != new_method) {
+		*new_state = service->state;
+		__ipconfig_address_change_notified = true;
+	}
+
+	ipconfig->method = new_method;
+
+	return 0;
 }
 
 struct connman_service *
@@ -1675,6 +1741,8 @@ static void test_reset(void) {
 	__service_nameservers_set = true;
 
 	__vpn_transport = NULL;
+
+	__ipconfig_address_change_notified = false;
 }
 
 #define TEST_PREFIX "/clat/"
@@ -1727,6 +1795,10 @@ static void clat_plugin_test2()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -1740,6 +1812,7 @@ static void clat_plugin_test2()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -1834,6 +1907,10 @@ static void clat_plugin_test3()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -1847,6 +1924,7 @@ static void clat_plugin_test3()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -1952,6 +2030,10 @@ static void clat_plugin_test4()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -1965,6 +2047,7 @@ static void clat_plugin_test4()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -2067,6 +2150,10 @@ static void clat_plugin_test5()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -2080,6 +2167,7 @@ static void clat_plugin_test5()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -2180,6 +2268,10 @@ static void clat_plugin_test6()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -2193,6 +2285,7 @@ static void clat_plugin_test6()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -2284,6 +2377,10 @@ static void clat_plugin_test7()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -2297,6 +2394,7 @@ static void clat_plugin_test7()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -2392,6 +2490,10 @@ static void clat_plugin_test8()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -2405,6 +2507,7 @@ static void clat_plugin_test8()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -2518,6 +2621,10 @@ static void clat_plugin_test_failure1()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -2531,6 +2638,7 @@ static void clat_plugin_test_failure1()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -2607,6 +2715,10 @@ static void clat_plugin_test_failure2()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -2620,6 +2732,7 @@ static void clat_plugin_test_failure2()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -2688,6 +2801,10 @@ static void clat_plugin_test_failure3()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -2701,6 +2818,7 @@ static void clat_plugin_test_failure3()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -2787,6 +2905,10 @@ static void clat_plugin_test_failure4()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -2800,6 +2922,7 @@ static void clat_plugin_test_failure4()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -2867,6 +2990,10 @@ static void clat_plugin_test_failure5()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -2881,6 +3008,7 @@ static void clat_plugin_test_failure5()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -3022,9 +3150,17 @@ static void clat_plugin_test_failure6()
 	struct connman_network network2 = {
 			.index = SERVICE_DEV_INDEX + 1,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_ipconfig ipv4config2 = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
 	};
 	struct connman_ipconfig ipv6config2 = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -3048,11 +3184,13 @@ static void clat_plugin_test_failure6()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
 
 	service2.network = &network2;
+	service2.ipconfig_ipv4 = &ipv4config2;
 	service2.ipconfig_ipv6 = &ipv6config2;
 	network2.ipv6_configured = true;
 	assign_ipaddress(&ipv6config2);
@@ -3203,6 +3341,10 @@ static void clat_plugin_test_failure7(gconstpointer data)
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -3218,6 +3360,7 @@ static void clat_plugin_test_failure7(gconstpointer data)
 	DBG("status %d", status);
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -3354,6 +3497,10 @@ static void clat_plugin_test_failure8(gconstpointer data)
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -3369,6 +3516,7 @@ static void clat_plugin_test_failure8(gconstpointer data)
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -3510,6 +3658,10 @@ static void clat_plugin_test_restart1()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -3523,6 +3675,7 @@ static void clat_plugin_test_restart1()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -3669,6 +3822,10 @@ static void clat_plugin_test_restart2()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -3682,6 +3839,7 @@ static void clat_plugin_test_restart2()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -3818,6 +3976,10 @@ static void clat_plugin_test_prefix(gconstpointer data)
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -3833,6 +3995,7 @@ static void clat_plugin_test_prefix(gconstpointer data)
 	DBG("resolv type %d", __resolv_result_type);
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -4022,9 +4185,17 @@ static void clat_plugin_test_service2()
 	struct connman_network network2 = {
 			.index = SERVICE_DEV_INDEX + 1,
 	};
+	struct connman_ipconfig ipv4config1 = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config1 = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_ipconfig ipv4config2 = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
 	};
 	struct connman_ipconfig ipv6config2 = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -4044,11 +4215,13 @@ static void clat_plugin_test_service2()
 	DBG("");
 
 	service1.network = &network1;
+	service1.ipconfig_ipv4 = &ipv4config1;
 	service1.ipconfig_ipv6 = &ipv6config1;
 	network1.ipv6_configured = true;
 	assign_ipaddress(&ipv6config1);
 
 	service2.network = &network2;
+	service2.ipconfig_ipv4 = &ipv4config2;
 	service2.ipconfig_ipv6 = &ipv6config2;
 	network2.ipv6_configured = true;
 	assign_ipaddress(&ipv6config2);
@@ -4175,9 +4348,17 @@ static void clat_plugin_test_service3()
 	struct connman_network network2 = {
 			.index = SERVICE_DEV_INDEX + 1,
 	};
+	struct connman_ipconfig ipv4config1 = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config1 = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
+	};
+	struct connman_ipconfig ipv4config2 = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
 	};
 	struct connman_ipconfig ipv6config2 = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -4197,11 +4378,13 @@ static void clat_plugin_test_service3()
 	DBG("");
 
 	service1.network = &network1;
+	service1.ipconfig_ipv4 = &ipv4config1;
 	service1.ipconfig_ipv6 = &ipv6config1;
 	network1.ipv6_configured = true;
 	assign_ipaddress(&ipv6config1);
 
 	service2.network = &network2;
+	service2.ipconfig_ipv4 = &ipv4config2;
 	service2.ipconfig_ipv6 = &ipv6config2;
 	network2.ipv6_configured = true;
 	assign_ipaddress(&ipv6config2);
@@ -4343,6 +4526,10 @@ static void clat_plugin_test_service4()
 	struct connman_network network1 = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config1 = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config1 = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -4357,6 +4544,7 @@ static void clat_plugin_test_service4()
 	DBG("");
 
 	service1.network = &network1;
+	service1.ipconfig_ipv4 = &ipv4config1;
 	service1.ipconfig_ipv6 = &ipv6config1;
 	network1.ipv6_configured = true;
 	assign_ipaddress(&ipv6config1);
@@ -4475,6 +4663,10 @@ static void clat_plugin_test_if_error1(gconstpointer data)
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -4489,6 +4681,7 @@ static void clat_plugin_test_if_error1(gconstpointer data)
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -4602,6 +4795,10 @@ static void clat_plugin_test_if_error2(gconstpointer data)
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_OFF,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -4616,6 +4813,7 @@ static void clat_plugin_test_if_error2(gconstpointer data)
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -4727,6 +4925,10 @@ static void clat_plugin_test_ipconfig1()
 	struct connman_network network_wifi = {
 			.index = SERVICE_DEV_INDEX + 1,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_OFF,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -4758,13 +4960,17 @@ static void clat_plugin_test_ipconfig1()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
+	service.ipconfig_ipv6->index = service.network->index;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
 
 	service_wifi.network = &network_wifi;
 	service_wifi.ipconfig_ipv4 = &ipv4config_wifi;
+	service_wifi.ipconfig_ipv4->index = service_wifi.network->index;
 	service_wifi.ipconfig_ipv6 = &ipv6config_wifi;
+	service_wifi.ipconfig_ipv6->index = service_wifi.network->index;
 	network_wifi.ipv6_configured = true;
 	network_wifi.ipv4_configured = true;
 	assign_ipaddress(&ipv4config_wifi);
@@ -4878,7 +5084,7 @@ static void clat_plugin_test_ipconfig_type(gconstpointer data)
 	};
 	struct connman_ipconfig ipv4config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
-			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+			.method = CONNMAN_IPCONFIG_METHOD_OFF,
 	};
 	struct connman_ipconfig ipv6config = { 
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
@@ -4894,7 +5100,9 @@ static void clat_plugin_test_ipconfig_type(gconstpointer data)
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
+	service.ipconfig_ipv6->index = service.network->index;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
 
@@ -4955,7 +5163,7 @@ static void clat_plugin_test_ipconfig_type(gconstpointer data)
 	/* Setup ipconfig */
 	if (type == AF_INET) {
 		/* IPv4 address is present -> stop */
-		service.ipconfig_ipv4 = &ipv4config;
+		service.ipconfig_ipv4->index = service.network->index;
 		assign_ipaddress(&ipv4config);
 		n->ipconfig_changed(&service, &ipv4config);
 	} else if (type == AF_INET6) {
@@ -5000,6 +5208,10 @@ static void clat_plugin_test_tether1()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_OFF,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -5013,6 +5225,7 @@ static void clat_plugin_test_tether1()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -5125,6 +5338,10 @@ static void clat_plugin_test_tether2()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_OFF,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -5138,6 +5355,7 @@ static void clat_plugin_test_tether2()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -5258,6 +5476,10 @@ static void clat_plugin_test_tether3()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_OFF,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -5271,6 +5493,7 @@ static void clat_plugin_test_tether3()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -5403,13 +5626,18 @@ void clat_plugin_test_vpn1(gconstpointer data)
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_OFF,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
 	};
-	struct connman_ipconfig ipv4config = {
+	struct connman_ipconfig vpn_ipv4config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
 			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+			.index = SERVICE_DEV_INDEX_VPN,
 	};
 	struct connman_service service = {
 			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
@@ -5427,11 +5655,13 @@ void clat_plugin_test_vpn1(gconstpointer data)
 
 	service.network = &network;
 	network.ipv6_configured = true;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
+	service.ipconfig_ipv6->index = service.network->index;
 	assign_ipaddress(&ipv6config);
 
-	vpn_service.ipconfig_ipv4 = &ipv4config;
-	assign_ipaddress(&ipv4config);
+	vpn_service.ipconfig_ipv4 = &vpn_ipv4config;
+	assign_ipaddress(&vpn_ipv4config);
 
 	__vpn_transport = &service;
 
@@ -5623,6 +5853,10 @@ void clat_plugin_test_vpn2()
 	struct connman_network network = {
 			.index = SERVICE_DEV_INDEX,
 	};
+	struct connman_ipconfig ipv4config = {
+			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
+			.method = CONNMAN_IPCONFIG_METHOD_OFF,
+	};
 	struct connman_ipconfig ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_AUTO,
@@ -5630,6 +5864,7 @@ void clat_plugin_test_vpn2()
 	struct connman_ipconfig vpn_ipv6config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV6,
 			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+			.index = SERVICE_DEV_INDEX_VPN,
 	};
 	struct connman_service service = {
 			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
@@ -5645,6 +5880,7 @@ void clat_plugin_test_vpn2()
 	DBG("");
 
 	service.network = &network;
+	service.ipconfig_ipv4 = &ipv4config;
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
@@ -5871,6 +6107,7 @@ void clat_plugin_test_vpn_type(gconstpointer data)
 	struct connman_ipconfig vpn_ipv4config = {
 			.type = CONNMAN_IPCONFIG_TYPE_IPV4,
 			.method = CONNMAN_IPCONFIG_METHOD_DHCP,
+			.index = SERVICE_DEV_INDEX_VPN,
 	};
 	struct connman_service service = {
 			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
