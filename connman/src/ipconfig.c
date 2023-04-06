@@ -1582,6 +1582,11 @@ int __connman_ipconfig_get_index(struct connman_ipconfig *ipconfig)
 	return ipconfig->index;
 }
 
+int connman_ipconfig_get_index(struct connman_ipconfig *ipconfig)
+{
+	return __connman_ipconfig_get_index(ipconfig);
+}
+
 /**
  * connman_ipconfig_set_ops:
  * @ipconfig: ipconfig structure
