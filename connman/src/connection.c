@@ -422,9 +422,13 @@ static struct gateway_data *add_gateway(struct connman_service *service,
 static void set_default_gateway(struct gateway_data *data,
 				enum connman_ipconfig_type type)
 {
-	int index;
-	int status4 = 0, status6 = 0;
-	bool do_ipv4 = false, do_ipv6 = false;
+	struct connman_ipconfig *ipconfig;
+	int index4;
+	int index6;
+	int status4 = 0;
+	int status6 = 0;
+	bool do_ipv4 = false;
+	bool do_ipv6 = false;
 
 	if (type == CONNMAN_IPCONFIG_TYPE_IPV4)
 		do_ipv4 = true;
@@ -466,21 +470,25 @@ static void set_default_gateway(struct gateway_data *data,
 		return;
 	}
 
-	index = __connman_service_get_index(data->service);
+	ipconfig = __connman_service_get_ip4config(data->service);
+	index4 = __connman_ipconfig_get_index(ipconfig);
 
 	if (do_ipv4 && data->ipv4_gateway &&
 			g_strcmp0(data->ipv4_gateway->gateway,
 							"0.0.0.0") == 0) {
-		if (connman_inet_set_gateway_interface(index) < 0)
+		if (connman_inet_set_gateway_interface(index4) < 0)
 			return;
 		data->ipv4_gateway->active = true;
 		goto done;
 	}
 
+	ipconfig = __connman_service_get_ip6config(data->service);
+	index6 = __connman_ipconfig_get_index(ipconfig);
+
 	if (do_ipv6 && data->ipv6_gateway &&
 			g_strcmp0(data->ipv6_gateway->gateway,
 							"::") == 0) {
-		if (connman_inet_set_ipv6_gateway_interface(index) < 0)
+		if (connman_inet_set_ipv6_gateway_interface(index6) < 0)
 			return;
 		data->ipv6_gateway->active = true;
 		goto done;
@@ -488,11 +496,11 @@ static void set_default_gateway(struct gateway_data *data,
 
 	if (do_ipv6 && data->ipv6_gateway)
 		status6 = __connman_inet_add_default_to_table(RT_TABLE_MAIN,
-					index, data->ipv6_gateway->gateway);
+					index4, data->ipv6_gateway->gateway);
 
 	if (do_ipv4 && data->ipv4_gateway)
 		status4 = __connman_inet_add_default_to_table(RT_TABLE_MAIN,
-					index, data->ipv4_gateway->gateway);
+					index6, data->ipv4_gateway->gateway);
 
 	if (status4 < 0 || status6 < 0)
 		return;
@@ -504,8 +512,11 @@ done:
 static void unset_default_gateway(struct gateway_data *data,
 				enum connman_ipconfig_type type)
 {
-	int index;
-	bool do_ipv4 = false, do_ipv6 = false;
+	struct connman_ipconfig *ipconfig;
+	int index4;
+	int index6;
+	bool do_ipv4 = false;
+	bool do_ipv6 = false;
 
 	if (type == CONNMAN_IPCONFIG_TYPE_IPV4)
 		do_ipv4 = true;
@@ -543,30 +554,34 @@ static void unset_default_gateway(struct gateway_data *data,
 		return;
 	}
 
-	index = __connman_service_get_index(data->service);
+	ipconfig = __connman_service_get_ip4config(data->service);
+	index4 = __connman_ipconfig_get_index(ipconfig);
 
 	if (do_ipv4 && data->ipv4_gateway &&
 			g_strcmp0(data->ipv4_gateway->gateway,
 							"0.0.0.0") == 0) {
-		connman_inet_clear_gateway_interface(index);
+		connman_inet_clear_gateway_interface(index4);
 		data->ipv4_gateway->active = false;
 		return;
 	}
 
+	ipconfig = __connman_service_get_ip6config(data->service);
+	index6 = __connman_ipconfig_get_index(ipconfig);
+
 	if (do_ipv6 && data->ipv6_gateway &&
 			g_strcmp0(data->ipv6_gateway->gateway,
 							"::") == 0) {
-		connman_inet_clear_ipv6_gateway_interface(index);
+		connman_inet_clear_ipv6_gateway_interface(index6);
 		data->ipv6_gateway->active = false;
 		return;
 	}
 
 	if (do_ipv6 && data->ipv6_gateway)
-		connman_inet_clear_ipv6_gateway_address(index,
+		connman_inet_clear_ipv6_gateway_address(index4,
 						data->ipv6_gateway->gateway);
 
 	if (do_ipv4 && data->ipv4_gateway)
-		connman_inet_clear_gateway_address(index,
+		connman_inet_clear_gateway_address(index6,
 						data->ipv4_gateway->gateway);
 }
 
@@ -810,24 +825,36 @@ int __connman_connection_gateway_add(struct connman_service *service,
 {
 	struct gateway_data *active_gateway = NULL;
 	struct gateway_data *new_gateway = NULL;
+	struct connman_ipconfig *ipconfig;
 	enum connman_ipconfig_type type4 = CONNMAN_IPCONFIG_TYPE_UNKNOWN,
 		type6 = CONNMAN_IPCONFIG_TYPE_UNKNOWN;
 	enum connman_service_type service_type =
 					connman_service_get_type(service);
 	int index;
 
-	index = __connman_service_get_index(service);
-
 	/*
 	 * If gateway is NULL, it's a point to point link and the default
 	 * gateway for ipv4 is 0.0.0.0 and for ipv6 is ::, meaning the
 	 * interface
 	 */
-	if (!gateway && type == CONNMAN_IPCONFIG_TYPE_IPV4)
-		gateway = "0.0.0.0";
+	switch (type) {
+	case CONNMAN_IPCONFIG_TYPE_IPV4:
+		if (!gateway)
+			gateway = "0.0.0.0";
 
-	if (!gateway && type == CONNMAN_IPCONFIG_TYPE_IPV6)
-		gateway = "::";
+		ipconfig = __connman_service_get_ip4config(service);
+		break;
+	case CONNMAN_IPCONFIG_TYPE_IPV6:
+		if (!gateway)
+			gateway = "::";
+
+		ipconfig = __connman_service_get_ip6config(service);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	index = __connman_ipconfig_get_index(ipconfig);
 
 	DBG("service %p index %d gateway %s vpn ip %s type %d",
 		service, index, gateway, peer, type);
