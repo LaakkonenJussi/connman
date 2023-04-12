@@ -2029,6 +2029,7 @@ static int clat_stop(struct clat_data *data)
 
 	/* Do not leave the VPN hanging */
 	set_vpn_service(data, NULL);
+	data->vpn_mode_on = false;
 
 	if (!clat_is_running(data)) {
 		DBG("already stopping/stopped");
@@ -2413,68 +2414,6 @@ static int set_clat_service(struct clat_data *data,
 	return 0;
 }
 
-static bool setup_ipv4_vpn_route(struct clat_data *data, bool enable)
-{
-	struct connman_ipconfig *vpn_ipv4config;
-	struct connman_provider *vpn_provider;
-	const char *vpn_host_ip;
-	const char *transport_gw;
-	int clat_index;
-	int err;
-
-	vpn_provider = connman_service_get_vpn_provider(data->vpn_service);
-	if (!vpn_provider) {
-		DBG("No VPN provider set for VPN %p", data->vpn_service);
-		return false;
-	}
-
-	/* get VPN service IPv4config */
-	vpn_ipv4config = connman_service_get_ipconfig(data->vpn_service,
-								AF_INET);
-	if (!vpn_ipv4config) {
-		DBG("VPN %p is missing IPv4 config", data->vpn_service);
-		return false;
-	}
-
-	/* get VPN service host IP */
-	vpn_host_ip = connman_provider_get_string(vpn_provider, "HostIP");
-	if (!vpn_host_ip) {
-		DBG("VPN has no HostIP set");
-		return false;
-	}
-
-	clat_index = connman_inet_ifindex(TAYGA_CLAT_DEVICE);
-	if (clat_index < 0) {
-		DBG("CLAT interface not up");
-		return false;
-	}
-
-	transport_gw = connman_ipconfig_get_gateway_from_index(data->ifindex,
-						CONNMAN_IPCONFIG_TYPE_IPV4);
-	if (!transport_gw) {
-		DBG("No gateway set for transport index %d", data->ifindex);
-		return false;
-	}
-
-	DBG("%s route index %d host %s gw %s", enable ? "enable" : "disable",
-					clat_index, vpn_host_ip, transport_gw);
-
-	if (enable)
-		err = connman_inet_add_host_route(clat_index, vpn_host_ip,
-								transport_gw);
-	else
-		err = connman_inet_del_host_route(clat_index, vpn_host_ip);
-
-	if (err)
-		connman_warn("Failed to %s host route %d %s", enable ?
-							"enable" : "disable",
-						clat_index, vpn_host_ip);
-
-	data->vpn_mode_on = enable;
-
-	return err ? false : true;
-}
-
 static void clat_default_changed(struct connman_service *service)
 {
 	struct connman_network *network;
@@ -2516,13 +2455,9 @@ static void clat_default_changed(struct connman_service *service)
 			}
 
 			if (data->vpn_mode_on) {
-				if (!setup_ipv4_vpn_route(data, false))
-					connman_error("CLAT failed to del VPN "
-							"IPv4 host route");
-				else
-					DBG("Dropped IPv4 host route for VPN");
-
+				DBG("VPN mode on -> off");
 				set_vpn_service(data, NULL);
+				data->vpn_mode_on = false;
 			}
 
 			break;
@@ -2556,28 +2491,16 @@ static void clat_default_changed(struct connman_service *service)
 				DBG("Dropped IPv4 default route for VPN");
 			}
 
-			if (data->vpn_mode_on) {
-				DBG("VPN mode already set, skip host route");
-				return;
-			}
-
-			if (!setup_ipv4_vpn_route(data, true))
-				connman_error("CLAT failed to add VPN IPv4 "
-						"host route");
-			else
-				DBG("Added IPv4 host route for VPN");
+			DBG("VPN mode on");
+			data->vpn_mode_on = true;
 
 			return;
 		case CLAT_SERVICE_IGNORE:
-			/* TODO why ? */
 			if (data->vpn_mode_on) {
-				if (!setup_ipv4_vpn_route(data, false))
-					connman_error("CLAT failed to del VPN "
-							"IPv4 host route");
-				else
-					DBG("Dropped IPv4 host route for VPN");
+				DBG("VPN mode on -> off");
 
 				set_vpn_service(data, NULL);
+				data->vpn_mode_on = false;
 			}
 
 			DBG("Tracked service %p is not default or valid, "
@@ -2621,13 +2544,9 @@ static void clat_default_changed(struct connman_service *service)
 						!data->ipv4_default_route_on) {
 
 		if (data->vpn_mode_on) {
-			if (!setup_ipv4_vpn_route(data, false))
-				connman_error("CLAT failed to del VPN IPv4 "
-							"host route");
-			else
-				DBG("Dropped IPv4 host route for VPN");
-
+			DBG("VPN mode on -> off");
 			set_vpn_service(data, NULL);
+			data->vpn_mode_on = false;
 		}
 
 		err = setup_ipv4_default_route(data, true);
