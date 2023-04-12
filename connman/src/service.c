@@ -1989,6 +1989,8 @@ bool __connman_service_index_is_default(int index)
 		return false;
 
 	service = connman_service_get_default();
+	if (!service)
+		return false;
 
 	index4 = __connman_ipconfig_get_index(service->ipconfig_ipv4);
 	index6 = __connman_ipconfig_get_index(service->ipconfig_ipv6);
