@@ -575,10 +575,8 @@ static gboolean task_running(enum task_setup setup, int add_run_count)
 		g_assert_null(__last_set_contents_write);
 		if (__vpn_mode) {
 			g_assert_null(__route_entry);
-			g_assert(__route_entry_vpn);
 		} else {
 			g_assert(__route_entry);
-			g_assert_null(__route_entry_vpn);
 		}
 		break;
 	case TASK_SETUP_POST:
@@ -1010,15 +1008,16 @@ void connman_service_unref_debug(struct connman_service *service,
 
 struct connman_provider {
 	const char *hostip;
-	bool split_routing;
 };
 
-static struct connman_provider __provider = { "1.2.3.4", false };
+static struct connman_provider __provider = { "1.2.3.4" };
 
 struct connman_provider *connman_service_get_vpn_provider(
 						struct connman_service *service)
 {
-	g_assert(service);
+	if (!service)
+		return NULL;
+
 	return &__provider;
 }
 
@@ -1032,28 +1031,6 @@ struct connman_service *connman_service_lookup_from_identifier(
 		g_assert_cmpstr(identifier, ==, __vpn_transport->identifier);
 
 	return __vpn_transport;
-}
-
-const char *connman_provider_get_string(struct connman_provider *provider,
-							const char *key)
-{
-	g_assert(provider == &__provider);
-	g_assert_cmpstr(key, ==, "HostIP");
-
-	if (__vpn_transport)
-		return __provider.hostip;
-
-	return NULL;
-}
-
-bool connman_provider_is_split_routing(struct connman_provider *provider)
-{
-	g_assert(provider == &__provider);
-
-	if (__vpn_transport)
-		return __provider.split_routing;
-
-	return false;
 }
 
 int connman_provider_disconnect(struct connman_provider *provider)
