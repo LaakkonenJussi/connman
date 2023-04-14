@@ -4685,13 +4685,16 @@ int connman_service_reset_ipconfig_to_address(struct connman_service *service,
 	if (!service)
 		return -EINVAL;
 
-	if (type == CONNMAN_IPCONFIG_TYPE_IPV4) {
+	switch (type) {
+	case CONNMAN_IPCONFIG_TYPE_IPV4:
 		ipconfig = service->ipconfig_ipv4;
 		state = service->state_ipv4;
-	} else if (type == CONNMAN_IPCONFIG_TYPE_IPV6) {
+		break;
+	case CONNMAN_IPCONFIG_TYPE_IPV6:
 		ipconfig = service->ipconfig_ipv6;
 		state = service->state_ipv6;
-	} else {
+		break;
+	default:
 		return -EINVAL;
 	}
 
@@ -4721,6 +4724,13 @@ int connman_service_reset_ipconfig_to_address(struct connman_service *service,
 	DBG("err %d ipconfig %p type %d method %d state %s", err,
 				new_ipconfig, type, new_method,
 				!new_state  ? "-" : state2string(*new_state));
+
+	if (!err) {
+		if (type == CONNMAN_IPCONFIG_TYPE_IPV4)
+			ipv4_configuration_changed(service);
+		else
+			ipv6_configuration_changed(service);
+	}
 
 	return err;
 }
