@@ -2429,7 +2429,23 @@ static void clat_default_changed(struct connman_service *service)
 	data = get_data();
 
 	if (!service) {
+		/*
+		 * If we get a NULL service when tracked service is online/ready
+		 * it is most likely because of re-arranging the default
+		 * service list. In such case simply ignore the NULL and rely
+		 * on the state change or a proper service as default to stop
+		 * CLAT.
+		 */
 		if (clat_is_running(data)) {
+			state = connman_service_get_state(data->service);
+			if (state == CONNMAN_SERVICE_STATE_ONLINE ||
+					state == CONNMAN_SERVICE_STATE_READY) {
+				DBG("Ignore NULL service, tracked %p is "
+							"ONLINE/READY",
+							data->service);
+				return;
+			}
+
 			DBG("CLAT stop with NULL default service");
 			clat_stop(data);
 		}
