@@ -921,7 +921,10 @@ enum connman_service_state connman_service_get_state(
 {
 	DBG("service %p", service);
 
-	g_assert(service);
+	/* Mimic the real function */
+	if (!service)
+		return CONNMAN_SERVICE_STATE_UNKNOWN;
+
 	return service->state;
 }
 
@@ -4515,6 +4518,10 @@ static void clat_plugin_test_service4()
 			.type = CONNMAN_SERVICE_TYPE_CELLULAR,
 			.state = CONNMAN_SERVICE_STATE_UNKNOWN,
 	};
+	struct connman_service service2 = {
+			.type = CONNMAN_SERVICE_TYPE_WIFI,
+			.state = CONNMAN_SERVICE_STATE_ONLINE,
+	};
 
 	enum connman_service_state state;
 
@@ -4591,9 +4598,22 @@ static void clat_plugin_test_service4()
 	g_assert_cmpint(pending_timeouts(), ==, 2);
 	g_assert_cmpint(__task_run_count, ==, 2);
 
-	/* NULL service befomes default and CLAT stops*/
+	/*
+	 * NULL service befomes default but the tracked service is online
+	 * so no effect.
+	 */
 	__def_service = NULL;
 	n->default_changed(NULL);
+
+	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	/* There should be always 2 callbacks, prefix query and DAD */
+	g_assert_cmpint(pending_timeouts(), ==, 2);
+	g_assert_cmpint(__task_run_count, ==, 2);
+
+	/* When service changes to another CLAT does stop */
+	__def_service = &service2;
+	n->default_changed(&service2);
 
 	/* CLAT stops, state transition to post-configure */
 	DBG("RUNNING STOPS");
