@@ -1608,11 +1608,13 @@ static int clat_task_post_configure(struct clat_data *data)
 
 	ipconfig = connman_service_get_ipconfig(data->service, AF_INET);
 	ipaddress = connman_ipconfig_get_ipaddress(ipconfig);
-	if (ipaddress)
+	if (ipaddress) {
 		connman_inet_clear_address(index, ipaddress);
-	else
+		connman_ipaddress_clear(ipaddress);
+	} else {
 		connman_warn("Cannot clear CLAT IPv4 address in interface %d",
 									index);
+	}
 
 	err = connman_service_reset_ipconfig_to_address(data->service,
 						&new_state,
@@ -1620,7 +1622,7 @@ static int clat_task_post_configure(struct clat_data *data)
 						CONNMAN_IPCONFIG_METHOD_OFF,
 						index, NULL, NULL, NULL, 0);
 	if (err)
-		connman_error("Cannot reset service %p IPv4config, err %d",
+		connman_error("CLAT cannot reset service %p IPv4config, err %d",
 							data->service, err);
 
 	connman_inet_del_ipv6_network_route_with_metric(index,
