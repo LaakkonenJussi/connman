@@ -2337,7 +2337,7 @@ static void clat_ipconfig_changed(struct connman_service *service,
 
 	if (connman_ipconfig_get_config_type(ipconfig) ==
 					CONNMAN_IPCONFIG_TYPE_IPV4) {
-		if (data->state == CLAT_STATE_RUNNING) {
+		if (clat_is_running(data)) {
 			clat_index = connman_inet_ifindex(TAYGA_CLAT_DEVICE);
 			ipconfig_index = connman_ipconfig_get_index(ipconfig);
 
