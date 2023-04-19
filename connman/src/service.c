@@ -4650,11 +4650,6 @@ int __connman_service_reset_ipconfig(struct connman_service *service,
 
 	__connman_ipconfig_unref(ipconfig);
 
-	if (type == CONNMAN_IPCONFIG_TYPE_IPV4)
-		service->ipconfig_ipv4 = new_ipconfig;
-	else if (type == CONNMAN_IPCONFIG_TYPE_IPV6)
-		service->ipconfig_ipv6 = new_ipconfig;
-
 	err = reset_ipconfig(service, ipconfig, new_ipconfig, type, new_method,
 							state, new_state);
 
@@ -4684,6 +4679,12 @@ int connman_service_reset_ipconfig_to_address(struct connman_service *service,
 
 	if (!service)
 		return -EINVAL;
+
+	DBG("service %p new state %p type %d new_method %d", service,
+					new_state, type, new_method);
+	DBG("index %d address %s netmask %s gateway %s prefix length %u",
+					index, address, netmask, gateway,
+					prefix_length);
 
 	switch (type) {
 	case CONNMAN_IPCONFIG_TYPE_IPV4:
@@ -4723,14 +4724,7 @@ int connman_service_reset_ipconfig_to_address(struct connman_service *service,
 
 	DBG("err %d ipconfig %p type %d method %d state %s", err,
 				new_ipconfig, type, new_method,
-				!new_state  ? "-" : state2string(*new_state));
-
-	if (!err) {
-		if (type == CONNMAN_IPCONFIG_TYPE_IPV4)
-			ipv4_configuration_changed(service);
-		else
-			ipv6_configuration_changed(service);
-	}
+				!new_state ? "-" : state2string(*new_state));
 
 	return err;
 }
@@ -8269,6 +8263,48 @@ int __connman_service_ipconfig_indicate_state(struct connman_service *service,
 	__connman_timeserver_sync(service);
 
 	return service_indicate_state(service);
+}
+
+int connman_service_ipconfig_indicate_state(struct connman_service *service,
+					enum connman_service_state new_state,
+					enum connman_ipconfig_type type,
+					bool notify_settings_change)
+{
+	int err;
+
+	DBG("service %p new state %d type %d notify %d", service, new_state,
+						type, notify_settings_change);
+
+	err = __connman_service_ipconfig_indicate_state(service, new_state,
+						type);
+
+	/*
+	 * By default ipconfig change does not send IP address settings change.
+	 * This allows to enforce the notification when the state is connected.
+	 */
+	if ((!err || err == -EALREADY) &&
+				is_connected_state(service, new_state) &&
+				notify_settings_change) {
+		switch(type) {
+		case CONNMAN_IPCONFIG_TYPE_IPV4:
+			DBG("IPv4 settings changed");
+			settings_changed(service, service->ipconfig_ipv4);
+			break;
+		case CONNMAN_IPCONFIG_TYPE_IPV6:
+			DBG("IPv6 settings changed");
+			settings_changed(service, service->ipconfig_ipv6);
+			break;
+		default:
+			DBG("unknown type %d", type);
+			break;
+		}
+
+		address_updated(service, type);
+	} else {
+		DBG("err %d", err);
+	}
+
+	return err;
 }
 
 static bool prepare_network(struct connman_service *service)
