@@ -706,16 +706,37 @@ enum connman_ipconfig_method get_method(struct connman_ipconfig *ipconfig)
 	return ipconfig->method;
 }
 
-static void assign_ipaddress(struct connman_ipconfig *ipconfig)
+static void init_ipaddress(struct connman_ipconfig *ipconfig)
 {
+	g_assert(ipconfig);
+
+	if (ipconfig->ipaddress)
+		return;
+
 	switch (ipconfig->type) {
 	case CONNMAN_IPCONFIG_TYPE_IPV4:
 		ipconfig->ipaddress = connman_ipaddress_alloc(AF_INET);
+		break;
+	case CONNMAN_IPCONFIG_TYPE_IPV6:
+		ipconfig->ipaddress = connman_ipaddress_alloc(AF_INET6);
+		break;
+	default:
+		return;
+	}
+
+	g_assert(ipconfig->ipaddress);
+}
+
+static void assign_ipaddress(struct connman_ipconfig *ipconfig)
+{
+	init_ipaddress(ipconfig);
+
+	switch (ipconfig->type) {
+	case CONNMAN_IPCONFIG_TYPE_IPV4:
 		connman_ipaddress_set_ipv4(ipconfig->ipaddress, "10.10.10.2",
 					"255.255.255.0", "10.10.10.1");
 		break;
 	case CONNMAN_IPCONFIG_TYPE_IPV6:
-		ipconfig->ipaddress = connman_ipaddress_alloc(AF_INET6);
 		connman_ipaddress_set_ipv6(ipconfig->ipaddress,
 					"dead:beef:feed:abba:caba:daba::1234",
 					64, NULL);
@@ -890,6 +911,17 @@ enum connman_ipconfig_method connman_service_get_ipconfig_method(
 	}
 
 	return CONNMAN_IPCONFIG_TYPE_UNKNOWN;
+}
+
+int connman_service_ipconfig_indicate_state(struct connman_service *service,
+					enum connman_service_state new_state,
+					enum connman_ipconfig_type type,
+					bool notify_settings_change)
+{
+	if (!service)
+		return -EINVAL;
+
+	return 0;
 }
 
 struct connman_service *connman_service_get_default(void)
@@ -1796,6 +1828,7 @@ static void clat_plugin_test2()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -1908,6 +1941,7 @@ static void clat_plugin_test3()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -2031,6 +2065,7 @@ static void clat_plugin_test4()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -2151,6 +2186,7 @@ static void clat_plugin_test5()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -2269,6 +2305,7 @@ static void clat_plugin_test6()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -2378,6 +2415,7 @@ static void clat_plugin_test7()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -2491,6 +2529,7 @@ static void clat_plugin_test8()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -2622,6 +2661,7 @@ static void clat_plugin_test_failure1()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -2716,6 +2756,7 @@ static void clat_plugin_test_failure2()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -2802,6 +2843,7 @@ static void clat_plugin_test_failure3()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -2906,6 +2948,7 @@ static void clat_plugin_test_failure4()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -2992,6 +3035,7 @@ static void clat_plugin_test_failure5()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -3168,12 +3212,14 @@ static void clat_plugin_test_failure6()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	service2.network = &network2;
 	service2.ipconfig_ipv4 = &ipv4config2;
 	service2.ipconfig_ipv6 = &ipv6config2;
 	network2.ipv6_configured = true;
 	assign_ipaddress(&ipv6config2);
+	init_ipaddress(&ipv4config2);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -3344,6 +3390,7 @@ static void clat_plugin_test_failure7(gconstpointer data)
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -3500,6 +3547,7 @@ static void clat_plugin_test_failure8(gconstpointer data)
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -3659,6 +3707,7 @@ static void clat_plugin_test_restart1()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -3823,6 +3872,7 @@ static void clat_plugin_test_restart2()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -3979,6 +4029,7 @@ static void clat_plugin_test_prefix(gconstpointer data)
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -4199,12 +4250,14 @@ static void clat_plugin_test_service2()
 	service1.ipconfig_ipv6 = &ipv6config1;
 	network1.ipv6_configured = true;
 	assign_ipaddress(&ipv6config1);
+	init_ipaddress(&ipv4config1);
 
 	service2.network = &network2;
 	service2.ipconfig_ipv4 = &ipv4config2;
 	service2.ipconfig_ipv6 = &ipv6config2;
 	network2.ipv6_configured = true;
 	assign_ipaddress(&ipv6config2);
+	init_ipaddress(&ipv4config2);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -4362,12 +4415,14 @@ static void clat_plugin_test_service3()
 	service1.ipconfig_ipv6 = &ipv6config1;
 	network1.ipv6_configured = true;
 	assign_ipaddress(&ipv6config1);
+	init_ipaddress(&ipv4config1);
 
 	service2.network = &network2;
 	service2.ipconfig_ipv4 = &ipv4config2;
 	service2.ipconfig_ipv6 = &ipv6config2;
 	network2.ipv6_configured = true;
 	assign_ipaddress(&ipv6config2);
+	init_ipaddress(&ipv4config2);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -4532,6 +4587,7 @@ static void clat_plugin_test_service4()
 	service1.ipconfig_ipv6 = &ipv6config1;
 	network1.ipv6_configured = true;
 	assign_ipaddress(&ipv6config1);
+	init_ipaddress(&ipv4config1);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -4682,6 +4738,7 @@ static void clat_plugin_test_if_error1(gconstpointer data)
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -4814,6 +4871,7 @@ static void clat_plugin_test_if_error2(gconstpointer data)
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -4962,6 +5020,7 @@ static void clat_plugin_test_ipconfig1()
 	service.ipconfig_ipv6->index = service.network->index;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	service_wifi.network = &network_wifi;
 	service_wifi.ipconfig_ipv4 = &ipv4config_wifi;
@@ -5102,6 +5161,7 @@ static void clat_plugin_test_ipconfig_type(gconstpointer data)
 	service.ipconfig_ipv6->index = service.network->index;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -5226,6 +5286,7 @@ static void clat_plugin_test_tether1()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -5356,6 +5417,7 @@ static void clat_plugin_test_tether2()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -5494,6 +5556,7 @@ static void clat_plugin_test_tether3()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	g_assert(__connman_builtin_clat.init() == 0);
 
@@ -5656,6 +5719,7 @@ void clat_plugin_test_vpn1(gconstpointer data)
 	service.ipconfig_ipv6 = &ipv6config;
 	service.ipconfig_ipv6->index = service.network->index;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	vpn_service.ipconfig_ipv4 = &vpn_ipv4config;
 	assign_ipaddress(&vpn_ipv4config);
@@ -5881,6 +5945,7 @@ void clat_plugin_test_vpn2()
 	service.ipconfig_ipv6 = &ipv6config;
 	network.ipv6_configured = true;
 	assign_ipaddress(&ipv6config);
+	init_ipaddress(&ipv4config);
 
 	vpn_service.ipconfig_ipv6 = &vpn_ipv6config;
 	assign_ipaddress(&vpn_ipv6config);
