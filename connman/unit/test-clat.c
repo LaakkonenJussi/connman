@@ -5824,11 +5824,11 @@ void clat_plugin_test_vpn1(gconstpointer data)
 	__def_service = &vpn_service;
 	n->default_changed(&vpn_service);
 
-	/* We keep on running without default route */
+	/* We keep on running without default route and resolv */
 	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
-	g_assert(__resolv);
+	g_assert_null(__resolv);
 	g_assert_null(__dad_callback); /* Timeout is not called yet */
-	g_assert_cmpint(pending_timeouts(), ==, 2);
+	g_assert_cmpint(pending_timeouts(), ==, 1); /* Only dad */
 
 	/* If tethering is enabled -> dual nat will not get set with IPv4 VPN */
 	if (test_tether == VPN_TEST_TETHER_ON)
@@ -5843,28 +5843,37 @@ void clat_plugin_test_vpn1(gconstpointer data)
 	n->service_state_changed(&service, CONNMAN_SERVICE_STATE_ONLINE);
 	
 	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
-	g_assert(__resolv);
+	g_assert_null(__resolv);
 	g_assert_null(__dad_callback); /* Timeout is not called yet */
-	g_assert_cmpint(pending_timeouts(), ==, 2);
+	g_assert_cmpint(pending_timeouts(), ==, 1); /* Only dad to is added */
 
 	/* And then VPN disconnects and mobile data is the default */
 	vpn_service.state = CONNMAN_SERVICE_STATE_DISCONNECT;
 	n->service_state_changed(&vpn_service, vpn_service.state);
 
-	/* Nothing is done */
+	/* Nothing is done yet */
 	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
-	g_assert(__resolv);
+	g_assert_null(__resolv);
 	g_assert_null(__dad_callback); /* Timeout is not called yet */
-	g_assert_cmpint(pending_timeouts(), ==, 2);
+	g_assert_cmpint(pending_timeouts(), ==, 1); /* Only dad to is added */
 
 	/* Until the default is changed.. */
 	set_vpn_mode(false);
 	__def_service = &service;
 	n->default_changed(&service);
 
+	/* First the resolv is not initiated but is added ...*/
 	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+	g_assert_null(__resolv);	/* Resolv is not executed */
+	g_assert_null(__dad_callback);	/* Timeout is not called yet */
+
+	/* ... and can be called after which ...*/
+	g_assert_cmpint(call_all_timeouts_timed(), ==, 2);
+
+	/* .. the resolv and dad callback exist */
 	g_assert(__resolv);
-	g_assert_null(__dad_callback); /* Timeout is not called yet */
+	g_assert(__dad_callback);
+	g_assert_true(call_dad_callback()); /* Sets __dad_callback to NULL */
 	g_assert_cmpint(pending_timeouts(), ==, 2);
 
 	/*
