@@ -2410,14 +2410,35 @@ static int try_clat_start(struct clat_data *data)
 	return clat_start(data);
 }
 
+static bool has_ipv4_config(struct clat_data *data,
+					struct connman_service *service,
+					struct connman_ipconfig *ipconfig)
+{
+	int ipconfig_index;
+	int clat_index;
+
+	if (clat_is_running(data)) {
+		clat_index = connman_inet_ifindex(TAYGA_CLAT_DEVICE);
+		ipconfig_index = connman_ipconfig_get_index(ipconfig);
+
+		if (clat_index >= 0 && ipconfig_index >= 0 &&
+					clat_index == ipconfig_index) {
+			DBG("Ignoring IPv4 ipconfig, set by CLAT");
+			return false;
+		}
+
+		DBG("Not CLAT IPv4config change");
+	}
+
+	return has_ip_address(service, CONNMAN_IPCONFIG_TYPE_IPV4);
+}
+
 static void clat_ipconfig_changed(struct connman_service *service,
 					struct connman_ipconfig *ipconfig)
 {
 	struct connman_network *network;
 	struct clat_data *data = get_data();
 	enum clat_service_type type;
-	int ipconfig_index;
-	int clat_index;
 
 	DBG("service %p ipconfig %p", service, ipconfig);
 
@@ -2434,21 +2455,8 @@ static void clat_ipconfig_changed(struct connman_service *service,
 
 	if (connman_ipconfig_get_config_type(ipconfig) ==
 					CONNMAN_IPCONFIG_TYPE_IPV4) {
-		if (clat_is_running(data)) {
-			clat_index = connman_inet_ifindex(TAYGA_CLAT_DEVICE);
-			ipconfig_index = connman_ipconfig_get_index(ipconfig);
-
-			if (clat_index >= 0 && ipconfig_index >= 0 &&
-						clat_index == ipconfig_index) {
-				DBG("Ignoring change of CLAT ipconfig");
-				return;
-			}
-
-			DBG("Not CLAT IPv4config change");
-		}
-
-		if (has_ip_address(service, CONNMAN_IPCONFIG_TYPE_IPV4)) {
-			DBG("cellular %p has IPv4 config, stop CLAT", service);
+		if (has_ipv4_config(data, service, ipconfig)) {
+			DBG("IPv4 config set, stop CLAT");
 			clat_stop(data);
 			return;
 		}
@@ -2516,9 +2524,9 @@ static int set_clat_service(struct clat_data *data,
 static void clat_default_changed(struct connman_service *service)
 {
 	struct connman_network *network;
+	struct connman_ipconfig *ipconfig;
 	struct clat_data *data;
 	enum connman_service_state state;
-	enum connman_ipconfig_type type = CONNMAN_IPCONFIG_TYPE_IPV4;
 	int err;
 
 	DBG("service %p", service);
@@ -2649,12 +2657,16 @@ static void clat_default_changed(struct connman_service *service)
 		return;
 	}
 
-	if (connman_network_is_configured(network, type) &&
-					has_ip_address(data->service, type)) {
-		DBG("IPv4 is configured on network %p, stop CLAT",
-							network);
-		clat_stop(data);
-		return;
+	if (connman_network_is_configured(network,
+						CONNMAN_IPCONFIG_TYPE_IPV4)) {
+		ipconfig = connman_service_get_ipconfig(data->service, AF_INET);
+
+		if (has_ipv4_config(data, service, ipconfig)) {
+			DBG("IPv4 is configured on network %p, stop CLAT",
+								network);
+			clat_stop(data);
+			return;
+		}
 	}
 
 	/* VPN disconnected case, turn default route for IPv4 on */
