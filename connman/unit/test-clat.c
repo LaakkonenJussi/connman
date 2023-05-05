@@ -133,7 +133,7 @@ int connman_inet_add_ipv6_network_route_with_metric(int index, const char *host,
 					const char *gateway,
 					unsigned char prefix_len, short metric)
 {
-	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
+	g_assert(index == CLAT_DEV_INDEX || index == SERVICE_DEV_INDEX);
 	g_assert(host);
 
 	DBG("index %d host %s gateway %s prefix_len %u metric %d", index, host,
@@ -152,11 +152,33 @@ int connman_inet_add_ipv6_network_route(int index, const char *host,
 int connman_inet_del_ipv6_network_route_with_metric(int index, const char *host,
 					unsigned char prefix_len, short metric)
 {
-	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
+	g_assert(index == CLAT_DEV_INDEX || index == SERVICE_DEV_INDEX);
 	g_assert(host);
 
 	DBG("index %d host %s prefix_len %u metric %d", index, host,
 						prefix_len, metric);
+	return 0;
+}
+
+int connman_inet_add_ipv6_host_route(int index, const char *host,
+							const char *gateway)
+{
+	g_assert_cmpint(index, ==, SERVICE_DEV_INDEX);
+	g_assert(host);
+	g_assert(gateway);
+
+	DBG("index %d host %s gw %s", index, host, gateway);
+
+	return 0;
+}
+
+int connman_inet_del_ipv6_host_route(int index, const char *host)
+{
+	g_assert_cmpint(index, ==, SERVICE_DEV_INDEX);
+	g_assert(host);
+
+	DBG("index %d host %s", index, host);
+
 	return 0;
 }
 
@@ -172,6 +194,19 @@ int connman_inet_set_address(int index, struct connman_ipaddress *ipaddress)
 	g_assert_cmpint(index, ==, CLAT_DEV_INDEX);
 	g_assert(ipaddress);
 	return 0;
+}
+
+bool connman_inet_is_any_addr(const char *address, int family)
+{
+	g_assert(address);
+
+	if (family == AF_INET)
+		return !g_strcmp0(address, "0.0.0.0");
+
+	if (family == AF_INET6)
+		return !g_strcmp0(address, "::");
+
+	return false;
 }
 
 struct route_entry {
@@ -1707,6 +1742,15 @@ void connman_rtnl_handle_rtprot_ra(bool value)
 {
 	rtprot_ra = value;
 	return;
+}
+
+/* Just use static info as of now */
+static void call_rntl_new_gateway(const char *gw)
+{
+	g_assert(gw);
+	g_assert(r);
+	g_assert(r->newgateway6);
+	r->newgateway6(SERVICE_DEV_INDEX, "::", gw, 1024, RTPROT_RA);
 }
 
 const char *connman_setting_get_string(const char *key)
@@ -5767,6 +5811,8 @@ void clat_plugin_test_vpn1(gconstpointer data)
 	call_task_exit(0);
 	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
 
+	call_rntl_new_gateway("feed::dead:beef:baaa:aaac");
+
 	/* Callbacks are added, called and then re-added */
 	g_assert_cmpint(call_all_timeouts(), ==, 2);
 
@@ -6001,6 +6047,8 @@ void clat_plugin_test_vpn2()
 	DBG("PRE CONFIGURE stops");
 	call_task_exit(0);
 	g_assert_true(check_task_running(TASK_SETUP_CONF, 0));
+
+	call_rntl_new_gateway("feed::dead:beef:baaa:aaac");
 
 	/* Callbacks are added, called and then re-added */
 	g_assert_cmpint(call_all_timeouts(), ==, 2);
