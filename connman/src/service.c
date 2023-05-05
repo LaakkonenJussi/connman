@@ -4726,6 +4726,11 @@ int connman_service_reset_ipconfig_to_address(struct connman_service *service,
 				new_ipconfig, type, new_method,
 				!new_state ? "-" : state2string(*new_state));
 
+	err = __connman_network_enable_ipconfig(service->network, new_ipconfig);
+	if (err)
+		DBG("cannot enable ipconfig %p for network %p", new_ipconfig,
+							service->network);
+
 	return err;
 }
 
