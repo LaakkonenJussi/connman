@@ -321,6 +321,25 @@ int connman_inet_clear_address(int index, struct connman_ipaddress *ipaddress)
 	return 0;
 }
 
+int connman_inet_clear_ipv6_gateway_address(int index, const char *gateway)
+{
+	g_assert_cmpint(index, ==, SERVICE_DEV_INDEX);
+	g_assert(gateway);
+	return 0;
+}
+
+int connman_inet_set_ipv6_gateway_interface(int index)
+{
+	g_assert_cmpint(index, ==, SERVICE_DEV_INDEX);
+	return 0;
+}
+
+int connman_inet_clear_ipv6_gateway_interface(int index)
+{
+	g_assert_cmpint(index, ==, SERVICE_DEV_INDEX);
+	return 0;
+}
+
 int connman_inet_check_ipaddress(const char *host)
 {
 	g_assert(host);
