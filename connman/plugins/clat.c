@@ -128,6 +128,7 @@ static struct {
 	bool dad_enabled;
 	bool resolv_always_succeeds;
 	bool clat_device_use_netmask;
+	bool clat_device_setup_default_route;
 	bool tayga_use_ipv6_conf;
 	bool tayga_use_strict_frag_hdr;
 } clat_settings = {
@@ -142,6 +143,9 @@ static struct {
 	/* Add netmask to the CLAT device IPv4 address, default on */
 	.clat_device_use_netmask = true,
 
+	/* Setup default route with a metric by CLAT plugin, default off */
+	.clat_device_setup_default_route = false,
+
 	/* Write IPv6 address of the interface to tayga config, default off */
 	.tayga_use_ipv6_conf = false,
 
@@ -154,6 +158,7 @@ static struct {
 #define CONF_DAD_ENABLED		"EnableDAD"
 #define CONF_RESOLV_ALWAYS_SUCCEEDS	"ResolvAlwaysSucceeds"
 #define CONF_CLAT_USE_NETMASK		"ClatDeviceUseNetmask"
+#define CONF_CLAT_SET_DEFAULT_ROUTE	"ClatDeviceSetDefaultRoute"
 #define CONF_TAYGA_USE_IPV6_CONF	"TaygaRequiresIPv6Address"
 #define CONF_TAYGA_USE_STRICT_FRAG_HDR	"TaygaStrictFragHdr"
 
@@ -226,6 +231,14 @@ static void parse_clat_config(GKeyFile *config)
 						&error);
 	if (!error)
 		clat_settings.clat_device_use_netmask = boolean;
+
+	g_clear_error(&error);
+
+	boolean = g_key_file_get_boolean(config, group,
+						CONF_CLAT_SET_DEFAULT_ROUTE,
+						&error);
+	if (!error)
+		clat_settings.clat_device_setup_default_route = boolean;
 
 	g_clear_error(&error);
 
@@ -1427,6 +1440,11 @@ static int setup_ipv4_default_route(struct clat_data *data, bool enable)
 	int index;
 	int err;
 
+	if (!clat_settings.clat_device_setup_default_route) {
+		DBG("disabled by config");
+		return 0;
+	}
+
 	DBG("%s default route", enable ? "enable" : "disable");
 
 	index = connman_inet_ifindex(TAYGA_CLAT_DEVICE);
@@ -1610,7 +1628,7 @@ static gboolean clat_task_run_dad(gpointer user_data)
 		 * If the sending of DAD fails consecutive calls will as well,
 		 * stop DAD in such case
 		 */
-		connman_error("CLAT failed to send DAD: %d, stoppped", err);
+		connman_error("CLAT failed to send DAD: %d, stopped", err);
 		return G_SOURCE_REMOVE;
 	}
 
