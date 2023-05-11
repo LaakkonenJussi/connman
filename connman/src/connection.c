@@ -366,13 +366,6 @@ static struct gateway_data *add_gateway(struct connman_service *service,
 	if (!data)
 		return NULL;
 
-	if (type == CONNMAN_IPCONFIG_TYPE_IPV4)
-		data->index4 = index;
-	else if (type == CONNMAN_IPCONFIG_TYPE_IPV6)
-		data->index6 = index;
-	else
-		data->index4 = data->index6 = index;
-
 	config = g_try_new0(struct gateway_config, 1);
 	if (!config) {
 		g_free(data);
@@ -386,11 +379,13 @@ static struct gateway_data *add_gateway(struct connman_service *service,
 	config->vpn_phy_index = -1;
 	config->active = false;
 
-	if (type == CONNMAN_IPCONFIG_TYPE_IPV4)
+	if (type == CONNMAN_IPCONFIG_TYPE_IPV4) {
+		data->index4 = index;
 		data->ipv4_gateway = config;
-	else if (type == CONNMAN_IPCONFIG_TYPE_IPV6)
+	} else if (type == CONNMAN_IPCONFIG_TYPE_IPV6) {
+		data->index6 = index;
 		data->ipv6_gateway = config;
-	else {
+	} else {
 		g_free(config->gateway);
 		g_free(config);
 		g_free(data);
