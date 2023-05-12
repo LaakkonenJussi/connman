@@ -1442,7 +1442,7 @@ static int setup_ipv4_default_route(struct clat_data *data, bool enable)
 
 	if (!clat_settings.clat_device_setup_default_route) {
 		DBG("disabled by config");
-		return 0;
+		goto out;
 	}
 
 	DBG("%s default route", enable ? "enable" : "disable");
@@ -1474,6 +1474,7 @@ static int setup_ipv4_default_route(struct clat_data *data, bool enable)
 	if (err)
 		return err;
 
+out:
 	data->ipv4_default_route_on = enable;
 	return 0;
 }
