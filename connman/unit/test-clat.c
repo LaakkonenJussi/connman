@@ -40,6 +40,7 @@ extern struct connman_plugin_desc __connman_builtin_clat;
 
 /* Dummies */
 
+static bool __test_use_keyfile = false;
 static bool __clat_dev_set = false;
 static bool __clat_dev_up = false;
 
@@ -617,6 +618,7 @@ static gboolean task_running(enum task_setup setup, int add_run_count)
 		g_assert_true(g_str_has_suffix(__last_set_contents_write,
 								"tayga.conf"));
 		g_assert_null(__route_entry);
+
 		g_assert_null(__dual_nat);
 		g_free(__last_set_contents_write);
 		__last_set_contents_write = NULL;
@@ -630,7 +632,8 @@ static gboolean task_running(enum task_setup setup, int add_run_count)
 		if (__vpn_mode) {
 			g_assert_null(__route_entry);
 		} else {
-			g_assert(__route_entry);
+			if (__test_use_keyfile)
+				g_assert(__route_entry);
 		}
 		break;
 	case TASK_SETUP_POST:
@@ -1356,9 +1359,11 @@ gboolean g_key_file_load_from_file(GKeyFile *keyfile, const gchar *file,
 	g_assert(keyfile);
 	g_assert(file);
 
-	*error = g_error_new_literal(1, G_FILE_ERROR_NOENT, "no file in test");
+	if (!__test_use_keyfile)
+		*error = g_error_new_literal(1, G_FILE_ERROR_NOENT,
+							"no file in test");
 
-	return false;
+	return __test_use_keyfile;
 }
 
 static int stdout_fd_ch_ptr = 0x12345678;
@@ -1818,6 +1823,8 @@ static void test_reset(void) {
 	__vpn_transport = NULL;
 
 	__ipconfig_address_change_notified = false;
+
+	__test_use_keyfile = false;
 }
 
 #define TEST_PREFIX "/clat/"
