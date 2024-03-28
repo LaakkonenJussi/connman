@@ -83,6 +83,8 @@ struct ofv_private_data {
 	char *if_name;
 	vpn_provider_connect_cb_t cb;
 	void *user_data;
+	int out_ch_id;
+	GIOChannel *out_ch;
 };
 
 static void ofv_connect_done(struct ofv_private_data *data, int err)
@@ -112,6 +114,79 @@ static void free_private_data(struct ofv_private_data *data)
 	g_free(data);
 }
 
+static void close_io_channel(struct ofv_private_data *data, GIOChannel *channel)
+{
+	if (!data || !channel)
+		return;
+
+	if (data->out_ch == channel) {
+		DBG("closing stdout");
+
+		if (data->out_ch_id) {
+			g_source_remove(data->out_ch_id);
+			data->out_ch_id = 0;
+		}
+
+		if (!data->out_ch)
+			return;
+
+		g_io_channel_shutdown(data->out_ch, FALSE, NULL);
+		g_io_channel_unref(data->out_ch);
+
+		data->out_ch = NULL;
+	}
+}
+
+static gboolean io_channel_cb(GIOChannel *source, GIOCondition condition,
+			gpointer user_data)
+{
+	struct ofv_private_data *data;
+	char *str;
+	int i;
+
+	data = user_data;
+
+	DBG("");
+
+	if ((condition & G_IO_IN) &&
+		g_io_channel_read_line(source, &str, NULL, NULL, NULL) ==
+							G_IO_STATUS_NORMAL) {
+		bool known_error = false;
+
+		str[strlen(str) - 1] = '\0';
+
+		/*for (i = 0; auth_failures[i]; i++) {
+			if (g_str_has_prefix(str, auth_failures[i])) {
+				DBG("authentication failed: %s", str);
+
+				vpn_provider_indicate_error(data->provider,
+					VPN_PROVIDER_ERROR_AUTH_FAILED);
+				known_error = true;
+			}
+		}
+
+		for (i = 0; conn_failures[i]; i++) {
+			if (g_str_has_prefix(str, conn_failures[i])) {
+				DBG("connection failed: %s", str);
+
+				vpn_provider_indicate_error(data->provider,
+					VPN_PROVIDER_ERROR_CONNECT_FAILED);
+				known_error = true;
+			}
+		}*/
+
+		if (!known_error)
+			connman_error("OpenFortiVPN: %s", str);
+
+		g_free(str);
+	} else if (condition & (G_IO_ERR | G_IO_HUP)) {
+		DBG("Channel termination");
+		close_io_channel(data, source);
+		return G_SOURCE_REMOVE;
+	}
+
+	return G_SOURCE_CONTINUE;
+}
 
 static DBusMessage *ofv_get_sec(struct connman_task *task, DBusMessage *msg,
 							void *user_data)
@@ -366,6 +441,7 @@ static int run_connect(struct ofv_private_data *data, const char *username,
 	char *esc_pass;
 	char *plugin;
 	int err;
+	int fd_out;
 
 	if (!username || !*username || !password || !*password) {
 		DBG("Cannot connect username %s password %p", username,
@@ -419,11 +495,16 @@ static int run_connect(struct ofv_private_data *data, const char *username,
 	g_free(esc_pass);
 	g_free(plugin);
 
-	err = connman_task_run(task, ofv_died, data, NULL, NULL, NULL);
+	err = connman_task_run(task, ofv_died, data, NULL, &fd_out, NULL);
 	if (err < 0) {
 		connman_error("ofv failed to start");
 		err = -EIO;
 	}
+
+	data->out_ch = g_io_channel_unix_new(fd_out);
+	data->out_ch_id = g_io_add_watch(data->out_ch,
+				G_IO_IN | G_IO_ERR | G_IO_HUP,
+				(GIOFunc)io_channel_cb, data);
 
 done:
 	if (err)
