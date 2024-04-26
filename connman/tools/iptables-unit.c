@@ -122,6 +122,13 @@ char **__connman_config_get_string_list(GKeyFile *key_file,
 	return strlist;
 }
 
+int __connman_config_read_config_files_from(const char *path,
+					const char *suffix, GList **conffiles,
+					config_callback cb)
+{
+	return 0;
+}
+
 struct connman_service *connman_service_lookup_from_identifier(
 						const char* identifier)
 {
