@@ -2252,6 +2252,23 @@ static int init_all_dynamic_firewall_rules(void)
 	int err;
 
 	err = init_dynamic_firewall_rules(FIREWALLCONFIGFILE);
+	if (err) {
+		connman_warn("Failed to read main firewall config %s",
+							FIREWALLCONFIGFILE);
+		return err;
+	}
+
+	err = __connman_config_read_config_files_from(FIREWALLCONFIGDIR,
+				FIREWALLFILE, &configuration_files,
+				init_dynamic_firewall_rules);
+	if (err) {
+		connman_warn("Failed to read configs from %s: %s",
+						FIREWALLCONFIGDIR,
+						strerror(-err));
+		return err;
+	}
+
+	goto out;
 
 	if (g_file_test(FIREWALLCONFIGDIR, G_FILE_TEST_IS_DIR)) {
 		dir = g_dir_open(FIREWALLCONFIGDIR, 0, &error);
@@ -2317,9 +2334,9 @@ static int init_all_dynamic_firewall_rules(void)
 
 out:
 	err = enable_general_firewall();
-
 	if (err)
-		DBG("problem enabling");
+		DBG("problem enabling firewall");
+
 	return err;
 }
 
