@@ -765,6 +765,12 @@ bool __connman_config_get_bool(GKeyFile *key_file,
 bool __connman_config_address_provisioned(const char *address,
 					const char *netmask);
 
+typedef int (*config_callback) (const char *filepath);
+
+int __connman_config_read_config_files_from(const char *path,
+					const char *suffix, GList **conffiles,
+					config_callback cb);
+
 int __connman_tethering_init(void);
 void __connman_tethering_cleanup(void);
 

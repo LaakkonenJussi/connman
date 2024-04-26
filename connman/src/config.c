@@ -1814,3 +1814,94 @@ bool __connman_config_address_provisioned(const char *address,
 
 	return false;
 }
+#include <fcntl.h>
+
+static bool is_file_symlink(const char *filename)
+{
+	int fd;
+
+	fd = g_open (filename, O_WRONLY | O_NOFOLLOW | O_CLOEXEC);
+	if (fd == -1 && errno == ELOOP)
+		return true;
+
+	g_close(fd);
+
+	return false;
+}
+
+int __connman_config_read_config_files_from(const char *path,
+					const char *suffix, GList **conffiles,
+					config_callback cb)
+{
+	GList *iter;
+	GError *error = NULL;
+	GDir *dir;
+	const char *filename = NULL;
+	char *filepath = NULL;
+	int err = 0;
+
+	if (!path || !suffix || !conffiles)
+		return -EINVAL;
+
+	if (!g_file_test(path, G_FILE_TEST_IS_DIR)) {
+		DBG("not a directory %s", path);
+		return -ENOTDIR;
+	}
+
+	dir = g_dir_open(path, 0, &error);
+	if (!dir) {
+		if (error) {
+			connman_warn("cannot open dir %s, error: %s", path,
+								error->message);
+			err = -error->code;
+		} else {
+			err = -ENOMEM;
+		}
+	}
+
+	g_clear_error(&error);
+	
+	if (err)
+		return err;
+
+	DBG("read configs from %s", path);
+
+	/*
+	 * Ordering of files is not guaranteed with g_dir_open(). Read
+	 * the filenames into sorted GList.
+	 */
+	while ((filename = g_dir_read_name(dir))) {
+		/* Read configs that have the requested conf suffix */
+		if (!g_str_has_suffix(filename, suffix))
+			continue;
+
+		/*
+		 * Prepend read files into list of configuration
+		 * files to be used in checks when new configurations
+		 * are added to avoid unnecessary reads of already read
+		 * configurations. Sort list after all are added.
+		 */
+		*conffiles = g_list_prepend(*conffiles, g_strdup(filename));
+	}
+
+	*conffiles = g_list_sort(*conffiles, (GCompareFunc)g_strcmp0);
+
+	for (iter = *conffiles; iter; iter = iter->next) {
+		filename = iter->data;
+
+		filepath = g_strconcat(path, filename, NULL);
+		DBG("reading config %s", filepath);
+
+		if (g_file_test(filepath, G_FILE_TEST_IS_REGULAR) &&
+						!is_file_symlink(filepath)) {
+			if (cb && cb(filepath))
+				DBG("invalid config %s", filepath);
+		}
+
+		g_free(filepath);
+	}
+
+	g_dir_close(dir);
+
+	return 0;
+}
