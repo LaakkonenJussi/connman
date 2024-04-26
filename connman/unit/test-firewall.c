@@ -155,10 +155,10 @@ static void setup_test_params(enum configtype type)
 
 	if (type & CONFIG_USE_POLICY)
 		DBG("CONFIG_USE_POLICY");
-	
+
 	if (type & ACCESS_FAILURE)
 		DBG("ACCESS_FAILURE");
-	
+
 	if (type & DIR_ACCESS_FAILURE)
 		DBG("DIR_ACCESS_FAILURE");
 
@@ -184,36 +184,6 @@ static void setup_test_params(enum configtype type)
 }
 
 // Dummies
-
-// Config dummies
-
-char *__connman_config_get_string(GKeyFile *key_file,
-	const char *group_name, const char *key, GError **error)
-{
-	char *str = g_key_file_get_string(key_file, group_name, key, error);
-	if (!str)
-		return NULL;
-
-	return g_strchomp(str);
-}
-
-char **__connman_config_get_string_list(GKeyFile *key_file,
-	const char *group_name, const char *key, gsize *length, GError **error)
-{
-	char **p;
-	char **strlist = g_key_file_get_string_list(key_file, group_name, key,
-		length, error);
-	if (!strlist)
-		return NULL;
-
-	p = strlist;
-	while (*p) {
-		*p = g_strstrip(*p);
-		p++;
-	}
-
-	return strlist;
-}
 
 // Service dummies 
 
@@ -1261,14 +1231,46 @@ void g_dir_close (GDir *dir)
 	g_free(dir);
 }
 
+static int fd_idx = 0;
+
+int g_open(const gchar* filename, int flags, int mode)
+{
+	g_assert(filename);
+
+	return ++fd_idx;
+}
+
+gboolean g_close(gint fd, GError** error)
+{
+	g_assert_cmpint(fd, ==, fd_idx);
+	return TRUE;
+}
+
 gboolean g_file_test(const gchar *filename, GFileTest test)
 {
 	if (g_str_has_suffix(filename, "firewall.d/")) {
+		if (test == G_FILE_TEST_IS_DIR) {
+			if (global_config_type & CONFIG_ALL ||
+					global_config_type & CONFIG_OK ||
+					global_config_type & CONFIG_MIXED) {
+				DBG("dir %s", filename);
+				return TRUE;
+			} else {
+				DBG("not dir %s", filename);
+				return FALSE;
+			}
+		} else if (test == G_FILE_TEST_IS_REGULAR) {
+			DBG("file %s", filename);
+			return FALSE;
+		} else if (test == G_FILE_TEST_EXISTS) {
+			/*if (global_config_type & CONFIG_ALL ||
+					global_config_type & CONFIG_OK ||
+					global_config_type & CONFIG_MIXED) {
+				DBG("exists %s", filename);
+				return TRUE;
+			}*/
 
-		if (global_config_type & CONFIG_ALL) {
-			DBG("dir %s", filename);
-			return TRUE;
-		} else {
+			DBG("not exist %s", filename);
 			return FALSE;
 		}
 	}
@@ -1282,7 +1284,7 @@ gboolean g_file_test(const gchar *filename, GFileTest test)
 		DBG("main config");
 		return TRUE;
 	}
-	
+
 	if (g_str_has_suffix(filename, "_tables_names")) {
 		DBG("iptables names file");
 		return TRUE;
@@ -1360,6 +1362,201 @@ bool connman_device_has_status_changed_to(struct connman_device *device,
 {
 	return true;
 }
+
+int __connman_ipconfig_ipv6_set_privacy(struct connman_ipconfig *ipconfig,
+		const char *value) {
+	return 0;
+}
+
+void __connman_service_auto_connect(enum connman_service_connect_reason reason) {
+	return;
+}
+
+int __connman_service_connect(struct connman_service *service,
+		enum connman_service_connect_reason reason) {
+	return 0;
+}
+
+int __connman_service_disconnect(struct connman_service *service) {
+	return 0;
+}
+
+struct connman_ipconfig *__connman_service_get_ip6config(
+		struct connman_service *service) {
+	return NULL;
+}
+
+struct connman_network *__connman_service_get_network(struct connman_service *service) {
+	return NULL;
+}
+
+int __connman_service_load_modifiable(struct connman_service *service) {
+	return 0;
+}
+
+void __connman_service_mark_dirty() {
+	return;
+}
+
+int __connman_service_nameserver_append(struct connman_service *service,
+		const char *nameserver, bool is_auto) {
+	return 0;
+}
+
+void __connman_service_nameserver_clear(struct connman_service *service) {
+	return;
+}
+
+int __connman_service_provision_changed(const char *ident) {
+	return 0;
+}
+
+void __connman_service_remove_from_network(struct connman_network *network) {
+	return;
+}
+
+int __connman_service_reset_ipconfig(struct connman_service *service,
+		enum connman_ipconfig_type type, DBusMessageIter *array,
+		enum connman_service_state *new_state) {
+	return 0;
+}
+
+void __connman_service_set_config(struct connman_service *service,
+		const char *file_id, const char *section) {
+	return;
+}
+
+void __connman_service_set_domainname(struct connman_service *service,
+		const char *domainname) {
+	return;
+}
+
+int __connman_service_set_favorite_delayed(struct connman_service *service,
+		bool favorite,
+		bool delay_ordering) {
+	return 0;
+}
+
+void __connman_service_set_hidden_data(struct connman_service *service,
+		gpointer user_data) {
+	return;
+}
+
+int __connman_service_set_ignore(struct connman_service *service,
+		bool ignore) {
+	return 0;
+}
+
+int __connman_service_set_immutable(struct connman_service *service,
+		bool immutable) {
+	return 0;
+}
+
+void __connman_service_set_search_domains(struct connman_service *service,
+		char **domains) {
+	return;
+}
+
+void __connman_service_set_string(struct connman_service *service,
+		const char *key, const char *value) {
+	return;
+}
+
+void __connman_service_set_timeservers(struct connman_service *service,
+		char **timeservers) {
+	return;
+}
+
+enum connman_service_security __connman_service_string2security(const char *str) {
+	return 0;
+}
+
+GKeyFile *__connman_storage_load_config(const char *ident) {
+	return NULL;
+}
+
+int __connman_util_get_random(uint64_t *val) {
+	return 0;
+}
+
+struct connman_ipaddress *connman_ipaddress_alloc(int family) {
+	return NULL;
+}
+
+void connman_ipaddress_free(struct connman_ipaddress *ipaddress) {
+	return;
+}
+
+int connman_ipaddress_set_ipv4(struct connman_ipaddress *ipaddress,
+		const char *address, const char *netmask,
+		const char *gateway) {
+	return 0;
+}
+
+int connman_ipaddress_set_ipv6(struct connman_ipaddress *ipaddress,
+		const char *address,
+		unsigned char prefix_length,
+		const char *gateway) {
+	return 0;
+}
+
+const void *connman_network_get_blob(struct connman_network *network,
+		const char *key, unsigned int *size) {
+	return NULL;
+}
+
+struct connman_device *connman_network_get_device(struct connman_network *network) {
+	return NULL;
+}
+
+const char *connman_network_get_identifier(struct connman_network *network) {
+	return NULL;
+}
+
+const char *connman_network_get_string(struct connman_network *network,
+		const char *key) {
+	return NULL;
+}
+
+int connman_network_set_ipaddress(struct connman_network *network,
+		struct connman_ipaddress *ipaddress) {
+	return 0;
+}
+
+void connman_network_set_ipv4_method(struct connman_network *network,
+		enum connman_ipconfig_method method) {
+	return;
+}
+
+void connman_network_set_ipv6_method(struct connman_network *network,
+		enum connman_ipconfig_method method) {
+	return;
+}
+
+const char *connman_storage_dir(void) {
+	return NULL;
+}
+
+const char *connman_storage_user_dir(void) {
+	return NULL;
+}
+
+int __connman_device_request_scan(enum connman_service_type type) {
+	return 0;
+}
+
+bool __connman_storage_remove_service(const char *service_id) {
+	return true;
+}
+
+bool __connman_service_remove(struct connman_service *service) {
+	return true;
+}
+
+void __connman_service_set_hidden(struct connman_service *service) {
+	return;
+}
+
 
 // End of dummies
 
