@@ -869,17 +869,22 @@ gboolean g_dbus_proxy_method_call(GDBusProxy *proxy, const char *method,
 		return g_dbus_send_message(client->dbus_conn, msg);
 
 	data = g_try_new0(struct method_call_data, 1);
-	if (data == NULL)
+	if (data == NULL) {
+		dbus_message_unref(msg);
 		return FALSE;
+	}
 
 	data->function = function;
 	data->user_data = user_data;
 	data->destroy = destroy;
 
-
 	if (g_dbus_send_message_with_reply(client->dbus_conn, msg,
 					&call, METHOD_CALL_TIMEOUT) == FALSE) {
 		dbus_message_unref(msg);
+
+		if (data->destroy)
+			data->destroy(data->user_data);
+
 		g_free(data);
 		return FALSE;
 	}
