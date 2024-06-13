@@ -687,6 +687,10 @@ const char *__connman_technology_get_tethering_ident(
 					struct connman_technology *tech);
 enum connman_service_type __connman_technology_get_type(
 					struct connman_technology *tech);
+void __connman_technology_tethering_lease_changed(
+					struct connman_technology *tech,
+					GList *leases,
+					connman_dbus_append_cb_t append_leases);
 
 #include <connman/device.h>
 
@@ -772,7 +776,7 @@ int __connman_tethering_init(void);
 void __connman_tethering_cleanup(void);
 
 const char *__connman_tethering_get_bridge(void);
-int __connman_tethering_set_enabled(void);
+int __connman_tethering_set_enabled(struct connman_technology *tech);
 void __connman_tethering_set_disabled(void);
 
 int __connman_private_network_request(DBusMessage *msg, const char *owner);

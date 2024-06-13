@@ -244,7 +244,7 @@ int connman_technology_tethering_notify(struct connman_technology *technology,
 		return -EALREADY;
 
 	if (enabled) {
-		err = __connman_tethering_set_enabled();
+		err = __connman_tethering_set_enabled(technology);
 		if (err < 0)
 			return err;
 	} else
@@ -2332,6 +2332,21 @@ int __connman_technology_remove_rfkill(unsigned int index,
 	technology_put(technology);
 
 	return 0;
+}
+
+void __connman_technology_tethering_lease_changed(
+					struct connman_technology *tech,
+					GList *leases,
+					connman_dbus_append_cb_t append_leases)
+{
+	DBG("leases %p count %d", leases, g_list_length(leases));
+
+	if (!tech || !leases || !append_leases)
+		return;
+
+	connman_dbus_property_changed_dict(tech->path,
+				CONNMAN_TECHNOLOGY_INTERFACE, "TetheringLeases",
+				append_leases, leases);
 }
 
 int __connman_technology_init(void)
