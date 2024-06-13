@@ -66,6 +66,8 @@ struct _GDHCPServer {
 	GHashTable *option_hash; /* Options send to client */
 	GDHCPSaveLeaseFunc save_lease_func;
 	GDHCPLeaseAddedCb lease_added_cb;
+	GDHCPLeaseChangedCb lease_changed_cb;
+	void *lease_changed_data;
 	GDHCPDebugFunc debug_func;
 	gpointer debug_data;
 };
@@ -125,6 +127,34 @@ static struct dhcp_lease *find_lease_by_mac(GDHCPServer *dhcp_server,
 	return NULL;
 }
 
+static GList *make_lease_list(GList *lease_list)
+{
+	GList *leases = NULL;
+	GList *iter;
+	GDHCPLease *copy_lease;
+
+	for (iter = lease_list; iter; iter = iter->next) {
+		struct dhcp_lease *lease = iter->data;
+		struct in_addr addr = { 0 };
+		char ip[INET_ADDRSTRLEN] = { 0 };
+
+		if (!lease)
+			continue;
+
+		addr.s_addr = htonl(lease->lease_nip);
+		if (!inet_ntop(AF_INET, &addr, ip, INET_ADDRSTRLEN))
+			continue;
+
+		copy_lease = g_malloc0(sizeof(GDHCPLease));
+		copy_lease->mac = g_strdup((char*)lease->lease_mac);
+		copy_lease->ip = g_strdup(ip);
+
+		leases = g_list_append(leases, copy_lease);
+	}
+
+	return leases;
+}
+
 static void remove_lease(GDHCPServer *dhcp_server, struct dhcp_lease *lease)
 {
 	dhcp_server->lease_list =
@@ -133,6 +163,11 @@ static void remove_lease(GDHCPServer *dhcp_server, struct dhcp_lease *lease)
 	g_hash_table_remove(dhcp_server->nip_lease_hash,
 				GINT_TO_POINTER((int) lease->lease_nip));
 	g_free(lease);
+
+	if (dhcp_server->lease_changed_cb)
+		dhcp_server->lease_changed_cb(
+				make_lease_list(dhcp_server->lease_list),
+				dhcp_server->lease_changed_data);
 }
 
 /* Clear the old lease and create the new one */
@@ -231,6 +266,11 @@ static struct dhcp_lease *add_lease(GDHCPServer *dhcp_server, uint32_t expire,
 
 	g_hash_table_insert(dhcp_server->nip_lease_hash,
 				GINT_TO_POINTER((int) lease->lease_nip), lease);
+
+	if (dhcp_server->lease_changed_cb)
+		dhcp_server->lease_changed_cb(
+				make_lease_list(dhcp_server->lease_list),
+				dhcp_server->lease_changed_data);
 
 	return lease;
 }
@@ -630,10 +670,11 @@ static void send_ACK(GDHCPServer *dhcp_server,
 
 	send_packet_to_client(dhcp_server, &packet);
 
-	add_lease(dhcp_server, 0, packet.chaddr, packet.yiaddr);
-
-	if (dhcp_server->lease_added_cb)
-		dhcp_server->lease_added_cb(packet.chaddr, packet.yiaddr);
+	if (add_lease(dhcp_server, 0, packet.chaddr, packet.yiaddr)) {
+		if (dhcp_server->lease_added_cb)
+			dhcp_server->lease_added_cb(packet.chaddr,
+								packet.yiaddr);
+	}
 }
 
 static void send_NAK(GDHCPServer *dhcp_server,
@@ -846,6 +887,45 @@ void g_dhcp_server_set_lease_added_cb(GDHCPServer *dhcp_server,
 		return;
 
 	dhcp_server->lease_added_cb = cb;
+}
+
+void g_dhcp_server_set_lease_changed_cb(GDHCPServer *dhcp_server,
+							GDHCPLeaseChangedCb cb,
+							void *data)
+{
+	if (!dhcp_server)
+		return;
+
+	dhcp_server->lease_changed_cb = cb;
+	dhcp_server->lease_changed_data = data;
+}
+
+void lease_free(gpointer data)
+{
+	GDHCPLease *lease = data;
+
+	if (!lease)
+		return;
+
+	g_free(lease->mac);
+	g_free(lease->ip);
+	g_free(lease);
+}
+
+void g_dhcp_server_free_lease_list(GList *leases)
+{
+	if (!leases)
+		return;
+
+	g_list_free_full(leases, lease_free);
+}
+
+GList *g_dhcp_server_get_lease_list(GDHCPServer *dhcp_server)
+{
+	if (!dhcp_server)
+		return NULL;
+
+	return make_lease_list(dhcp_server->lease_list);
 }
 
 GDHCPServer *g_dhcp_server_ref(GDHCPServer *dhcp_server)

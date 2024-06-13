@@ -214,6 +214,8 @@ typedef void (*GDHCPSaveLeaseFunc) (unsigned char *mac,
 
 typedef void (*GDHCPLeaseAddedCb) (unsigned char *mac, uint32_t ip);
 
+typedef void (*GDHCPLeaseChangedCb) (GList *lease_list, void *data);
+
 struct _GDHCPServer;
 
 typedef struct _GDHCPServer GDHCPServer;
@@ -238,6 +240,17 @@ void g_dhcp_server_set_save_lease(GDHCPServer *dhcp_server,
 				GDHCPSaveLeaseFunc func, gpointer user_data);
 void g_dhcp_server_set_lease_added_cb(GDHCPServer *dhcp_server,
 							GDHCPLeaseAddedCb cb);
+void g_dhcp_server_set_lease_changed_cb(GDHCPServer *dhcp_server,
+							GDHCPLeaseChangedCb cb,
+							void *data);
+
+typedef struct {
+	char *mac;
+	char *ip;
+} GDHCPLease;
+
+GList *g_dhcp_server_get_lease_list(GDHCPServer *dhcp_server);
+void g_dhcp_server_free_lease_list(GList *leases);
 
 #ifdef __cplusplus
 }
