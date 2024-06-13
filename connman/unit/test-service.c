@@ -64,7 +64,10 @@ int __connman_session_create(DBusMessage *msg) { return 0; }
 const char *connman_setting_get_string(const char *key) { return NULL; }
 const char *__connman_tethering_get_bridge(void) { return NULL; }
 void __connman_tethering_set_disabled(void) { return; }
-int __connman_tethering_set_enabled(void) { return 0; }
+int __connman_tethering_set_enabled(struct connman_technology *tech)
+{
+	return 0;
+}
 int __connman_private_network_release(const char *path) { return 0; }
 int __connman_private_network_request(DBusMessage *msg, const char *owner)
 {
