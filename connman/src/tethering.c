@@ -132,10 +132,53 @@ static void dhcp_server_error(GDHCPServerError error)
 	}
 }
 
+static void append_leases(DBusMessageIter *iter, void *user_data)
+{
+	GList *leases = user_data;
+	GList *list_iter;
+	DBusMessageIter container;
+	const char *var_sig = DBUS_TYPE_STRING_AS_STRING
+				DBUS_TYPE_STRING_AS_STRING;
+
+	DBG("");
+
+	if (!leases)
+		return;
+
+	for (list_iter = leases; list_iter->next; list_iter = list_iter->next) {
+		GDHCPLease *lease = list_iter->data;
+
+		DBG("mac %s ip %s", lease->mac, lease->ip);
+
+		dbus_message_iter_open_container(iter, DBUS_TYPE_VARIANT,
+							var_sig, &container);
+		connman_dbus_dict_append_basic(&container, "MAC",
+							DBUS_TYPE_STRING,
+							lease->mac);
+		connman_dbus_dict_append_basic(&container, "IP",
+							DBUS_TYPE_STRING,
+							lease->ip);
+		dbus_message_iter_close_container(iter, &container);
+	}
+}
+
+void lease_changed_cb(GList *lease_list, void *data)
+{
+	struct connman_technology *tech = data;
+
+	DBG("");
+
+	__connman_technology_tethering_lease_changed(tech, lease_list,
+						append_leases);
+
+	g_dhcp_server_free_lease_list(lease_list);
+}
+
 static GDHCPServer *dhcp_server_start(const char *bridge,
 				const char *router, const char *subnet,
 				const char *start_ip, const char *end_ip,
-				unsigned int lease_time, const char *dns)
+				unsigned int lease_time, const char *dns,
+				struct connman_technology *tech)
 {
 	GDHCPServerError error;
 	GDHCPServer *dhcp_server;
@@ -160,6 +203,7 @@ static GDHCPServer *dhcp_server_start(const char *bridge,
 	g_dhcp_server_set_option(dhcp_server, G_DHCP_ROUTER, router);
 	g_dhcp_server_set_option(dhcp_server, G_DHCP_DNS_SERVER, dns);
 	g_dhcp_server_set_ip_range(dhcp_server, start_ip, end_ip);
+	g_dhcp_server_set_lease_changed_cb(dhcp_server, lease_changed_cb, tech);
 
 	g_dhcp_server_start(dhcp_server);
 
@@ -176,12 +220,14 @@ static void dhcp_server_stop(GDHCPServer *server)
 
 static void tethering_restart(struct connman_ippool *pool, void *user_data)
 {
+	struct connman_technology *tech = user_data;
+
 	DBG("pool %p", pool);
 	__connman_tethering_set_disabled();
-	__connman_tethering_set_enabled();
+	__connman_tethering_set_enabled(tech);
 }
 
-int __connman_tethering_set_enabled(void)
+int __connman_tethering_set_enabled(struct connman_technology *tech)
 {
 	int index;
 	int err;
@@ -207,7 +253,7 @@ int __connman_tethering_set_enabled(void)
 
 	index = connman_inet_ifindex(BRIDGE_NAME);
 	dhcp_ippool = __connman_ippool_create(index, 2, 252,
-						tethering_restart, NULL);
+						tethering_restart, tech);
 	if (!dhcp_ippool) {
 		connman_error("Fail to create IP pool");
 		__connman_bridge_remove(BRIDGE_NAME);
@@ -258,7 +304,7 @@ int __connman_tethering_set_enabled(void)
 	tethering_dhcp_server = dhcp_server_start(BRIDGE_NAME,
 						gateway, subnet_mask,
 						start_ip, end_ip,
-						24 * 3600, dns);
+						24 * 3600, dns, tech);
 	if (!tethering_dhcp_server) {
 		__connman_bridge_disable(BRIDGE_NAME);
 		__connman_ippool_unref(dhcp_ippool);
