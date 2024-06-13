@@ -138,6 +138,13 @@ void connman_dbus_property_append_basic(DBusMessageIter *iter,
 	dbus_message_iter_close_container(iter, &value);
 }
 
+dbus_bool_t connman_dbus_property_changed_dict(const char *path,
+				const char *interface, const char *key,
+			connman_dbus_append_cb_t function, void *user_data)
+{
+	return true;
+}
+
 void dbus_connection_unref(DBusConnection *connection)
 {
 	return;
@@ -694,7 +701,7 @@ const char *__connman_tethering_get_bridge(void)
 	return "bridge";
 }
 
-int __connman_tethering_set_enabled(void)
+int __connman_tethering_set_enabled(struct connman_technology *tech)
 {
 	return 0;
 }
