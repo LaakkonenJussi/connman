@@ -63,6 +63,7 @@ network connection is established before reaching network-online.target.
 
 %package devel
 Summary:    Development files for Connection Manager
+BuildRequires:  pkgconfig(dbus-1) >= 1.4
 
 %description devel
 connman-devel contains development files for use with connman.
