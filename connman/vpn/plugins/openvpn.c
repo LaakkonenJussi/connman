@@ -123,7 +123,10 @@ struct ov_private_data {
 
 static void ov_connect_done(struct ov_private_data *data, int err)
 {
-	if (data && data->cb) {
+	if (!data)
+		return;
+
+	if (data->cb) {
 		vpn_provider_connect_cb_t cb = data->cb;
 		void *user_data = data->user_data;
 
