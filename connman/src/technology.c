@@ -1012,7 +1012,10 @@ static gboolean enable_delayed(gpointer user_data)
 
 	DBG("");
 
-	if (!technology || technology->enabled)
+	if (!technology)
+		return G_SOURCE_REMOVE;
+
+	if (technology->enabled)
 		goto out;
 
 	err = technology_enable(technology);
