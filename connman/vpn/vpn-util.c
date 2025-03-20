@@ -221,6 +221,14 @@ out:
 	return err;
 }
 
+bool vpn_util_resolv_add_nameserver(GResolv *resolv, const char *address,
+					uint16_t port, unsigned long flags)
+{
+	DBG("dns %s:%u", address, port);
+
+	return g_resolv_add_nameserver(resolv, address, port, flags);
+}
+
 unsigned int vpn_util_resolve_hostname(GResolv *resolv,
 				const char *hostname, GResolvResultFunc func,
 				gpointer user_data)

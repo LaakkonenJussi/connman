@@ -166,6 +166,8 @@ int vpn_util_create_path(const char *path, uid_t uid, gid_t grp, int mode);
 
 #include <gweb/gresolv.h>
 
+bool vpn_util_resolv_add_nameserver(GResolv *resolv, const char *address,
+					uint16_t port, unsigned long flags);
 unsigned int vpn_util_resolve_hostname(GResolv *resolv,
 				const char *hostname, GResolvResultFunc func,
 				gpointer user_data);
