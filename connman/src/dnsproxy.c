@@ -842,6 +842,22 @@ static gboolean try_remove_cache(gpointer user_data)
 	return FALSE;
 }
 
+static void cache_remove_timer(void)
+{
+	/*
+	 * We do not remove cache right away but delay it few seconds.
+	 * The idea is that when IPv6 DNS server is added via RDNSS, it has a
+	 * lifetime. When the lifetime expires we decrease the refcount so it
+	 * is possible that the cache is then removed. Because a new DNS server
+	 * is usually created almost immediately we would then loose the cache
+	 * without any good reason. The small delay allows the new RDNSS to
+	 * create a new DNS server instance and the refcount does not go to 0.
+	 */
+
+	if (cache && !cache_timer)
+		cache_timer = g_timeout_add_seconds(3, try_remove_cache, NULL);
+}
+
 static void create_cache(void)
 {
 	if (__sync_fetch_and_add(&cache_refcount, 1) == 0) {
@@ -1682,6 +1698,36 @@ static int ns_try_resolv_from_cache(
 	}
 
 	return -EINVAL;
+}
+
+static int ns_try_send_from_cache(struct request_data *req, unsigned char *buf,
+				uint16_t qtype, int socket, int protocol)
+{
+	struct cache_entry *entry;
+
+	entry = cache_check(buf, &qtype, protocol);
+	if (entry) {
+		struct cache_data *data;
+
+		data = qtype == DNS_TYPE_A ? entry->ipv4 : entry->ipv6;
+
+		if (data) {
+			int ttl_left = data->valid_until - time(NULL);
+			entry->hits++;
+
+			send_cached_response(socket, data->data,
+					data->data_len, NULL, 0, protocol,
+					req->srcid, data->answers, ttl_left);
+
+			g_free(req);
+			return 1;
+		} else {
+			DBG("data missing, ignoring cache for this query");
+			return 0;
+		}
+	}
+
+	return -ENOENT;
 }
 
 static int ns_resolv(struct server_data *server, struct request_data *req,
