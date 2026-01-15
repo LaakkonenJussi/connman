@@ -275,7 +275,6 @@ static int init_firewall_session(struct connman_session *session)
 	struct firewall_context *fw;
 	int err;
 	struct connman_ipconfig *ipconfig = NULL;
-	const char *addr = NULL;
 
 	if (session->policy_config->id_type == CONNMAN_SESSION_ID_TYPE_UNKNOWN &&
 			!session->info->config.source_ip_rule)
