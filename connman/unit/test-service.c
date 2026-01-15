@@ -2092,6 +2092,7 @@ struct connman_network_driver driver = {
 	.connect = wlan_connect,
 	.disconnect = wlan_disconnect,
 	.autoconnect_changed = NULL,
+	.set_autoconnect = NULL,
 };
 
 static struct connman_service *test_setup_service(void)
