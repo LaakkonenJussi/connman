@@ -10179,8 +10179,13 @@ bool __connman_service_create_from_network(struct connman_network *network)
 	service_register(service);
 	service_schedule_added(service);
 
+	/*
+	 * We have dropped favorite as requirement to autoconnect in
+	 * f64f1633bd76c63b445cbb2580b8fcf2e65e09e4 - keep it as such. Leave
+	 * the upstream change here just in case as a reminder.
+	 */
 	connman_network_set_autoconnect(network,
-				service->favorite && service->autoconnect);
+				/*service->favorite && */service->autoconnect);
 
 	if (service->favorite || service->autoconnect) {
 		device = connman_network_get_device(service->network);
