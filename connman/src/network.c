@@ -2390,7 +2390,7 @@ int connman_network_set_wifi_channel(struct connman_network *network,
 int connman_network_set_autoconnect(struct connman_network *network,
 				bool autoconnect)
 {
-	if (!network->driver || !network->driver->set_autoconnect)
+	if (!network || !network->driver || !network->driver->set_autoconnect)
 		return 0;
 	return network->driver->set_autoconnect(network, autoconnect);
 }
