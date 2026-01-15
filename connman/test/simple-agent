@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-from gi.repository import GObject as gobject
+import gobject
 
 import dbus
 import dbus.service

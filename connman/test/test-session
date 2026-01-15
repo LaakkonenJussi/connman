@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
 import sys
-from gi.repository import GObject as gobject
+import gobject
 import string
 
 import dbus
