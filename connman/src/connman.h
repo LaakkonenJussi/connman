@@ -892,6 +892,8 @@ int __connman_service_set_mdns(struct connman_service *service,
 
 void __connman_service_set_string(struct connman_service *service,
 					const char *key, const char *value);
+void __connman_service_set_boolean(struct connman_service *service,
+					const char *key, bool value);
 int __connman_service_online_check(struct connman_service *service,
 					enum connman_ipconfig_type type,
 					bool success);

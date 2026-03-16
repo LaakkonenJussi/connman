@@ -77,6 +77,8 @@
 #define PROP_PRIVATE_KEY_FILE           "PrivateKeyFile"
 #define PROP_PRIVATE_KEY_PASSPHRASE     "PrivateKeyPassphrase"
 #define PROP_ANONYMOUS_IDENTITY         "AnonymousIdentity"
+#define PROP_WPA3_SAE_PWE		"WPA3SAEPWE"
+#define PROP_WPA3_SAE_CHECK_MFP		"WPA3SAECheckMFP"
 
 /* Get/set properties */
 #define GET_ACCESS_ACCESS               CONNMAN_ACCESS_ALLOW
@@ -107,6 +109,10 @@
 	                                CONNMAN_ACCESS_DENY
 #define GET_ANONYMOUS_IDENTITY_ACCESS   CONNMAN_ACCESS_ALLOW
 #define SET_ANONYMOUS_IDENTITY_ACCESS   CONNMAN_ACCESS_DENY
+#define GET_WPA3_SAE_PWE_ACCESS		CONNMAN_ACCESS_ALLOW
+#define SET_WPA3_SAE_PWE_ACCESS		CONNMAN_ACCESS_DENY
+#define GET_WPA3_SAE_CHECK_MFP_ACCESS	CONNMAN_ACCESS_ALLOW
+#define SET_WPA3_SAE_CHECK_MFP_ACCESS	CONNMAN_ACCESS_DENY
 
 /* Set properties (Get is always ACCESS_ALLOW for these) */
 #define SET_PROXYCONFIG_ACCESS          CONNMAN_ACCESS_DENY
@@ -135,6 +141,8 @@
 #define ACCESS_PROP_PRIVATE_KEY_PASSPHRASE \
 					0x00002000
 #define ACCESS_PROP_ANONYMOUS_IDENTITY  0x00004000
+#define ACCESS_PROP_WPA3_SAE_PWE	0x00008000
+#define ACCESS_PROP_WPA3_CHECK_MFP	0x00010000
 
 #define ACCESS_METHOD_CLEAR_PROPERTY    0x00000001
 #define ACCESS_METHOD_CONNECT           0x00000002
@@ -233,6 +241,16 @@ static const struct connman_service_property_access {
 		PROP_ANONYMOUS_IDENTITY,
 		GET_ANONYMOUS_IDENTITY_ACCESS,
 		SET_ANONYMOUS_IDENTITY_ACCESS
+	},{
+		ACCESS_PROP_WPA3_SAE_PWE,
+		PROP_WPA3_SAE_PWE,
+		GET_WPA3_SAE_PWE_ACCESS,
+		SET_WPA3_SAE_PWE_ACCESS
+	},{
+		ACCESS_PROP_WPA3_CHECK_MFP,
+		PROP_WPA3_SAE_CHECK_MFP,
+		GET_WPA3_SAE_CHECK_MFP_ACCESS,
+		SET_WPA3_SAE_CHECK_MFP_ACCESS
 	}
 };
 
@@ -387,6 +405,8 @@ struct connman_service {
 	char *access;
 	gboolean disabled;
 	bool removing;
+	char *wpa3_sae_pwe;
+	bool wpa3_sae_check_mfp;
 };
 
 static const char *service_get_access(struct connman_service *service);
@@ -972,6 +992,11 @@ static void service_apply(struct connman_service *service, GKeyFile *keyfile)
 					&service->private_key_passphrase);
 	get_config_string(keyfile, service->identifier, PROP_PHASE2,
 					&service->phase2);
+	get_config_string(keyfile, service->identifier, PROP_WPA3_SAE_PWE,
+					&service->wpa3_sae_pwe);
+	service->wpa3_sae_check_mfp = g_key_file_get_boolean(keyfile,
+					service->identifier,
+					PROP_WPA3_SAE_CHECK_MFP, NULL);
 
 	str = g_key_file_get_string(keyfile,
 				service->identifier, PROP_ACCESS, NULL);
@@ -1171,6 +1196,10 @@ static int service_save(struct connman_service *service)
 			service->private_key_passphrase);
 		set_config_string(keyfile, service->identifier,
 			PROP_PHASE2, service->phase2);
+		set_config_string(keyfile, service->identifier,
+			PROP_WPA3_SAE_PWE, service->wpa3_sae_pwe);
+		g_key_file_set_boolean(keyfile, service->identifier,
+			PROP_WPA3_SAE_CHECK_MFP, service->wpa3_sae_check_mfp);
 		/* fall through */
 
 	case CONNMAN_SERVICE_TYPE_GADGET:
@@ -2359,12 +2388,19 @@ static gboolean service_saved_value(struct connman_service *service)
 	return !service->new_service;
 }
 
+static gboolean service_sae_check_mfp_value(struct connman_service *service)
+{
+	return service->wpa3_sae_check_mfp;
+}
+
 static const struct connman_service_boolean_property service_autoconnect =
 	{ "AutoConnect", service_autoconnect_value };
 static const struct connman_service_boolean_property service_available =
 	{ PROP_AVAILABLE, is_available };
 static const struct connman_service_boolean_property service_saved =
 	{ PROP_SAVED, service_saved_value };
+static const struct connman_service_boolean_property service_sae_check_mfp =
+	{ PROP_WPA3_SAE_CHECK_MFP, service_sae_check_mfp_value };
 
 #define autoconnect_changed(s) service_boolean_changed(s, &service_autoconnect)
 
@@ -3395,6 +3431,29 @@ static void restricted_string_changed(struct connman_service *service,
 	}
 }
 
+static void restricted_boolean_changed(struct connman_service *service,
+			const char *name, bool bool_value,
+			enum connman_access default_get_access,
+			const struct connman_service_boolean_property *prop)
+{
+	if (can_get_property(service, name, NULL, default_get_access)) {
+		/* Access is wide open, send the value */
+		service_boolean_changed(service, prop);
+	} else if (allow_property_changed(service)) {
+		DBusMessage *signal;
+		DBusMessageIter it;
+		dbus_bool_t value = bool_value;
+
+		/* We can only broadcast the name */
+		signal = dbus_message_new_signal(service->path,
+					CONNMAN_SERVICE_INTERFACE,
+					"RestrictedPropertyChanged");
+		dbus_message_iter_init_append(signal, &it);
+		dbus_message_iter_append_basic(&it, DBUS_TYPE_BOOLEAN, &value);
+		g_dbus_send_message(connection, signal);
+	}
+}
+
 static void append_restricted_string(DBusMessageIter *dict,
 		struct connman_service *service, const char *name,
 		const char *str, enum connman_access default_access)
@@ -3408,6 +3467,20 @@ static void append_restricted_string(DBusMessageIter *dict,
 		str = "";
 
 	connman_dbus_dict_append_basic(dict, name, DBUS_TYPE_STRING, &str);
+}
+
+static void append_restricted_boolean(DBusMessageIter *dict,
+		struct connman_service *service, const char *name,
+		bool bool_value, enum connman_access default_access)
+{
+	const char *sender = g_dbus_get_current_sender();
+	dbus_bool_t value = bool_value;
+
+	if (!can_get_property(service, name, sender, default_access))
+		return;
+
+
+	connman_dbus_dict_append_basic(dict, name, DBUS_TYPE_BOOLEAN, &value);
 }
 
 static DBusMessage *reply_string(DBusMessage *msg, const char *str)
@@ -3435,6 +3508,35 @@ static DBusMessage *check_and_reply_string(DBusMessage *msg,
 	if (can_get_property(service, name, sender, default_access)) {
 		DBG("sending %s to %s", name, sender);
 		return reply_string(msg, value);
+	} else {
+		DBG("%s has no access to %s", sender, name);
+		return __connman_error_permission_denied(msg);
+	}
+}
+
+static DBusMessage *reply_boolean(DBusMessage *msg, bool bool_value)
+{
+	DBusMessage *reply = dbus_message_new_method_return(msg);
+	DBusMessageIter iter, value;
+	dbus_bool_t dbus_value = bool_value;
+
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_open_container(&iter, DBUS_TYPE_VARIANT,
+					DBUS_TYPE_BOOLEAN_AS_STRING, &value);
+	dbus_message_iter_append_basic(&value, DBUS_TYPE_BOOLEAN, &dbus_value);
+	dbus_message_iter_close_container(&iter, &value);
+	return reply;
+}
+
+static DBusMessage *check_and_reply_boolean(DBusMessage *msg,
+		struct connman_service *service, const char *name,
+		bool bool_value, enum connman_access default_access)
+{
+	const char *sender = dbus_message_get_sender(msg);
+
+	if (can_get_property(service, name, sender, default_access)) {
+		DBG("sending %s to %s", name, sender);
+		return reply_boolean(msg, bool_value);
 	} else {
 		DBG("%s has no access to %s", sender, name);
 		return __connman_error_permission_denied(msg);
@@ -3508,6 +3610,14 @@ static DBusMessage *get_property(DBusConnection *conn,
 		return check_and_reply_string(msg, service, name,
 					service->anonymous_identity,
 					GET_ANONYMOUS_IDENTITY_ACCESS);
+	} else if (!g_strcmp0(name, PROP_WPA3_SAE_PWE)) {
+		return check_and_reply_string(msg, service, name,
+					service->wpa3_sae_pwe,
+					GET_WPA3_SAE_PWE_ACCESS);
+	} else if (!g_strcmp0(name, PROP_WPA3_SAE_CHECK_MFP)) {
+		return check_and_reply_boolean(msg, service, name,
+					service->wpa3_sae_check_mfp,
+					GET_WPA3_SAE_CHECK_MFP_ACCESS);
 	}
 
 	DBG("%s requested %s - why?", dbus_message_get_sender(msg), name);
@@ -3626,6 +3736,15 @@ static void append_properties(DBusMessageIter *dict, dbus_bool_t limited,
 				PROP_ANONYMOUS_IDENTITY,
 				service->anonymous_identity,
 				GET_ANONYMOUS_IDENTITY_ACCESS);
+		append_restricted_string(dict, service,
+				PROP_WPA3_SAE_PWE,
+				service->wpa3_sae_pwe,
+				GET_WPA3_SAE_PWE_ACCESS);
+		append_restricted_boolean(dict, service,
+				PROP_WPA3_SAE_CHECK_MFP,
+				service->wpa3_sae_check_mfp,
+				GET_WPA3_SAE_CHECK_MFP_ACCESS);
+
 		break;
 	case CONNMAN_SERVICE_TYPE_ETHERNET:
 	case CONNMAN_SERVICE_TYPE_BLUETOOTH:
@@ -4450,6 +4569,28 @@ static gboolean set_prop_string(struct connman_service *service,
 	return TRUE;
 }
 
+static gboolean set_prop_boolean(struct connman_service *service,
+					const char *name,
+					bool stored,
+					bool value,
+					enum connman_access get_access)
+{
+	const struct connman_service_boolean_property *prop = NULL;
+
+	if (stored == value)
+		return FALSE;
+
+	if (!g_strcmp0(name, PROP_WPA3_SAE_CHECK_MFP))
+		prop = &service_sae_check_mfp;
+	
+	if (!prop)
+		return FALSE;
+
+	restricted_boolean_changed(service, name, value, get_access, prop);
+
+	return TRUE;
+}
+
 static gboolean set_phase2(struct connman_service *service,
 							const char *phase2)
 {
@@ -4527,6 +4668,24 @@ static gboolean set_anonymous_identity(struct connman_service *service,
 				GET_ANONYMOUS_IDENTITY_ACCESS);
 }
 
+static gboolean set_wpa3_sae_pwe(struct connman_service *service,
+						const char *wpa3_sae_pwe)
+{
+	return set_prop_string(service, PROP_WPA3_SAE_PWE,
+				&service->wpa3_sae_pwe,
+				wpa3_sae_pwe,
+				GET_WPA3_SAE_PWE_ACCESS);
+}
+
+static gboolean set_wpa3_sae_check_mfp(struct connman_service *service,
+						bool wpa3_sae_check_mfp)
+{
+	return set_prop_boolean(service, PROP_WPA3_SAE_CHECK_MFP,
+				service->wpa3_sae_check_mfp,
+				wpa3_sae_check_mfp,
+				GET_WPA3_SAE_CHECK_MFP_ACCESS);
+}
+
 static DBusMessage *set_restricted_string(struct connman_service *service,
 		const char *name, DBusMessageIter *value, DBusMessage *msg,
 		gboolean (*set)(struct connman_service *, const char *),
@@ -4544,6 +4703,28 @@ static DBusMessage *set_restricted_string(struct connman_service *service,
 		return __connman_error_permission_denied(msg);
 
 	if (set(service, str))
+		service_save(service);
+
+	return g_dbus_create_reply(msg, DBUS_TYPE_INVALID);
+}
+
+static DBusMessage *set_restricted_boolean(struct connman_service *service,
+		const char *name, DBusMessageIter *value, DBusMessage *msg,
+		gboolean (*set)(struct connman_service *, bool),
+		enum connman_access default_set_access)
+{
+	/* Name has already been read from the iterator and checked */
+	dbus_bool_t bool_value;
+
+	if (dbus_message_iter_get_arg_type(value) != DBUS_TYPE_BOOLEAN)
+		return __connman_error_invalid_arguments(msg);
+
+	dbus_message_iter_get_basic(value, &bool_value);
+
+	if (!can_set_property(service, name, msg, default_set_access))
+		return __connman_error_permission_denied(msg);
+
+	if (set(service, bool_value))
 		service_save(service);
 
 	return g_dbus_create_reply(msg, DBUS_TYPE_INVALID);
@@ -5524,8 +5705,17 @@ static DBusMessage *set_property(DBusConnection *conn,
 		return set_restricted_string(service, name, &value, msg,
 						set_anonymous_identity,
 						SET_ANONYMOUS_IDENTITY_ACCESS);
-	} else
+	} else if (g_str_equal(name, PROP_WPA3_SAE_PWE)) {
+		return set_restricted_string(service, name, &value, msg,
+						set_wpa3_sae_pwe,
+						SET_WPA3_SAE_PWE_ACCESS);
+	} else if (g_str_equal(name, PROP_WPA3_SAE_CHECK_MFP)) {
+		return set_restricted_boolean(service, name, &value, msg,
+						set_wpa3_sae_check_mfp,
+						SET_WPA3_SAE_CHECK_MFP_ACCESS);
+	} else {
 		return __connman_error_invalid_property(msg);
+	}
 
 	return g_dbus_create_reply(msg, DBUS_TYPE_INVALID);
 }
@@ -7818,8 +8008,21 @@ void __connman_service_set_string(struct connman_service *service,
 	} else if (g_str_equal(key, PROP_PHASE2)) {
 		g_free(service->phase2);
 		service->phase2 = g_strdup(value);
-	} else if (g_str_equal(key, PROP_PASSPHRASE))
+	} else if (g_str_equal(key, PROP_PASSPHRASE)) {
 		__connman_service_set_passphrase(service, value);
+	} else if (g_str_equal(key, PROP_WPA3_SAE_PWE)) {
+		g_free(service->wpa3_sae_pwe);
+		service->wpa3_sae_pwe = g_strdup(value);
+	}
+}
+
+void __connman_service_set_boolean(struct connman_service *service,
+					const char *key, bool value)
+{
+	if (service->hidden)
+		return;
+	if (g_str_equal(key, PROP_WPA3_SAE_CHECK_MFP))
+		service->wpa3_sae_check_mfp = value;
 }
 
 void __connman_service_set_search_domains(struct connman_service *service,
