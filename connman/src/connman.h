@@ -853,6 +853,7 @@ void __connman_service_set_ipv6_for_connected(struct connman_service *vpn,
 bool __connman_service_create_from_network(struct connman_network *network);
 struct connman_service *__connman_service_create_from_provider(struct connman_provider *provider);
 bool __connman_service_index_is_default(int index);
+void __connman_service_update_network(struct connman_network *network);
 void __connman_service_update_from_network(struct connman_network *network);
 void __connman_service_remove_from_network(struct connman_network *network);
 void __connman_service_read_ip4config(struct connman_service *service);
@@ -892,6 +893,8 @@ int __connman_service_set_mdns(struct connman_service *service,
 
 void __connman_service_set_string(struct connman_service *service,
 					const char *key, const char *value);
+void __connman_service_set_boolean(struct connman_service *service,
+					const char *key, bool value);
 int __connman_service_online_check(struct connman_service *service,
 					enum connman_ipconfig_type type,
 					bool success);

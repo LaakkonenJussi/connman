@@ -77,6 +77,8 @@
 #define PROP_PRIVATE_KEY_FILE           "PrivateKeyFile"
 #define PROP_PRIVATE_KEY_PASSPHRASE     "PrivateKeyPassphrase"
 #define PROP_ANONYMOUS_IDENTITY         "AnonymousIdentity"
+#define PROP_WPA3_SAE_PWE		"WPA3SAEPWE"
+#define PROP_WPA3_SAE_CHECK_MFP		"WPA3SAECheckMFP"
 
 /* Get/set properties */
 #define GET_ACCESS_ACCESS               CONNMAN_ACCESS_ALLOW
@@ -387,6 +389,8 @@ struct connman_service {
 	char *access;
 	gboolean disabled;
 	bool removing;
+	char *wpa3_sae_pwe;
+	bool wpa3_sae_check_mfp;
 };
 
 static const char *service_get_access(struct connman_service *service);
@@ -1020,6 +1024,11 @@ static void service_apply(struct connman_service *service, GKeyFile *keyfile)
 					&service->private_key_passphrase);
 	get_config_string(keyfile, service->identifier, PROP_PHASE2,
 					&service->phase2);
+	get_config_string(keyfile, service->identifier, PROP_WPA3_SAE_PWE,
+					&service->wpa3_sae_pwe);
+	service->wpa3_sae_check_mfp = g_key_file_get_boolean(keyfile,
+						service->identifier,
+						PROP_WPA3_SAE_CHECK_MFP, NULL);
 
 	str = g_key_file_get_string(keyfile,
 				service->identifier, PROP_ACCESS, NULL);
@@ -1232,6 +1241,16 @@ static int service_save(struct connman_service *service)
 			service->private_key_passphrase);
 		set_config_string(keyfile, service->identifier,
 			PROP_PHASE2, service->phase2);
+		set_config_string(keyfile, service->identifier,
+			PROP_WPA3_SAE_PWE, service->wpa3_sae_pwe);
+		/* Save only when set, defaults to false */
+		if (service->wpa3_sae_check_mfp)
+			g_key_file_set_boolean(keyfile, service->identifier,
+						PROP_WPA3_SAE_CHECK_MFP,
+						service->wpa3_sae_check_mfp);
+		else
+			g_key_file_remove_key(keyfile, service->identifier,
+						PROP_WPA3_SAE_CHECK_MFP, NULL);
 		/* fall through */
 
 	case CONNMAN_SERVICE_TYPE_GADGET:
@@ -2420,12 +2439,19 @@ static gboolean service_saved_value(struct connman_service *service)
 	return !service->new_service;
 }
 
+static gboolean service_sae_check_mfp_value(struct connman_service *service)
+{
+	return service->wpa3_sae_check_mfp;
+}
+
 static const struct connman_service_boolean_property service_autoconnect =
 	{ "AutoConnect", service_autoconnect_value };
 static const struct connman_service_boolean_property service_available =
 	{ PROP_AVAILABLE, is_available };
 static const struct connman_service_boolean_property service_saved =
 	{ PROP_SAVED, service_saved_value };
+static const struct connman_service_boolean_property service_sae_check_mfp =
+	{ PROP_WPA3_SAE_CHECK_MFP, service_sae_check_mfp_value };
 
 #define autoconnect_changed(s) service_boolean_changed(s, &service_autoconnect)
 
@@ -2982,6 +3008,57 @@ static int set_mdns(struct connman_service *service,
 	}
 
 	return result;
+}
+
+static int set_wpa3_sae_check_mfp(struct connman_service *service,
+			bool enabled)
+{
+	if (service->wpa3_sae_check_mfp == enabled)
+		return -EALREADY;
+
+	service->wpa3_sae_check_mfp = enabled;
+	service_boolean_changed(service, &service_sae_check_mfp);
+
+	if (service->network)
+		connman_network_set_string(service->network, "WiFi.SAECheckMFP",
+				service->wpa3_sae_check_mfp ? "1" : "0");
+
+	return 0;
+}
+
+static void wpa3_sae_pwe_changed(struct connman_service *service)
+{
+	const char *str = service->wpa3_sae_pwe ? service->wpa3_sae_pwe : "";
+
+	if (!allow_property_changed(service))
+		return;
+
+	connman_dbus_property_changed_basic(service->path,
+			CONNMAN_SERVICE_INTERFACE, PROP_WPA3_SAE_PWE,
+						DBUS_TYPE_STRING, &str);
+}
+
+static int set_wpa3_sae_pwe(struct connman_service *service, const char *str)
+{
+	if (util_wpa3_sae_pwe_index(str) < 0 && *str)
+		return -EINVAL;
+
+	if (!g_strcmp0(service->wpa3_sae_pwe, str))
+		return -EALREADY;
+
+	g_free(service->wpa3_sae_pwe);
+	if (*str)
+		service->wpa3_sae_pwe = g_strdup(str);
+	else
+		service->wpa3_sae_pwe = NULL;
+
+	wpa3_sae_pwe_changed(service);
+
+	if (service->network)
+		connman_network_set_string(service->network, "WiFi.SAEPWE",
+					service->wpa3_sae_pwe);
+
+	return 0;
 }
 
 static void timeservers_configuration_changed(struct connman_service *service)
@@ -3687,6 +3764,16 @@ static void append_properties(DBusMessageIter *dict, dbus_bool_t limited,
 				PROP_ANONYMOUS_IDENTITY,
 				service->anonymous_identity,
 				GET_ANONYMOUS_IDENTITY_ACCESS);
+
+		if (service->wpa3_sae_pwe)
+			connman_dbus_dict_append_basic(dict,
+						PROP_WPA3_SAE_PWE,
+						DBUS_TYPE_STRING,
+						&service->wpa3_sae_pwe);
+		val = service->wpa3_sae_check_mfp;
+		connman_dbus_dict_append_basic(dict, PROP_WPA3_SAE_CHECK_MFP,
+				DBUS_TYPE_BOOLEAN, &val);
+
 		break;
 	case CONNMAN_SERVICE_TYPE_ETHERNET:
 	case CONNMAN_SERVICE_TYPE_BLUETOOTH:
@@ -5618,8 +5705,36 @@ static DBusMessage *set_property(DBusConnection *conn,
 		return set_restricted_string(service, name, &value, msg,
 						set_anonymous_identity,
 						SET_ANONYMOUS_IDENTITY_ACCESS);
-	} else
+	} else if (g_str_equal(name, PROP_WPA3_SAE_PWE)) {
+		const char *str = NULL;
+
+		if (service->immutable)
+			return __connman_error_not_supported(msg);
+
+		if (type != DBUS_TYPE_STRING)
+			return __connman_error_invalid_arguments(msg);
+
+		dbus_message_iter_get_basic(&value, &str);
+
+		if (!set_wpa3_sae_pwe(service, str))
+			service_save(service);
+
+	} else if (g_str_equal(name, PROP_WPA3_SAE_CHECK_MFP)) {
+		dbus_bool_t val;
+
+		if (service->immutable)
+			return __connman_error_not_supported(msg);
+
+		if (type != DBUS_TYPE_BOOLEAN)
+			return __connman_error_invalid_arguments(msg);
+
+		dbus_message_iter_get_basic(&value, &val);
+
+		if (!set_wpa3_sae_check_mfp(service, val))
+			service_save(service);
+	} else {
 		return __connman_error_invalid_property(msg);
+	}
 
 	return g_dbus_create_reply(msg, DBUS_TYPE_INVALID);
 }
@@ -7912,8 +8027,20 @@ void __connman_service_set_string(struct connman_service *service,
 	} else if (g_str_equal(key, PROP_PHASE2)) {
 		g_free(service->phase2);
 		service->phase2 = g_strdup(value);
-	} else if (g_str_equal(key, PROP_PASSPHRASE))
+	} else if (g_str_equal(key, PROP_PASSPHRASE)) {
 		__connman_service_set_passphrase(service, value);
+	} else if (g_str_equal(key, PROP_WPA3_SAE_PWE)) {
+		set_wpa3_sae_pwe(service, value);
+	}
+}
+
+void __connman_service_set_boolean(struct connman_service *service,
+					const char *key, bool value)
+{
+	if (service->hidden)
+		return;
+	if (g_str_equal(key, PROP_WPA3_SAE_CHECK_MFP))
+		set_wpa3_sae_check_mfp(service, value);
 }
 
 void __connman_service_set_search_domains(struct connman_service *service,
@@ -10104,6 +10231,28 @@ gboolean __connman_service_update_value_from_network(
 	} else {
 		return TRUE;
 	}
+}
+
+/*
+ * Some values are loaded from service settings that cannot be set to network
+ * as it does not exist yet. Update the network values when the network
+ * requests them.
+ */
+void __connman_service_update_network(struct connman_network *network)
+{
+	struct connman_service *service;
+
+	service = connman_service_lookup_from_network(network);
+	if (!service || !service->network)
+		return;
+
+	if (service->wpa3_sae_pwe)
+		connman_network_set_string(service->network, "WiFi.SAEPWE",
+				service->wpa3_sae_pwe);
+
+	if (service->wpa3_sae_check_mfp)
+		connman_network_set_string(service->network, "WiFi.SAECheckMFP",
+				service->wpa3_sae_check_mfp ? "1" : "0");
 }
 
 void connman_service_update_strength_from_network(struct connman_network *network)
