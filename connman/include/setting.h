@@ -75,6 +75,8 @@ extern "C" {
 #define CONF_ONLINE_CHECK_MAX_INTERVAL       "OnlineCheckMaxInterval"
 
 #define CONF_WIFI_WPA3_SUPPORT               "WifiWPA3Support"
+#define CONF_WIFI_WPA3_SAE_PWE               "WifiWPA3SAEPWE"
+#define CONF_WIFI_WPA3_SAE_CHECK_MFP         "WifiWPA3SAECheckMFP"
 
 #define CONF_OPTION_CONFIG                   "config"
 #define CONF_OPTION_DEBUG                    "debug"
