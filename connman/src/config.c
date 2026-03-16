@@ -81,6 +81,8 @@ struct connman_config_service {
 	char **search_domains;
 	char **timeservers;
 	char *domain_name;
+	char *wpa3_sae_pwe;
+	bool wpa3_sae_check_mfp;
 };
 
 struct connman_config {
@@ -131,6 +133,8 @@ static bool cleanup = false;
 #define SERVICE_KEY_SEARCH_DOMAINS     "SearchDomains"
 #define SERVICE_KEY_TIMESERVERS        "Timeservers"
 #define SERVICE_KEY_DOMAIN             "Domain"
+#define SERVICE_KEY_WPA3_SAE_PWE       "WPA3SAEPWE"
+#define SERVICE_KEY_WPA3_SAE_CHECK_MFP "WPA3SAECheckMFP"
 
 static const char *config_possible_keys[] = {
 	CONFIG_KEY_NAME,
@@ -171,6 +175,8 @@ static const char *service_possible_keys[] = {
 	SERVICE_KEY_SEARCH_DOMAINS,
 	SERVICE_KEY_TIMESERVERS,
 	SERVICE_KEY_DOMAIN,
+	SERVICE_KEY_WPA3_SAE_PWE,
+	SERVICE_KEY_WPA3_SAE_CHECK_MFP,
 	NULL,
 };
 
@@ -282,6 +288,7 @@ free_only:
 	g_free(config_service->config_entry);
 	g_free(config_service->virtual_file);
 	g_free(config_service);
+	g_free(config_service->wpa3_sae_pwe);
 }
 
 static void check_keys(GKeyFile *keyfile, const char *group,
@@ -788,6 +795,14 @@ static bool load_service(GKeyFile *keyfile, const char *group,
 		service->passphrase = str;
 	}
 
+	str = __connman_config_get_string(keyfile, group,
+					SERVICE_KEY_WPA3_SAE_PWE, NULL);
+	if (str) {
+		g_free(service->wpa3_sae_pwe);
+		service->wpa3_sae_pwe = str;
+	}
+
+
 	str = __connman_config_get_string(keyfile, group, SERVICE_KEY_SECURITY,
 			NULL);
 	security = __connman_service_string2security_real(str);
@@ -836,6 +851,10 @@ static bool load_service(GKeyFile *keyfile, const char *group,
 
 	service->hidden = __connman_config_get_bool(keyfile, group,
 						SERVICE_KEY_HIDDEN, NULL);
+
+	service->wpa3_sae_check_mfp = __connman_config_get_bool(keyfile, group,
+						SERVICE_KEY_WPA3_SAE_CHECK_MFP,
+						NULL);
 
 	if (service_created)
 		g_hash_table_insert(config->service_table, service->ident,
@@ -1274,6 +1293,13 @@ static void provision_service_wifi(struct connman_config_service *config,
 
 	if (config->hidden)
 		__connman_service_set_hidden(service);
+
+	if (config->wpa3_sae_pwe)
+		__connman_service_set_string(service, SERVICE_KEY_WPA3_SAE_PWE,
+						config->wpa3_sae_pwe);
+
+	__connman_service_set_boolean(service, SERVICE_KEY_WPA3_SAE_CHECK_MFP,
+						config->wpa3_sae_check_mfp);
 }
 
 struct connect_virtual {
