@@ -37,7 +37,7 @@
 #include <arpa/inet.h>
 
 #include "connman.h"
-
+#include "shared/util.h"
 
 #define CONF_ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]) - 1)
 
@@ -95,6 +95,7 @@ static struct {
 	char *vendor_class_id;
 	char *localtime;
 	char *wifi_wpa3_support;
+	char *wifi_wpa3_sae_pwe;
 	unsigned int *auto_connect;
 	unsigned int *favorite_techs;
 	unsigned int *preferred_techs;
@@ -118,6 +119,7 @@ static struct {
 	bool regdom_follows_timezone;
 	bool default_mdns_configuration;
 	bool tethering_mdns_configuration;
+	bool wifi_wpa3_sae_check_mfp;
 	mode_t storage_root_permissions;
 	mode_t storage_dir_permissions;
 	mode_t storage_file_permissions;
@@ -175,7 +177,9 @@ enum option_val {
 	CONF_TETHERING_MDNS_CONFIGURATION_VAL,
 	CONF_ONLINE_CHECK_INITIAL_INTERVAL_VAL,
 	CONF_ONLINE_CHECK_MAX_INTERVAL_VAL,
-	CONF_WIFI_WPA3_SUPPORT_VAL
+	CONF_WIFI_WPA3_SUPPORT_VAL,
+	CONF_WIFI_WPA3_SAE_PWE_VAL,
+	CONF_WIFI_WPA3_SAE_CHECK_MFP_VAL,
 };
 
 enum option_type {
@@ -321,6 +325,12 @@ struct {
 	{CONF_WIFI_WPA3_SUPPORT,
 					CONF_WIFI_WPA3_SUPPORT_VAL,
 					CONF_TYPE_CHAR},
+	{CONF_WIFI_WPA3_SAE_PWE,
+					CONF_WIFI_WPA3_SAE_PWE_VAL,
+					CONF_TYPE_CHAR},
+	{CONF_WIFI_WPA3_SAE_CHECK_MFP,
+					CONF_WIFI_WPA3_SAE_CHECK_MFP_VAL,
+					CONF_TYPE_BOOL},
 	{ 0 }
 };
 
@@ -393,6 +403,9 @@ const char *connman_setting_get_string(const char *key)
 	if (g_str_equal(key, CONF_WIFI_WPA3_SUPPORT))
 		return connman_settings.wifi_wpa3_support;
 
+	if (g_str_equal(key, CONF_WIFI_WPA3_SAE_PWE))
+		return connman_settings.wifi_wpa3_sae_pwe;
+
 	return NULL;
 }
 
@@ -445,6 +458,9 @@ bool connman_setting_get_bool(const char *key)
 
 	if (g_str_equal(key, CONF_TETHERING_MDNS_CONFIGURATION))
 		return connman_settings.tethering_mdns_configuration;
+
+	if (g_str_equal(key, CONF_WIFI_WPA3_SAE_CHECK_MFP))
+		return connman_settings.wifi_wpa3_sae_check_mfp;
 
 	return false;
 }
@@ -679,6 +695,18 @@ static gboolean check_wpa3_support(const char *str)
 	return FALSE;
 }
 
+static gboolean check_wpa3_sae_pwe(const char *str)
+{
+	if (util_wpa3_sae_pwe_index(str) < 0) {
+		connman_warn("invalid \"WifiWPA3SAEPWE\" config value \"%s\"",
+									str);
+		return FALSE;
+	}
+
+	return TRUE;
+
+}
+
 void append_noplugin(const char *value)
 {
 	__connman_setting_set_option(CONF_OPTION_NOPLUGIN, value);
@@ -829,6 +857,9 @@ static void read_config_value(GKeyFile *config, const char *key, bool append)
 	case CONF_TETHERING_MDNS_CONFIGURATION_VAL:
 		bool_ptr = &connman_settings.tethering_mdns_configuration;
 		break;
+	case CONF_WIFI_WPA3_SAE_CHECK_MFP_VAL:
+		bool_ptr = &connman_settings.wifi_wpa3_sae_check_mfp;
+		break;
 
 	/* str */
 	case CONF_STATUS_URL_IPV4_VAL:
@@ -861,6 +892,10 @@ static void read_config_value(GKeyFile *config, const char *key, bool append)
 	case CONF_WIFI_WPA3_SUPPORT_VAL:
 		str_ptr = &connman_settings.wifi_wpa3_support;
 		check_cb = check_wpa3_support;
+		break;
+	case CONF_WIFI_WPA3_SAE_PWE_VAL:
+		str_ptr = &connman_settings.wifi_wpa3_sae_pwe;
+		check_cb = check_wpa3_sae_pwe;
 		break;
 
 	/* str list */
