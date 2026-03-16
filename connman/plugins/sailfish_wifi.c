@@ -22,6 +22,7 @@
 #include <connman/storage.h>
 #include <connman/wakeup_timer.h>
 #include "connman.h"
+#include "../src/shared/util.h"
 
 #include "sailfish_signalpoll.h"
 
@@ -102,6 +103,9 @@
 #define NETWORK_KEY_WIFI_PRIVATE_KEY            "WiFi.PrivateKey"
 #define NETWORK_KEY_WIFI_PRIVATE_KEY_PASSPHRASE "WiFi.PrivateKeyPassphrase"
 #define NETWORK_KEY_WIFI_PHASE2                 "WiFi.Phase2"
+#define NETWORK_KEY_WIFI_SAE_PWE                "WiFi.SAEPWE"
+#define NETWORK_KEY_WIFI_SAE_CHECK_MFP          "WiFi.SAECheckMFP"
+
 
 #define NETWORK_EAP_DEFAULT                     "default"
 
@@ -117,7 +121,9 @@ enum device_interface_events {
 	DEVICE_INTERFACE_EVENT_SCANNING,
 	DEVICE_INTERFACE_EVENT_BSSS,
 	DEVICE_INTERFACE_EVENT_STATIONS,
-	DEVICE_INTERFACE_EVENT_COUNT
+	DEVICE_INTERFACE_EVENT_SAE_CHECK_MFP,
+	DEVICE_INTERFACE_EVENT_SAE_PWE,
+	DEVICE_INTERFACE_EVENT_COUNT,
 };
 
 enum network_interface_events {
@@ -1217,6 +1223,69 @@ static void wifi_network_init_add_blob(GHashTable **blobs, const char *name,
 				g_bytes_new_static(blob, strlen(blob)));
 }
 
+static GSUPPLICANT_SAE_PWE_OPTION get_wpa3_sae_pwe_option(
+						struct connman_network *network)
+{
+	const char *option;
+	int index;
+
+	option = connman_network_get_string(network,
+					NETWORK_KEY_WIFI_SAE_PWE);
+	if (!option) {
+		/* Try default option in settings next. */
+		option = connman_setting_get_string(CONF_WIFI_WPA3_SAE_PWE);
+		if (!option) {
+			DBG("sae_pwe not set, using default");
+			return GSUPPLICANT_SAE_PWE_HNP; /* 0, the default */
+		}
+	}
+
+	index = util_wpa3_sae_pwe_index(option);
+	if (index >= 0) {
+		DBG("sae_pwe %d", index);
+		return (GSUPPLICANT_SAE_PWE_OPTION)index;
+	}
+
+	DBG("sae_pwe is invalid (%s), using default", option);
+
+	return GSUPPLICANT_SAE_PWE_HNP;
+}
+
+static gboolean get_wpa3_sae_check_mfp_option(struct connman_network *network)
+{
+	const char *option;
+	gchar *endptr = NULL;
+	gboolean value;
+
+	/*
+	 * Use this as a string since the value can be set only in global config
+	 * and that should not be saved to the network or to the service if it
+	 * does not exist. Thus, the value has to have other than true/false
+	 * values.
+	 */
+	option = connman_network_get_string(network,
+					NETWORK_KEY_WIFI_SAE_CHECK_MFP);
+	if (option) {
+		value = g_ascii_strtoull(option, &endptr, 10);
+		if (!value) {
+			/* Out of base or string conversion fails -> continue */
+			if (errno == 0 && endptr != option) {
+				DBG("sae_check_mfp 0");
+				return FALSE;
+			} else {
+				DBG("sae_check_mfp is invalid (%s)", option);
+			}
+		} else {
+			DBG("sae_check_mfp 1");
+			return TRUE;
+		}
+	}
+
+	value = connman_setting_get_bool(CONF_WIFI_WPA3_SAE_CHECK_MFP);
+	DBG("sae_check_mfp %u", value);
+	return value;
+}
+
 static GHashTable *wifi_network_init_connect_params(struct wifi_network *net,
 		struct wifi_bss *bss_data, GSupplicantNetworkParams *params)
 {
@@ -1230,6 +1299,13 @@ static GHashTable *wifi_network_init_connect_params(struct wifi_network *net,
 	params->mode = GSUPPLICANT_OP_MODE_INFRA;
 	params->security = gsupplicant_bss_security(bss_data->bss);
 	params->keymgmt = gsupplicant_bss_keymgmt(bss_data->bss);
+
+	if (params->security > GSUPPLICANT_SECURITY_EAP) {
+		gsupplicant_interface_set_sae_pwe(net->iface,
+				get_wpa3_sae_pwe_option(net->network));
+		gsupplicant_interface_set_sae_check_mfp(net->iface,
+				get_wpa3_sae_check_mfp_option(net->network));
+	}
 
 	eap = connman_network_get_string(net->network, NETWORK_KEY_WIFI_EAP);
 	if (eap) {
@@ -1548,6 +1624,8 @@ static int wifi_network_connect(struct wifi_network *net)
 				net->connecting_to = gsupplicant_bss_ref(bss);
 			}
 			net->eap_state = WIFI_NETWORK_EAP_UNKNOWN;
+			if (net->network)
+				__connman_service_update_network(net->network);
 			blobs = wifi_network_init_connect_params(net, bss_data,
 									&np);
 			net->pending = gsupplicant_interface_add_network_full2(
@@ -3438,6 +3516,65 @@ static void wifi_device_bsss_changed(GSupplicantInterface *iface, void *data)
 	}
 }
 
+static void wifi_device_sae_check_mfp_changed(GSupplicantInterface *iface,
+								void *data)
+{
+	struct wifi_device *dev = data;
+	const char *old_value;
+	char *str;
+
+	GASSERT(dev->state == WIFI_DEVICE_ON && !dev->pending);
+
+	DBG("value %d", dev->iface->sae_check_mfp);
+
+	if (!dev->selected || !dev->selected->network)
+		return;
+
+	old_value = connman_network_get_string(dev->selected->network,
+					NETWORK_KEY_WIFI_SAE_CHECK_MFP);
+	if (!old_value) {
+		DBG("SAE check MFP was set in config, not set for network %p",
+						dev->selected->network);
+		return;
+	}
+
+	str = g_strdup_printf("%s", dev->iface->sae_check_mfp ? "1" : "0");
+
+	connman_network_set_string(dev->selected->network,
+					NETWORK_KEY_WIFI_SAE_CHECK_MFP, str);
+	g_free(str);
+}
+
+static void wifi_device_sae_pwe_changed(GSupplicantInterface *iface,
+								void *data)
+{
+	struct wifi_device *dev = data;
+	const char *old_value;
+	char *str;
+
+	GASSERT(dev->state == WIFI_DEVICE_ON && !dev->pending);
+
+	DBG("value %d", dev->iface->sae_pwe);
+
+	if (!dev->selected || !dev->selected->network)
+		return;
+
+	old_value = connman_network_get_string(dev->selected->network,
+						NETWORK_KEY_WIFI_SAE_PWE);
+	if (!old_value) {
+		DBG("SAE PWE was set in config, not set for network %p",
+							dev->selected->network);
+		return;
+	}
+
+	str = g_strdup_printf("%u", dev->iface->sae_pwe);
+
+	connman_network_set_string(dev->selected->network,
+						NETWORK_KEY_WIFI_SAE_PWE, str);
+	g_free(str);
+}
+
+
 static gboolean wifi_device_init_cip(struct wifi_device *dev,
 				struct wifi_create_interface_params *cip)
 {
@@ -3485,6 +3622,14 @@ static void wifi_device_on_ok(struct wifi_device *dev)
 		gsupplicant_interface_add_handler(dev->iface,
 			GSUPPLICANT_INTERFACE_PROPERTY_BSSS,
 			wifi_device_bsss_changed, dev);
+	dev->iface_event_id[DEVICE_INTERFACE_EVENT_SAE_CHECK_MFP] =
+		gsupplicant_interface_add_handler(dev->iface,
+			GSUPPLICANT_INTERFACE_PROPERTY_SAE_CHECK_MFP,
+			wifi_device_sae_check_mfp_changed, dev);
+	dev->iface_event_id[DEVICE_INTERFACE_EVENT_SAE_PWE] =
+		gsupplicant_interface_add_handler(dev->iface,
+			GSUPPLICANT_INTERFACE_PROPERTY_SAE_PWE,
+			wifi_device_sae_pwe_changed, dev);
 	if (!connman_device_get_powered(dev->device)) {
 		connman_device_set_powered(dev->device, TRUE);
 	}
