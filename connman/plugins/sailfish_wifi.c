@@ -102,6 +102,9 @@
 #define NETWORK_KEY_WIFI_PRIVATE_KEY            "WiFi.PrivateKey"
 #define NETWORK_KEY_WIFI_PRIVATE_KEY_PASSPHRASE "WiFi.PrivateKeyPassphrase"
 #define NETWORK_KEY_WIFI_PHASE2                 "WiFi.Phase2"
+#define NETWORK_KEY_WIFI_SAE_PWE		"WiFi.SAEPWE"
+#define NETWORK_KEY_WIFI_SAE_CHECK_MFP		"WiFi.SAECheckMFP"
+
 
 #define NETWORK_EAP_DEFAULT                     "default"
 
@@ -1210,6 +1213,68 @@ static void wifi_network_init_add_blob(GHashTable **blobs, const char *name,
 				g_bytes_new_static(blob, strlen(blob)));
 }
 
+static GSUPPLICANT_SAE_PWE_OPTION get_wpa3_sae_pwe_option(
+						struct connman_network *network)
+{
+	const char *options[] = { "HnP", "H2E", "both", "force", NULL };
+	const char *option;
+	int i;
+
+	option = connman_network_get_string(network,
+					NETWORK_KEY_WIFI_SAE_PWE);
+	if (!option) {
+		/* Try default option in settings next. */
+		option = connman_setting_get_string(CONF_WIFI_WPA3_SAE_PWE);
+		if (!option) {
+			DBG("sae_pwe not set, using default");
+			return GSUPPLICANT_SAE_PWE_HNP; /* 0, the default */
+		}
+	}
+
+	for (i = 0; options[i]; i++) {
+		if (!g_ascii_strcasecmp(option, options[i])) {
+			DBG("sae_pwe %d", i);
+			return (GSUPPLICANT_SAE_PWE_OPTION)i;
+		}
+	}
+
+	DBG("sae_pwe is invalid (%s), using default", option);
+
+	return GSUPPLICANT_SAE_PWE_HNP;
+}
+
+static guint get_wpa3_sae_check_mfp_option(struct connman_network *network)
+{
+	const char *option;
+	gchar *endptr = NULL;
+	guint value;
+
+	option = connman_network_get_string(network,
+					NETWORK_KEY_WIFI_SAE_CHECK_MFP);
+	if (option) {
+		value = g_ascii_strtoull(option, &endptr, 10);
+		if (!value) {
+			/* Out of base or string conversion fails -> continue */
+			if (errno == 0 && endptr != option) {
+				DBG("sae_check_mfp 0");
+				return 0;
+			} else {
+				DBG("sae_check_mfp is invalid (%s)", option);
+			}
+		} else {
+			if (value > 1)
+				value = 1;
+
+			DBG("sae_check_mfp 1");
+			return value;
+		}
+	}
+
+	value = connman_setting_get_bool(CONF_WIFI_WPA3_SAE_CHECK_MFP) ? 1 : 0;
+	DBG("sae_check_mfp %u", value);
+	return value;
+}
+
 static GHashTable *wifi_network_init_connect_params(struct wifi_network *net,
 		struct wifi_bss *bss_data, GSupplicantNetworkParams *params)
 {
@@ -1223,6 +1288,8 @@ static GHashTable *wifi_network_init_connect_params(struct wifi_network *net,
 	params->mode = GSUPPLICANT_OP_MODE_INFRA;
 	params->security = gsupplicant_bss_security(bss_data->bss);
 	params->keymgmt = gsupplicant_bss_keymgmt(bss_data->bss);
+	params->sae_pwe = get_wpa3_sae_pwe_option(net->network);
+	params->sae_check_mfp = get_wpa3_sae_check_mfp_option(net->network);
 
 	eap = connman_network_get_string(net->network, NETWORK_KEY_WIFI_EAP);
 	if (eap) {
