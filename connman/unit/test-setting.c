@@ -160,6 +160,12 @@ void __connman_service_set_string(struct connman_service *service,
 	return;
 }
 
+void __connman_service_set_boolean(struct connman_service *service,
+		const char *key, bool value)
+{
+	return;
+}
+
 void __connman_service_set_timeservers(struct connman_service *service,
 		char **timeservers)
 {
