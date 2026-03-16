@@ -160,6 +160,12 @@ void __connman_service_set_string(struct connman_service *service,
 	return;
 }
 
+void __connman_service_set_boolean(struct connman_service *service,
+		const char *key, bool value)
+{
+	return;
+}
+
 void __connman_service_set_timeservers(struct connman_service *service,
 		char **timeservers)
 {
@@ -214,6 +220,11 @@ bool __connman_storage_remove_service(const char *service_id)
 }
 
 int __connman_util_get_random(uint64_t *val)
+{
+	return 0;
+}
+
+int util_wpa3_sae_pwe_index(struct connman_service *service, const char *str)
 {
 	return 0;
 }
