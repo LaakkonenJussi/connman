@@ -206,6 +206,7 @@ struct wifi_network {
 	int recover_attempt;            /* Passive scans after BSS is gone */
 	int remove_in_process;          /* See wifi_device_remove_network */
 	GCancellable *pending;          /* Pending call */
+	GCancellable *pending_sae;          /* Pending call */
 	WIFI_NETWORK_STATE state;
 	WIFI_NETWORK_EAP_STATE eap_state;
 	int handshake_retries;
@@ -1275,6 +1276,20 @@ static guint get_wpa3_sae_check_mfp_option(struct connman_network *network)
 	return value;
 }
 
+static void wifi_sae_options_cb(GSupplicant *supplicant, GCancellable *cancel,
+			const GError *error, void *data)
+{
+	struct wifi_network *net = data;
+
+	GASSERT(net->pending_sae == cancel);
+	net->pending_sae = NULL;
+
+	if (error)
+		DBG("error setting SAE options %s", error->message);
+	else
+		DBG("SAE options set");
+}
+
 static GHashTable *wifi_network_init_connect_params(struct wifi_network *net,
 		struct wifi_bss *bss_data, GSupplicantNetworkParams *params)
 {
@@ -1288,8 +1303,17 @@ static GHashTable *wifi_network_init_connect_params(struct wifi_network *net,
 	params->mode = GSUPPLICANT_OP_MODE_INFRA;
 	params->security = gsupplicant_bss_security(bss_data->bss);
 	params->keymgmt = gsupplicant_bss_keymgmt(bss_data->bss);
-	params->sae_pwe = get_wpa3_sae_pwe_option(net->network);
-	params->sae_check_mfp = get_wpa3_sae_check_mfp_option(net->network);
+
+	if (params->security > GSUPPLICANT_SECURITY_EAP) {
+		params->sae_pwe = get_wpa3_sae_pwe_option(net->network);
+		params->sae_check_mfp = get_wpa3_sae_check_mfp_option(
+								net->network);
+
+		net->pending_sae = gsupplicant_set_sae_options(
+				net->dev->supplicant, params->sae_pwe,
+				params->sae_check_mfp,
+				wifi_sae_options_cb, net);
+	}
 
 	eap = connman_network_get_string(net->network, NETWORK_KEY_WIFI_EAP);
 	if (eap) {
