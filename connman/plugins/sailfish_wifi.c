@@ -120,7 +120,9 @@ enum device_interface_events {
 	DEVICE_INTERFACE_EVENT_SCANNING,
 	DEVICE_INTERFACE_EVENT_BSSS,
 	DEVICE_INTERFACE_EVENT_STATIONS,
-	DEVICE_INTERFACE_EVENT_COUNT
+	DEVICE_INTERFACE_EVENT_SAE_CHECK_MFP,
+	DEVICE_INTERFACE_EVENT_SAE_PWE,
+	DEVICE_INTERFACE_EVENT_COUNT,
 };
 
 enum network_interface_events {
@@ -3498,6 +3500,27 @@ static void wifi_device_bsss_changed(GSupplicantInterface *iface, void *data)
 	}
 }
 
+static void wifi_device_sae_check_mfp_changed(GSupplicantInterface *iface,
+								void *data)
+{
+	struct wifi_device *dev = data;
+
+	GASSERT(dev->state == WIFI_DEVICE_ON && !dev->pending);
+
+	DBG("value %d", dev->iface->sae_check_mfp);
+}
+
+static void wifi_device_sae_pwe_changed(GSupplicantInterface *iface,
+								void *data)
+{
+	struct wifi_device *dev = data;
+
+	GASSERT(dev->state == WIFI_DEVICE_ON && !dev->pending);
+
+	DBG("value %d", dev->iface->sae_pwe);
+}
+
+
 static gboolean wifi_device_init_cip(struct wifi_device *dev,
 				struct wifi_create_interface_params *cip)
 {
@@ -3545,6 +3568,14 @@ static void wifi_device_on_ok(struct wifi_device *dev)
 		gsupplicant_interface_add_handler(dev->iface,
 			GSUPPLICANT_INTERFACE_PROPERTY_BSSS,
 			wifi_device_bsss_changed, dev);
+	dev->iface_event_id[DEVICE_INTERFACE_EVENT_SAE_CHECK_MFP] =
+		gsupplicant_interface_add_handler(dev->iface,
+			GSUPPLICANT_INTERFACE_PROPERTY_SAE_CHECK_MFP,
+			wifi_device_sae_check_mfp_changed, dev);
+	dev->iface_event_id[DEVICE_INTERFACE_EVENT_SAE_PWE] =
+		gsupplicant_interface_add_handler(dev->iface,
+			GSUPPLICANT_INTERFACE_PROPERTY_SAE_PWE,
+			wifi_device_sae_pwe_changed, dev);
 	if (!connman_device_get_powered(dev->device)) {
 		connman_device_set_powered(dev->device, TRUE);
 	}
