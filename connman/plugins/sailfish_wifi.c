@@ -206,7 +206,6 @@ struct wifi_network {
 	int recover_attempt;            /* Passive scans after BSS is gone */
 	int remove_in_process;          /* See wifi_device_remove_network */
 	GCancellable *pending;          /* Pending call */
-	GCancellable *pending_sae;          /* Pending call */
 	WIFI_NETWORK_STATE state;
 	WIFI_NETWORK_EAP_STATE eap_state;
 	int handshake_retries;
@@ -1244,11 +1243,11 @@ static GSUPPLICANT_SAE_PWE_OPTION get_wpa3_sae_pwe_option(
 	return GSUPPLICANT_SAE_PWE_HNP;
 }
 
-static guint get_wpa3_sae_check_mfp_option(struct connman_network *network)
+static gboolean get_wpa3_sae_check_mfp_option(struct connman_network *network)
 {
 	const char *option;
 	gchar *endptr = NULL;
-	guint value;
+	gboolean value;
 
 	option = connman_network_get_string(network,
 					NETWORK_KEY_WIFI_SAE_CHECK_MFP);
@@ -1258,36 +1257,19 @@ static guint get_wpa3_sae_check_mfp_option(struct connman_network *network)
 			/* Out of base or string conversion fails -> continue */
 			if (errno == 0 && endptr != option) {
 				DBG("sae_check_mfp 0");
-				return 0;
+				return FALSE;
 			} else {
 				DBG("sae_check_mfp is invalid (%s)", option);
 			}
 		} else {
-			if (value > 1)
-				value = 1;
-
 			DBG("sae_check_mfp 1");
-			return value;
+			return TRUE;
 		}
 	}
 
-	value = connman_setting_get_bool(CONF_WIFI_WPA3_SAE_CHECK_MFP) ? 1 : 0;
+	value = connman_setting_get_bool(CONF_WIFI_WPA3_SAE_CHECK_MFP);
 	DBG("sae_check_mfp %u", value);
 	return value;
-}
-
-static void wifi_sae_options_cb(GSupplicant *supplicant, GCancellable *cancel,
-			const GError *error, void *data)
-{
-	struct wifi_network *net = data;
-
-	GASSERT(net->pending_sae == cancel);
-	net->pending_sae = NULL;
-
-	if (error)
-		DBG("error setting SAE options %s", error->message);
-	else
-		DBG("SAE options set");
 }
 
 static GHashTable *wifi_network_init_connect_params(struct wifi_network *net,
@@ -1305,14 +1287,10 @@ static GHashTable *wifi_network_init_connect_params(struct wifi_network *net,
 	params->keymgmt = gsupplicant_bss_keymgmt(bss_data->bss);
 
 	if (params->security > GSUPPLICANT_SECURITY_EAP) {
-		params->sae_pwe = get_wpa3_sae_pwe_option(net->network);
-		params->sae_check_mfp = get_wpa3_sae_check_mfp_option(
-								net->network);
-
-		net->pending_sae = gsupplicant_set_sae_options(
-				net->dev->supplicant, params->sae_pwe,
-				params->sae_check_mfp,
-				wifi_sae_options_cb, net);
+		gsupplicant_interface_set_sae_pwe(net->iface,
+				get_wpa3_sae_pwe_option(net->network));
+		gsupplicant_interface_set_sae_check_mfp(net->iface,
+				get_wpa3_sae_check_mfp_option(net->network));
 	}
 
 	eap = connman_network_get_string(net->network, NETWORK_KEY_WIFI_EAP);
