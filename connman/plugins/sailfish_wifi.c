@@ -102,8 +102,8 @@
 #define NETWORK_KEY_WIFI_PRIVATE_KEY            "WiFi.PrivateKey"
 #define NETWORK_KEY_WIFI_PRIVATE_KEY_PASSPHRASE "WiFi.PrivateKeyPassphrase"
 #define NETWORK_KEY_WIFI_PHASE2                 "WiFi.Phase2"
-#define NETWORK_KEY_WIFI_SAE_PWE		"WiFi.SAEPWE"
-#define NETWORK_KEY_WIFI_SAE_CHECK_MFP		"WiFi.SAECheckMFP"
+#define NETWORK_KEY_WIFI_SAE_PWE                "WiFi.SAEPWE"
+#define NETWORK_KEY_WIFI_SAE_CHECK_MFP          "WiFi.SAECheckMFP"
 
 
 #define NETWORK_EAP_DEFAULT                     "default"
@@ -1251,6 +1251,12 @@ static gboolean get_wpa3_sae_check_mfp_option(struct connman_network *network)
 	gchar *endptr = NULL;
 	gboolean value;
 
+	/*
+	 * Use this as a string since the value can be set only in global config
+	 * and that should not be saved to the network or to the service if it
+	 * does not exist. Thus, the value has to have other than true/false
+	 * values.
+	 */
 	option = connman_network_get_string(network,
 					NETWORK_KEY_WIFI_SAE_CHECK_MFP);
 	if (option) {
@@ -3504,20 +3510,58 @@ static void wifi_device_sae_check_mfp_changed(GSupplicantInterface *iface,
 								void *data)
 {
 	struct wifi_device *dev = data;
+	const char *old_value;
+	char *str;
 
 	GASSERT(dev->state == WIFI_DEVICE_ON && !dev->pending);
 
 	DBG("value %d", dev->iface->sae_check_mfp);
+
+	if (!dev->selected || !dev->selected->network)
+		return;
+
+	old_value = connman_network_get_string(dev->selected->network,
+					NETWORK_KEY_WIFI_SAE_CHECK_MFP);
+	if (!old_value) {
+		DBG("SAE check MFP was set in config, not set for network %p",
+						dev->selected->network);
+		return;
+	}
+
+	str = g_strdup_printf("%s", dev->iface->sae_check_mfp ? "1" : "0");
+
+	connman_network_set_string(dev->selected->network,
+					NETWORK_KEY_WIFI_SAE_CHECK_MFP, str);
+	g_free(str);
 }
 
 static void wifi_device_sae_pwe_changed(GSupplicantInterface *iface,
 								void *data)
 {
 	struct wifi_device *dev = data;
+	const char *old_value;
+	char *str;
 
 	GASSERT(dev->state == WIFI_DEVICE_ON && !dev->pending);
 
 	DBG("value %d", dev->iface->sae_pwe);
+
+	if (!dev->selected || !dev->selected->network)
+		return;
+
+	old_value = connman_network_get_string(dev->selected->network,
+						NETWORK_KEY_WIFI_SAE_PWE);
+	if (!old_value) {
+		DBG("SAE PWE was set in config, not set for network %p",
+							dev->selected->network);
+		return;
+	}
+
+	str = g_strdup_printf("%u", dev->iface->sae_pwe);
+
+	connman_network_set_string(dev->selected->network,
+						NETWORK_KEY_WIFI_SAE_PWE, str);
+	g_free(str);
 }
 
 
