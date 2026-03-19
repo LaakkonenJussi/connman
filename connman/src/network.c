@@ -120,6 +120,9 @@ struct connman_network {
 		unsigned char bssid[WIFI_BSSID_LEN];
 		char bssid_str[WIFI_BSSID_STR_LEN];
 		unsigned int maxrate;
+		char *sae_pwe;
+		/* Define this as a string to detect if the value has been set. */
+		char *sae_check_mfp;
 	} wifi;
 
 };
@@ -1292,6 +1295,8 @@ static void network_destruct(struct connman_network *network)
 	g_free(network->wifi.phase2_auth);
 	g_free(network->wifi.pin_wps);
 	g_free(network->wifi.encryption_mode);
+	g_free(network->wifi.sae_pwe);
+	g_free(network->wifi.sae_check_mfp);
 
 	g_free(network->path);
 	g_free(network->group);
@@ -2485,6 +2490,12 @@ int connman_network_set_string(struct connman_network *network,
 	} else if (g_str_equal(key, "WiFi.PinWPS")) {
 		g_free(network->wifi.pin_wps);
 		network->wifi.pin_wps = g_strdup(value);
+	} else if (g_str_equal(key, "WiFi.SAEPWE")) {
+		g_free(network->wifi.sae_pwe);
+		network->wifi.sae_pwe = g_strdup(value);
+	} else if (g_str_equal(key, "WiFi.SAECheckMFP")) {
+		g_free(network->wifi.sae_check_mfp);
+		network->wifi.sae_check_mfp = g_strdup(value);
 	} else {
 		return -EINVAL;
 	}
@@ -2548,6 +2559,10 @@ const char *connman_network_get_string(struct connman_network *network,
 		return network->wifi.phase2_auth;
 	else if (g_str_equal(key, "WiFi.PinWPS"))
 		return network->wifi.pin_wps;
+	else if (g_str_equal(key, "WiFi.SAEPWE"))
+		return network->wifi.sae_pwe;
+	else if (g_str_equal(key, "WiFi.SAECheckMFP"))
+		return network->wifi.sae_check_mfp;
 
 	return NULL;
 }
