@@ -1104,6 +1104,18 @@ static GSupplicantBSS *wifi_network_current_bss(struct wifi_network *net)
 	return NULL;
 }
 
+static void wifi_network_save_network_param(struct wifi_network *net,
+							const char *param)
+{
+	struct connman_service *service =
+		connman_service_lookup_from_network(net->network);
+
+	if (__connman_service_update_value_from_network(service, net->network,
+								param)) {
+		__connman_service_save(service);
+	}
+}
+
 static void wifi_network_update_bssid(struct wifi_network *net)
 {
 	GSupplicantBSS *bss = wifi_network_current_bss(net);
@@ -1115,6 +1127,13 @@ static void wifi_network_update_bssid(struct wifi_network *net)
 
 		if (bssid_len == WIFI_BSSID_LEN) {
 			connman_network_set_bssid(net->network, bssid_data);
+			/* Update also the security to be signaled over D-Bus */
+			connman_network_set_string(net->network,
+					NETWORK_KEY_WIFI_SECURITY,
+					__connman_service_security2string_real(
+						wifi_bss_security(bss)));
+			wifi_network_save_network_param(net,
+					NETWORK_KEY_WIFI_SECURITY);
 			return;
 		}
 	}
@@ -1185,18 +1204,6 @@ static void wifi_network_update_wps_caps_from_bss(struct wifi_network *net,
 				(wps & (GSUPPLICANT_WPS_PUSH_BUTTON |
 					GSUPPLICANT_WPS_PIN)) &&
 				(wps & GSUPPLICANT_WPS_REGISTRAR));
-}
-
-static void wifi_network_save_network_param(struct wifi_network *net,
-							const char *param)
-{
-	struct connman_service *service =
-		connman_service_lookup_from_network(net->network);
-
-	if (__connman_service_update_value_from_network(service, net->network,
-								param)) {
-		__connman_service_save(service);
-	}
 }
 
 static void wifi_network_init_add_blob(GHashTable **blobs, const char *name,
@@ -1750,7 +1757,8 @@ static void wifi_network_init(struct wifi_network *net, struct wifi_bss *data)
 								data, len);
 	}
 	connman_network_set_string(net->network, NETWORK_KEY_WIFI_SECURITY,
-		 __connman_service_security2string(wifi_bss_security(bss)));
+		 __connman_service_security2string_real(
+		 	wifi_bss_security(bss)));
 	if (gsupplicant_bss_security(bss) == GSUPPLICANT_SECURITY_EAP) {
 		/*
 		 * update_from_network() will replace the special default
@@ -1759,6 +1767,7 @@ static void wifi_network_init(struct wifi_network *net, struct wifi_bss *data)
 		connman_network_set_string(net->network, NETWORK_KEY_WIFI_EAP,
 					NETWORK_EAP_DEFAULT);
 	}
+	wifi_network_save_network_param(net, NETWORK_KEY_WIFI_SECURITY);
 
 	wifi_network_update_wps_caps_from_bss(net, bss);
 	connman_network_set_frequency(net->network, bss->frequency);
