@@ -1178,53 +1178,73 @@ static GKeyFile *storage_wpa2_to_wpa3_transition_check(const char *service_id)
 	GKeyFile *keyfile_to_clone = NULL;
 	gsize len;
 	gchar **keys;
+	char *suffixes[] = { "_psksae", "_sae", NULL };
 	char *pos;
 	char *search_id = NULL;
 	int i;
 
-	if (!g_str_has_suffix(service_id, "_psksae") &&
-					!g_str_has_suffix(service_id, "_sae"))
+	if (!g_str_has_suffix(service_id, "_psk"))
 		return NULL;
 
 	DBG("Search WiFi _psk settings for %s", service_id);
 
-	search_id = g_strdup(service_id);
-	pos = strrchr(search_id, '_');
-	if (!pos || strlen(pos) < 4) // Make sure we don't do buffer overflow
-		goto out;
-
-	stpncpy(pos, "_psk", strlen(pos) + 1); // Pad the remaining with \0
-
-	DBG("Search id %s", search_id);
-
-	keyfile_to_clone = connman_storage_load_service(search_id);
-	if (!keyfile_to_clone) {
-		DBG("No old settings for %s", service_id);
-		goto out;
-	}
-
-	keys = g_key_file_get_keys(keyfile_to_clone, search_id, &len, NULL);
-	if (!keys) {
-		DBG("No keys set in %s", search_id);
-		goto out;
-	}
-
-	DBG("Convert %s to %s", search_id, service_id);
-
-	keyfile = g_key_file_new();
 	
-	for (i = 0; i < len; i++)
-		g_key_file_set_string(keyfile, service_id, keys[i],
-				g_key_file_get_string(keyfile_to_clone, search_id, keys[i], NULL));
+	pos = strrchr(service_id, '_');
+	if (!pos)
+		goto out;
 
-	g_strfreev(keys);
+	size_t copy_len = strlen(service_id) - strlen(pos);
 
-	if (__connman_storage_save_service(keyfile, service_id)) {
-		connman_warn("Cannot save cloned service %s, keeping old %s",
-							service_id, search_id);
-	} else {
-		DBG("Removing old service %s", search_id);
-		__connman_storage_remove_service(search_id);
+	for (i = 0; suffixes[i]; i++) {
+		size_t suf_len = strlen(suffixes[i]) + 1;
+		search_id = (char*)g_malloc0((copy_len + suf_len) *
+								sizeof(char));
+		stpncpy(search_id, service_id, copy_len);
+		stpncpy(search_id+copy_len, suffixes[i], suf_len);
+
+		DBG("Search id %s", search_id);
+
+		keyfile_to_clone = connman_storage_load_service(search_id);
+		if (!keyfile_to_clone) {
+			DBG("No old settings for %s", service_id);
+			g_free(search_id);
+			search_id = NULL;
+			continue;
+		}
+
+		keys = g_key_file_get_keys(keyfile_to_clone, search_id, &len,
+						NULL);
+		if (!keys) {
+			DBG("No keys set in %s", search_id);
+			g_free(search_id);
+			search_id = NULL;
+
+			if (keyfile_to_clone)
+				g_key_file_unref(keyfile_to_clone);
+
+			continue;
+		}
+
+		DBG("Convert %s to %s", search_id, service_id);
+
+		keyfile = g_key_file_new();
+		
+		for (i = 0; i < len; i++)
+			g_key_file_set_string(keyfile, service_id, keys[i],
+					g_key_file_get_string(keyfile_to_clone, search_id, keys[i], NULL));
+
+		g_strfreev(keys);
+
+		if (__connman_storage_save_service(keyfile, service_id)) {
+			connman_warn("Cannot save cloned service %s, keeping old %s",
+								service_id, search_id);
+		} else {
+			DBG("Removing old service %s", search_id);
+			__connman_storage_remove_service(search_id);
+		}
+
+		// Found, break out of loop
+		break;
 	}
 
 out:
