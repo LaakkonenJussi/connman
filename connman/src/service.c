@@ -994,9 +994,13 @@ static void service_apply(struct connman_service *service, GKeyFile *keyfile)
 					&service->phase2);
 	get_config_string(keyfile, service->identifier, PROP_WPA3_SAE_PWE,
 					&service->wpa3_sae_pwe);
-	service->wpa3_sae_check_mfp = g_key_file_get_boolean(keyfile,
-					service->identifier,
-					PROP_WPA3_SAE_CHECK_MFP, NULL);
+	if (service->wpa3_sae_check_mfp)
+		service->wpa3_sae_check_mfp = g_key_file_get_boolean(keyfile,
+						service->identifier,
+						PROP_WPA3_SAE_CHECK_MFP, NULL);
+	else
+		g_key_file_remove_key(keyfile, service->identifier,
+						PROP_WPA3_SAE_CHECK_MFP);
 
 	str = g_key_file_get_string(keyfile,
 				service->identifier, PROP_ACCESS, NULL);
