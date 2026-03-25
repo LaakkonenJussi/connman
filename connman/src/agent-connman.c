@@ -255,6 +255,12 @@ static void request_input_append_passphrase(DBusMessageIter *iter,
 	case CONNMAN_SERVICE_SECURITY_PSK:
 		value = "psk";
 		break;
+	case CONNMAN_SERVICE_SECURITY_PSK_SAE:
+		value = "psksae";
+		break;
+	case CONNMAN_SERVICE_SECURITY_SAE:
+		value = "sae";
+		break;
 	case CONNMAN_SERVICE_SECURITY_8021X:
 		phase2 = __connman_service_get_phase2(service);
 
@@ -381,7 +387,7 @@ static void previous_passphrase_handler(DBusMessageIter *iter,
 			return;
 
 		security = __connman_service_get_security(service);
-		data.type = __connman_service_security2string(security);
+		data.type = __connman_service_security2string_real(security);
 		if (!data.type)
 			return;
 	}
