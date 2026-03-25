@@ -171,6 +171,11 @@ enum connman_service_security __connman_service_string2security(const char *str)
 	return 0;
 }
 
+enum connman_service_security __connman_service_string2security_real(const char *str)
+{
+	return 0;
+}
+
 enum connman_service_type __connman_service_string2type(const char *str)
 {
 	if (!str)
