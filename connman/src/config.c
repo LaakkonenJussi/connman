@@ -790,10 +790,9 @@ static bool load_service(GKeyFile *keyfile, const char *group,
 
 	str = __connman_config_get_string(keyfile, group, SERVICE_KEY_SECURITY,
 			NULL);
-	security = __connman_service_string2security(str);
+	security = __connman_service_string2security_real(str);
 
 	if (service->eap) {
-
 		if (str && security != CONNMAN_SERVICE_SECURITY_8021X)
 			connman_info("Mismatch between EAP configuration and "
 					"setting %s = %s",
@@ -802,12 +801,15 @@ static bool load_service(GKeyFile *keyfile, const char *group,
 		service->security = CONNMAN_SERVICE_SECURITY_8021X;
 
 	} else if (service->passphrase) {
-
 		if (str) {
-			if (security == CONNMAN_SERVICE_SECURITY_PSK ||
-					security == CONNMAN_SERVICE_SECURITY_WEP) {
+			switch (security) {
+			case CONNMAN_SERVICE_SECURITY_PSK:
+			case CONNMAN_SERVICE_SECURITY_PSK_SAE:
+			case CONNMAN_SERVICE_SECURITY_SAE:
+			case CONNMAN_SERVICE_SECURITY_WEP:
 				service->security = security;
-			} else {
+				break;
+			default:
 				connman_info("Mismatch with passphrase and "
 						"setting %s = %s",
 						SERVICE_KEY_SECURITY, str);
@@ -1330,7 +1332,8 @@ static int try_provision_service(struct connman_config_service *config,
 			return -ENOENT;
 
 		str = connman_network_get_string(network, "WiFi.Security");
-		if (config->security != __connman_service_string2security(str))
+		if (config->security != __connman_service_string2security_real(
+									str))
 			return -ENOENT;
 
 		break;
