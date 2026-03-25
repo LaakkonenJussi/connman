@@ -631,6 +631,53 @@ enum connman_service_security __connman_service_string2security(const char *str)
 	if (!strcmp(str, "wep"))
 		return CONNMAN_SERVICE_SECURITY_WEP;
 	if (!strcmp(str,"psksae"))
+		return CONNMAN_SERVICE_SECURITY_PSK;
+	if (!strcmp(str,"sae"))
+		return CONNMAN_SERVICE_SECURITY_PSK;
+
+	return CONNMAN_SERVICE_SECURITY_UNKNOWN;
+}
+
+const char *__connman_service_security2string(enum connman_service_security security)
+{
+	switch (security) {
+	case CONNMAN_SERVICE_SECURITY_UNKNOWN:
+		break;
+	case CONNMAN_SERVICE_SECURITY_NONE:
+		return "none";
+	case CONNMAN_SERVICE_SECURITY_WEP:
+		return "wep";
+	case CONNMAN_SERVICE_SECURITY_PSK:
+	case CONNMAN_SERVICE_SECURITY_WPA:
+	case CONNMAN_SERVICE_SECURITY_RSN:
+	case CONNMAN_SERVICE_SECURITY_PSK_SAE:
+	case CONNMAN_SERVICE_SECURITY_SAE:
+		return "psk";
+	case CONNMAN_SERVICE_SECURITY_8021X:
+		return "ieee8021x";
+	}
+
+	return NULL;
+}
+
+enum connman_service_security __connman_service_string2security_real(const char *str)
+{
+	if (!str)
+		return CONNMAN_SERVICE_SECURITY_UNKNOWN;
+
+	if (!strcmp(str, "psk"))
+		return CONNMAN_SERVICE_SECURITY_PSK;
+	if (!strcmp(str, "ieee8021x") || !strcmp(str, "8021x"))
+		return CONNMAN_SERVICE_SECURITY_8021X;
+	if (!strcmp(str, "none") || !strcmp(str, "open"))
+		return CONNMAN_SERVICE_SECURITY_NONE;
+	if (!strcmp(str, "wep"))
+		return CONNMAN_SERVICE_SECURITY_WEP;
+	if (!strcmp(str, "wpa"))
+		return CONNMAN_SERVICE_SECURITY_WPA;
+	if (!strcmp(str, "rsn"))
+		return CONNMAN_SERVICE_SECURITY_RSN;
+	if (!strcmp(str,"psksae"))
 		return CONNMAN_SERVICE_SECURITY_PSK_SAE; // WPA2+WPA3
 	if (!strcmp(str,"sae"))
 		return CONNMAN_SERVICE_SECURITY_SAE;
@@ -638,7 +685,8 @@ enum connman_service_security __connman_service_string2security(const char *str)
 	return CONNMAN_SERVICE_SECURITY_UNKNOWN;
 }
 
-const char *__connman_service_security2string(enum connman_service_security security)
+const char *__connman_service_security2string_real(
+					enum connman_service_security security)
 {
 	switch (security) {
 	case CONNMAN_SERVICE_SECURITY_UNKNOWN:
@@ -1139,7 +1187,20 @@ static int service_save(struct connman_service *service)
 			freq = connman_network_get_frequency(service->network);
 			g_key_file_set_integer(keyfile, service->identifier,
 						"Frequency", freq);
+			cst_str = connman_network_get_string(service->network,
+					"WiFi.Security");
 		}
+		
+		if (!cst_str)
+			cst_str = __connman_service_security2string_real(
+							service->security);
+
+		DBG("service %s security %s", service->identifier, cst_str);
+			
+		set_config_string(keyfile, service->identifier,
+				"Security", cst_str);
+		cst_str = NULL;
+
 		set_config_string(keyfile, service->identifier,
 			PROP_EAP, service->eap);
 		set_config_string(keyfile, service->identifier,
@@ -2412,7 +2473,7 @@ static void append_security(DBusMessageIter *iter, void *user_data)
 	struct connman_service *service = user_data;
 	const char *str;
 
-	str = __connman_service_security2string(service->security);
+	str = __connman_service_security2string_real(service->security);
 	if (str)
 		dbus_message_iter_append_basic(iter,
 				DBUS_TYPE_STRING, &str);
@@ -4353,6 +4414,39 @@ const char *__connman_service_get_passphrase(struct connman_service *service)
 		return NULL;
 
 	return service->passphrase;
+}
+
+static gboolean set_security(struct connman_service *service,
+					enum connman_service_security security)
+{
+	if (!service || service->security == security)
+		return FALSE;
+
+	service->security = security;
+	security_changed(service);
+	return TRUE;
+}
+
+static gboolean set_security_str(struct connman_service *service,
+					const char *security)
+{
+	if (!security)
+		return FALSE;
+
+	return set_security(service,
+			__connman_service_string2security_real(security));
+}
+
+void __connman_service_set_security(struct connman_service *service,
+					enum connman_service_security security)
+{
+	if (!service)
+		return;
+
+	if (service->immutable || service->hidden)
+		return;
+
+	set_security(service, security);
 }
 
 /*
@@ -9316,7 +9410,7 @@ static enum connman_service_security security_from_ident(const char *ident)
 		}
 	}
 
-	return __connman_service_string2security(str);
+	return __connman_service_string2security_real(str);
 }
 
 static bool service_default_mdns(enum connman_service_type type)
@@ -9955,30 +10049,6 @@ static enum connman_service_type convert_network_type(struct connman_network *ne
 	return CONNMAN_SERVICE_TYPE_UNKNOWN;
 }
 
-static enum connman_service_security convert_wifi_security(const char *security)
-{
-	if (!security)
-		return CONNMAN_SERVICE_SECURITY_UNKNOWN;
-	else if (g_str_equal(security, "none"))
-		return CONNMAN_SERVICE_SECURITY_NONE;
-	else if (g_str_equal(security, "wep"))
-		return CONNMAN_SERVICE_SECURITY_WEP;
-	else if (g_str_equal(security, "psk"))
-		return CONNMAN_SERVICE_SECURITY_PSK;
-	else if (g_str_equal(security, "ieee8021x"))
-		return CONNMAN_SERVICE_SECURITY_8021X;
-	else if (g_str_equal(security, "wpa"))
-		return CONNMAN_SERVICE_SECURITY_WPA;
-	else if (g_str_equal(security, "rsn"))
-		return CONNMAN_SERVICE_SECURITY_RSN;
-	else if (g_str_equal(security, "psksae"))
-		return CONNMAN_SERVICE_SECURITY_PSK_SAE;
-	else if (g_str_equal(security, "sae"))
-		return CONNMAN_SERVICE_SECURITY_SAE;
-	else
-		return CONNMAN_SERVICE_SECURITY_UNKNOWN;
-}
-
 static void update_wps_values(struct connman_service *service,
 				struct connman_network *network)
 {
@@ -10028,6 +10098,9 @@ gboolean __connman_service_update_value_from_network(
 			}
 		}
 		return FALSE;
+	} else if (!g_strcmp0(key, "WiFi.Security")) {
+		return set_security_str(service, connman_network_get_string(
+								network, key));
 	} else {
 		return TRUE;
 	}
@@ -10103,14 +10176,13 @@ static void update_from_network(struct connman_service *service,
 		service->strength = strength;
 	}
 
-	str = connman_network_get_string(network, "WiFi.Security");
-	service->security = convert_wifi_security(str);
-
 	if (service->type == CONNMAN_SERVICE_TYPE_WIFI) {
 		__connman_service_update_value_from_network(service, network,
-								"WiFi.SSID");
+							"WiFi.Security");
 		__connman_service_update_value_from_network(service, network,
-								"WiFi.EAP");
+							"WiFi.SSID");
+		__connman_service_update_value_from_network(service, network,
+							"WiFi.EAP");
 		update_wps_values(service, network);
 	}
 
@@ -10356,12 +10428,20 @@ void __connman_service_update_from_network(struct connman_network *network)
 roaming:
 	roaming = connman_network_get_bool(service->network, "Roaming");
 	if (roaming == service->roaming)
-		goto sorting;
+		goto security;
 
 	service->roaming = roaming;
 	need_sort = true;
 
 	roaming_changed(service);
+
+security:
+	/* Calls security_changed() if security changes */
+	if (!set_security_str(service, connman_network_get_string(
+					service->network, "WiFi.Security")))
+		goto sorting;
+
+	need_sort = true;
 
 sorting:
 	if (need_sort) {
