@@ -65,7 +65,7 @@
 
 #define WIFI_BSS_COUNT_SMALL (10)
 #define WIFI_BSS_COUNT_MAX (100)
-#define WIFI_WEAK_RSSI (-85) /* dBm */
+#define WIFI_WEAK_RSSI (-75) /* dBm */
 #define WIFI_WEAK_RSSI_MAX (-65) /* dBm */
 #define WIFI_WEAK_BSS_MIN_SIGHTINGS (3)
 
