@@ -31,6 +31,12 @@
 #define AF_INET6_POS 1
 #define AF_ARRAY_LENGTH 2
 
+#define WPA3_SAE_PWE_STR_HNP	"HnP"
+#define WPA3_SAE_PWE_STR_H2E	"H2E"
+#define WPA3_SAE_PWE_STR_BOTH	"both"
+#define WPA3_SAE_PWE_STR_FORCE	"force"
+
+
 typedef void (*util_debug_func_t)(const char *str, void *user_data);
 
 void util_debug(util_debug_func_t function, void *user_data,
@@ -69,3 +75,5 @@ typedef int (*config_callback) (const char *filepath);
 int util_g_file_error_to_errno(GError *error);
 int util_read_config_files_from(const char *path, const char *suffix,
 					GList **conffiles, config_callback cb);
+
+int util_wpa3_sae_pwe_index(const char *str);

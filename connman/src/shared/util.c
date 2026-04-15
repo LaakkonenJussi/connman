@@ -344,3 +344,27 @@ int util_read_config_files_from(const char *path, const char *suffix,
 
 	return 0;
 }
+
+#define ARRAY_SIZE(a) (sizeof(a)/sizeof(a[0]))
+
+static const char *wpa3_sae_pwe_options[] = {	WPA3_SAE_PWE_STR_HNP,
+						WPA3_SAE_PWE_STR_H2E,
+						WPA3_SAE_PWE_STR_BOTH,
+						WPA3_SAE_PWE_STR_FORCE,
+						NULL,
+					};
+
+int util_wpa3_sae_pwe_index(const char *str)
+{
+	int i;
+
+	if (!str || !*str)
+		return -EINVAL;
+
+	for (i = 0; wpa3_sae_pwe_options[i]; i++) {
+		if (!g_ascii_strcasecmp(str, wpa3_sae_pwe_options[i])) 
+			return i;
+	}
+
+	return -EINVAL;
+}
