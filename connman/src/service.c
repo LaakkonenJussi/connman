@@ -1243,7 +1243,6 @@ static int service_save(struct connman_service *service)
 			PROP_PHASE2, service->phase2);
 		set_config_string(keyfile, service->identifier,
 			PROP_WPA3_SAE_PWE, service->wpa3_sae_pwe);
-		/* Save only when set, defaults to false */
 		if (service->wpa3_sae_check_mfp)
 			g_key_file_set_boolean(keyfile, service->identifier,
 						PROP_WPA3_SAE_CHECK_MFP,
