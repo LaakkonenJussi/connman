@@ -287,8 +287,8 @@ free_only:
 	g_free(config_service->config_ident);
 	g_free(config_service->config_entry);
 	g_free(config_service->virtual_file);
-	g_free(config_service);
 	g_free(config_service->wpa3_sae_pwe);
+	g_free(config_service);
 }
 
 static void check_keys(GKeyFile *keyfile, const char *group,
