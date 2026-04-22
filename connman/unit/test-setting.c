@@ -160,8 +160,8 @@ void __connman_service_set_string(struct connman_service *service,
 	return;
 }
 
-void __connman_service_set_boolean(struct connman_service *service,
-		const char *key, bool value)
+void __connman_service_set_sae_check_mfp(struct connman_service *service,
+								bool value)
 {
 	return;
 }
