@@ -390,7 +390,7 @@ struct connman_service {
 	gboolean disabled;
 	bool removing;
 	char *wpa3_sae_pwe;
-	bool wpa3_sae_check_mfp;
+	enum connman_service_sae_check_mfp sae_check_mfp;
 };
 
 static const char *service_get_access(struct connman_service *service);
@@ -1026,9 +1026,11 @@ static void service_apply(struct connman_service *service, GKeyFile *keyfile)
 					&service->phase2);
 	get_config_string(keyfile, service->identifier, PROP_WPA3_SAE_PWE,
 					&service->wpa3_sae_pwe);
-	service->wpa3_sae_check_mfp = g_key_file_get_boolean(keyfile,
-						service->identifier,
-						PROP_WPA3_SAE_CHECK_MFP, NULL);
+	bool val = g_key_file_get_boolean(keyfile, service->identifier,
+					PROP_WPA3_SAE_CHECK_MFP, &error);
+	if (!error)
+		service->sae_check_mfp = (uint)val;
+	g_clear_error(&error);
 
 	str = g_key_file_get_string(keyfile,
 				service->identifier, PROP_ACCESS, NULL);
@@ -1243,10 +1245,12 @@ static int service_save(struct connman_service *service)
 			PROP_PHASE2, service->phase2);
 		set_config_string(keyfile, service->identifier,
 			PROP_WPA3_SAE_PWE, service->wpa3_sae_pwe);
-		if (service->wpa3_sae_check_mfp)
+		if (service->sae_check_mfp !=
+					CONNMAN_SERVICE_SAE_CHECK_MFP_UNSET)
 			g_key_file_set_boolean(keyfile, service->identifier,
 						PROP_WPA3_SAE_CHECK_MFP,
-						service->wpa3_sae_check_mfp);
+						service->sae_check_mfp ?
+								true : false);
 		else
 			g_key_file_remove_key(keyfile, service->identifier,
 						PROP_WPA3_SAE_CHECK_MFP, NULL);
@@ -2440,7 +2444,7 @@ static gboolean service_saved_value(struct connman_service *service)
 
 static gboolean service_sae_check_mfp_value(struct connman_service *service)
 {
-	return service->wpa3_sae_check_mfp;
+	return service->sae_check_mfp == CONNMAN_SERVICE_SAE_CHECK_MFP_TRUE;
 }
 
 static const struct connman_service_boolean_property service_autoconnect =
@@ -3009,18 +3013,30 @@ static int set_mdns(struct connman_service *service,
 	return result;
 }
 
-static int set_wpa3_sae_check_mfp(struct connman_service *service,
-			bool enabled)
+static int set_sae_check_mfp(struct connman_service *service, bool enabled)
 {
-	if (service->wpa3_sae_check_mfp == enabled)
-		return -EALREADY;
+	switch (service->sae_check_mfp) {
+	case CONNMAN_SERVICE_SAE_CHECK_MFP_UNSET:
+		break;
+	case CONNMAN_SERVICE_SAE_CHECK_MFP_TRUE:
+		if (enabled)
+			return -EALREADY;
 
-	service->wpa3_sae_check_mfp = enabled;
+		break;
+	case CONNMAN_SERVICE_SAE_CHECK_MFP_FALSE:
+		if (!enabled)
+			return -EALREADY;
+
+		break;
+	}
+
+	service->sae_check_mfp = enabled ? CONNMAN_SERVICE_SAE_CHECK_MFP_TRUE : 
+					CONNMAN_SERVICE_SAE_CHECK_MFP_FALSE;
 	service_boolean_changed(service, &service_sae_check_mfp);
 
 	if (service->network)
 		connman_network_set_string(service->network, "WiFi.SAECheckMFP",
-				service->wpa3_sae_check_mfp ? "1" : "0");
+							enabled ? "1" : "0");
 
 	return 0;
 }
@@ -3769,9 +3785,14 @@ static void append_properties(DBusMessageIter *dict, dbus_bool_t limited,
 						PROP_WPA3_SAE_PWE,
 						DBUS_TYPE_STRING,
 						&service->wpa3_sae_pwe);
-		val = service->wpa3_sae_check_mfp;
-		connman_dbus_dict_append_basic(dict, PROP_WPA3_SAE_CHECK_MFP,
-				DBUS_TYPE_BOOLEAN, &val);
+
+		if (service->sae_check_mfp !=
+					CONNMAN_SERVICE_SAE_CHECK_MFP_UNSET) {
+			val = service->sae_check_mfp ? true : false;
+			connman_dbus_dict_append_basic(dict,
+						PROP_WPA3_SAE_CHECK_MFP,
+						DBUS_TYPE_BOOLEAN, &val);
+		}
 
 		break;
 	case CONNMAN_SERVICE_TYPE_ETHERNET:
@@ -5729,7 +5750,7 @@ static DBusMessage *set_property(DBusConnection *conn,
 
 		dbus_message_iter_get_basic(&value, &val);
 
-		if (!set_wpa3_sae_check_mfp(service, val))
+		if (!set_sae_check_mfp(service, val))
 			service_save(service);
 	} else {
 		return __connman_error_invalid_property(msg);
@@ -8033,13 +8054,13 @@ void __connman_service_set_string(struct connman_service *service,
 	}
 }
 
-void __connman_service_set_boolean(struct connman_service *service,
-					const char *key, bool value)
+void __connman_service_set_sae_check_mfp(struct connman_service *service,
+								bool value)
 {
 	if (service->hidden)
 		return;
-	if (g_str_equal(key, PROP_WPA3_SAE_CHECK_MFP))
-		set_wpa3_sae_check_mfp(service, value);
+
+	set_sae_check_mfp(service, value);
 }
 
 void __connman_service_set_search_domains(struct connman_service *service,
@@ -10249,9 +10270,9 @@ void __connman_service_update_network(struct connman_network *network)
 		connman_network_set_string(service->network, "WiFi.SAEPWE",
 				service->wpa3_sae_pwe);
 
-	if (service->wpa3_sae_check_mfp)
+	if (service->sae_check_mfp != CONNMAN_SERVICE_SAE_CHECK_MFP_UNSET)
 		connman_network_set_string(service->network, "WiFi.SAECheckMFP",
-				service->wpa3_sae_check_mfp ? "1" : "0");
+				service->sae_check_mfp ? "1" : "0");
 }
 
 void connman_service_update_strength_from_network(struct connman_network *network)

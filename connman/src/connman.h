@@ -832,6 +832,12 @@ int __connman_provider_init(void);
 
 #include <connman/service.h>
 
+enum connman_service_sae_check_mfp {
+	CONNMAN_SERVICE_SAE_CHECK_MFP_FALSE = 0,
+	CONNMAN_SERVICE_SAE_CHECK_MFP_TRUE = 1,
+	CONNMAN_SERVICE_SAE_CHECK_MFP_UNSET = 2
+};
+
 int __connman_service_init(void);
 void __connman_service_cleanup(void);
 void __connman_service_unload_services(gchar **services, int len);
@@ -893,8 +899,8 @@ int __connman_service_set_mdns(struct connman_service *service,
 
 void __connman_service_set_string(struct connman_service *service,
 					const char *key, const char *value);
-void __connman_service_set_boolean(struct connman_service *service,
-					const char *key, bool value);
+void __connman_service_set_sae_check_mfp(struct connman_service *service,
+					bool enabled);
 int __connman_service_online_check(struct connman_service *service,
 					enum connman_ipconfig_type type,
 					bool success);
