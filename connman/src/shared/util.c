@@ -350,6 +350,26 @@ static const char *wpa3_sae_pwe_options[] = {	WPA3_SAE_PWE_STR_HNP,
 						WPA3_SAE_PWE_STR_BOTH,
 						NULL,
 					};
+const char *wpa3_support_values[] = {		WPA3_SUPPORT_FULL,
+						WPA3_SUPPORT_MIXED,
+						WPA3_SUPPORT_NONE,
+						NULL,
+					};
+
+bool util_wpa3_is_valid_support_str(const char *str)
+{
+	int i;
+
+	if (!str)
+		return FALSE;
+
+	for (i = 0; wpa3_support_values[i]; i++) {
+		if (!g_ascii_strcasecmp(str, wpa3_support_values[i]))
+			return TRUE;
+	}
+
+	return FALSE;
+}
 
 int util_wpa3_sae_pwe_index(const char *str)
 {

@@ -31,6 +31,9 @@
 #define AF_INET6_POS 1
 #define AF_ARRAY_LENGTH 2
 
+#define WPA3_SUPPORT_FULL		"full"
+#define WPA3_SUPPORT_MIXED		"mixed"
+#define WPA3_SUPPORT_NONE		"none"
 #define WPA3_SAE_PWE_STR_HNP	"HnP"
 #define WPA3_SAE_PWE_STR_H2E	"H2E"
 #define WPA3_SAE_PWE_STR_BOTH	"both"
@@ -74,5 +77,5 @@ typedef int (*config_callback) (const char *filepath);
 int util_g_file_error_to_errno(GError *error);
 int util_read_config_files_from(const char *path, const char *suffix,
 					GList **conffiles, config_callback cb);
-
+bool util_wpa3_valid_support_str(const char *str);
 int util_wpa3_sae_pwe_index(const char *str);

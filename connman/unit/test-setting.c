@@ -224,6 +224,11 @@ int __connman_util_get_random(uint64_t *val)
 	return 0;
 }
 
+bool util_wpa3_is_valid_support_str(const char *str)
+{
+	return true;
+}
+
 int util_wpa3_sae_pwe_index(struct connman_service *service, const char *str)
 {
 	return 0;

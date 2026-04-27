@@ -36,6 +36,8 @@
 #include <gsupplicant_util.h>
 #include <gutil_misc.h>
 
+#include "shared/util.h"
+
 #define SET_OFFLINE_MODE_ACCESS     CONNMAN_ACCESS_ALLOW
 #define CREATE_SERVICE_ACCESS       CONNMAN_ACCESS_ALLOW
 
@@ -101,6 +103,13 @@ static DBusMessage *get_properties(DBusConnection *conn,
 	ipv6_status_url = connman_setting_get_string(CONF_STATUS_URL_IPV6);
 	connman_dbus_dict_append_basic(&dict, "Ipv6StatusUrl",
 						DBUS_TYPE_STRING, &ipv6_status_url);
+
+	str = connman_setting_get_string(CONF_WIFI_WPA3_SUPPORT);
+	if (!str)
+		str = WPA3_SUPPORT_FULL;
+
+	connman_dbus_dict_append_basic(&dict, "WiFiWPA3Support",
+						DBUS_TYPE_STRING, &str);
 
 	connman_dbus_dict_close(&array, &dict);
 

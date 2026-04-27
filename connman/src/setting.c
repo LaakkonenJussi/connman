@@ -679,20 +679,14 @@ static gboolean check_ip(const char *str)
 
 static gboolean check_wpa3_support(const char *str)
 {
-	const char *values[] = { "full", "mixed", "none", NULL};
-	int i;
 
-	if (!str)
+	if (!util_wpa3_is_valid_support_str(str)) {
+		connman_warn("invalid \"WifiWPA3Support\" config value \"%s\"",
+			str);
 		return FALSE;
-
-	for (i = 0; values[i]; i++) {
-		if (g_str_equal(str, values[i]))
-			return TRUE;
 	}
 
-	connman_warn("invalid \"WifiWPA3Support\" config value \"%s\"", str);
-
-	return FALSE;
+	return TRUE;
 }
 
 static gboolean check_wpa3_sae_pwe(const char *str)
@@ -704,7 +698,6 @@ static gboolean check_wpa3_sae_pwe(const char *str)
 	}
 
 	return TRUE;
-
 }
 
 void append_noplugin(const char *value)
