@@ -77,5 +77,5 @@ typedef int (*config_callback) (const char *filepath);
 int util_g_file_error_to_errno(GError *error);
 int util_read_config_files_from(const char *path, const char *suffix,
 					GList **conffiles, config_callback cb);
-bool util_wpa3_valid_support_str(const char *str);
+bool util_wpa3_is_valid_support_str(const char *str);
 int util_wpa3_sae_pwe_index(const char *str);
