@@ -904,6 +904,25 @@ int __connman_service_load_modifiable(struct connman_service *service)
 static gboolean set_security_str(struct connman_service *service,
 					const char *security);
 
+static bool is_service_supported(struct connman_service *service)
+{
+	const char *wifi_support;
+
+	if (service->type != CONNMAN_SERVICE_TYPE_WIFI)
+		return true;
+
+	/* If the WPA3 support level is not set it defaults to full support */
+	wifi_support = connman_setting_get_string(CONF_WIFI_WPA3_SUPPORT);
+	if (!wifi_support)
+		return true;
+
+	/* If the WPA3 support isn't set to full WPA3 SAE cannot be connected */
+	if (service->security == CONNMAN_SERVICE_SECURITY_SAE)
+		return g_str_equal(wifi_support, WPA3_SUPPORT_FULL);
+
+	return true;
+}
+
 static void service_apply(struct connman_service *service, GKeyFile *keyfile)
 {
 	GError *error = NULL;
@@ -984,14 +1003,28 @@ static void service_apply(struct connman_service *service, GKeyFile *keyfile)
 	case CONNMAN_SERVICE_TYPE_GADGET:
 	case CONNMAN_SERVICE_TYPE_BLUETOOTH:
 	case CONNMAN_SERVICE_TYPE_CELLULAR:
-		service->favorite = g_key_file_get_boolean(keyfile,
-				service->identifier, "Favorite", NULL);
+		if (!is_service_supported(service)) {
+			DBG("Unsupported %s favorite defaults to false",
+					service->identifier);
+			service->favorite = false;
+		} else {
+			service->favorite = g_key_file_get_boolean(keyfile,
+					service->identifier, "Favorite", NULL);
+		}
 
 		/* fall through */
 
 	case CONNMAN_SERVICE_TYPE_ETHERNET:
-		autoconnect = g_key_file_get_boolean(keyfile,
-				service->identifier, "AutoConnect", &error);
+		if (!is_service_supported(service)) {
+			DBG("Unsupported %s autoconnect defaults to false",
+					service->identifier);
+			autoconnect = false;
+		} else {
+			autoconnect = g_key_file_get_boolean(keyfile,
+					service->identifier, "AutoConnect",
+					&error);
+		}
+
 		if (!error)
 			connman_service_set_autoconnect(service, autoconnect);
 		g_clear_error(&error);
