@@ -901,6 +901,9 @@ int __connman_service_load_modifiable(struct connman_service *service)
 	return 0;
 }
 
+static gboolean set_security_str(struct connman_service *service,
+					const char *security);
+
 static void service_apply(struct connman_service *service, GKeyFile *keyfile)
 {
 	GError *error = NULL;
@@ -959,6 +962,14 @@ static void service_apply(struct connman_service *service, GKeyFile *keyfile)
 				}
 			}
 			g_free(str);
+		}
+
+		str = g_key_file_get_string(keyfile, service->identifier,
+							"Security", NULL);
+		if (str) {
+			if (!set_security_str(service, str))
+				DBG("Cannot apply security str %s to %s",
+						str, service->identifier);
 		}
 
 		if (service->ssid && service->network &&
