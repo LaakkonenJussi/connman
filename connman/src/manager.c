@@ -440,6 +440,7 @@ static DBusMessage *create_service(DBusConnection *conn, DBusMessage *msg,
 	DBusMessage *reply;
 	DBusMessageIter iter, array, entry;
 	enum connman_service_type service_type;
+	enum connman_service_security security_type;
 	GKeyFile *settings;
 	const char *sender = dbus_message_get_sender(msg);
 	const char *device_ident, *network_ident, *type = NULL, *name = NULL;
@@ -595,16 +596,21 @@ static DBusMessage *create_service(DBusConnection *conn, DBusMessage *msg,
 			return __connman_error_invalid_arguments(msg);
 		}
 
-		if (__connman_service_string2security(security) ==
-					CONNMAN_SERVICE_SECURITY_UNKNOWN) {
+		/* Map the security to the real type. */
+		security_type = __connman_service_string2security_real(security);
+		if (security_type == CONNMAN_SERVICE_SECURITY_UNKNOWN) {
 			DBG("invalid security %s", security);
 			g_free(tmp_name);
 			g_free(tmp_ssid);
 			return __connman_error_invalid_arguments(msg);
 		}
 
+		/* Get the ident and file suffix for the security type. */
 		ident = g_strconcat(type, "_", device_ident, "_",
-					ssid, "_managed_", security, NULL);
+					ssid, "_managed_",
+					__connman_service_security2string(
+								security_type),
+					NULL);
 	}
 
 	/* Lowercase the identifier */
@@ -627,6 +633,13 @@ static DBusMessage *create_service(DBusConnection *conn, DBusMessage *msg,
 		g_key_file_set_string(settings, ident, key, value);
 		dbus_message_iter_next(&array);
 	}
+
+	/*
+	 * Add also the security type to settings similar when expecting to
+	 * load a keyfile from the filesystem.
+	 */
+	if (security)
+		g_key_file_set_string(settings, ident, "Security", security);
 
 	/*
 	 * Make sure both Name and SSID are in there (one of them may have
