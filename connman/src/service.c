@@ -391,6 +391,7 @@ struct connman_service {
 	bool removing;
 	char *wpa3_sae_pwe;
 	bool wpa3_sae_check_mfp;
+	bool supported;
 };
 
 static const char *service_get_access(struct connman_service *service);
@@ -904,7 +905,7 @@ int __connman_service_load_modifiable(struct connman_service *service)
 static gboolean set_security_str(struct connman_service *service,
 					const char *security);
 
-static bool is_service_supported(struct connman_service *service)
+static bool service_is_supported(struct connman_service *service)
 {
 	const char *wifi_support;
 
@@ -929,7 +930,14 @@ static void service_apply(struct connman_service *service, GKeyFile *keyfile)
 	gsize length;
 	gchar *str;
 	bool autoconnect;
+	bool supported;
 	unsigned int ssid_len;
+	
+	/*
+	 * Do not apply this value to service yet as networks are not
+	 * available.
+	 */
+	supported = service_is_supported(service);	
 
 	switch (service->type) {
 	case CONNMAN_SERVICE_TYPE_UNKNOWN:
@@ -1003,7 +1011,7 @@ static void service_apply(struct connman_service *service, GKeyFile *keyfile)
 	case CONNMAN_SERVICE_TYPE_GADGET:
 	case CONNMAN_SERVICE_TYPE_BLUETOOTH:
 	case CONNMAN_SERVICE_TYPE_CELLULAR:
-		if (!is_service_supported(service)) {
+		if (!supported) {
 			DBG("Unsupported %s favorite defaults to false",
 					service->identifier);
 			service->favorite = false;
@@ -1015,7 +1023,7 @@ static void service_apply(struct connman_service *service, GKeyFile *keyfile)
 		/* fall through */
 
 	case CONNMAN_SERVICE_TYPE_ETHERNET:
-		if (!is_service_supported(service)) {
+		if (!supported) {
 			DBG("Unsupported %s autoconnect defaults to false",
 					service->identifier);
 			autoconnect = false;
@@ -2474,6 +2482,9 @@ static gboolean service_autoconnect_value(struct connman_service *service)
 
 static gboolean is_available(struct connman_service *service)
 {
+	if (!service->supported)
+		return false;
+
 	return service->network || service->provider;
 }
 
@@ -2534,6 +2545,22 @@ static void service_set_removing(struct connman_service *service,
 		service->removing = newval;
 		// TODO maybe propagate to D-Bus/notify this?
 		//service_boolean_changed(service, &service_removing);
+	}
+}
+
+static void service_set_supported(struct connman_service *service)
+{
+	bool was_supported = service->supported;
+
+	service->supported = service_is_supported(service);
+
+	/* 
+	 * Disable autoconnect and favorite when supported changes from true to
+	 * false only.
+	 */
+	if (!service->supported && was_supported) {
+		connman_service_set_autoconnect(service, false);
+		__connman_service_set_favorite(service, false);
 	}
 }
 
@@ -4554,6 +4581,13 @@ static gboolean set_security(struct connman_service *service,
 
 	service->security = security;
 	security_changed(service);
+
+	/*
+	 * When security changes update the supported value as well. This
+	 * affects if the service is available or not.
+	 */
+	service_set_supported(service);
+
 	return TRUE;
 }
 
@@ -7413,6 +7447,8 @@ static void service_initialize(struct connman_service *service)
 
 	service->nameservers_ipv4_refcount = 0;
 	service->nameservers_ipv6_refcount = 0;
+
+	service->supported = true;
 }
 
 /**
@@ -10589,6 +10625,7 @@ void __connman_service_update_from_network(struct connman_network *network)
 	struct connman_service *service;
 	uint8_t strength;
 	bool roaming;
+	gboolean was_available;
 	const char *name;
 
 	service = connman_service_lookup_from_network(network);
@@ -10628,10 +10665,19 @@ roaming:
 	roaming_changed(service);
 
 security:
+	/*
+	 * Availability can change due to security changing to one that is
+	 * unsupported.
+	 */
+	was_available = service_available.value(service);
+
 	/* Calls security_changed() if security changes */
 	if (!set_security_str(service, connman_network_get_string(
 					service->network, "WiFi.Security")))
 		goto sorting;
+
+	if (was_available != service_available.value(service))
+		service_boolean_changed(service, &service_available);
 
 	need_sort = true;
 
