@@ -2209,6 +2209,10 @@ int connman_network_set_maxrate(struct connman_network *network,
 
 	DBG("network %p maxrate %d", network, maxrate);
 	network->wifi.maxrate = maxrate;
+
+	__connman_service_network_property_changed(
+		connman_service_lookup_from_network(network), "MaxRate");
+
 	return 0;
 }
 
