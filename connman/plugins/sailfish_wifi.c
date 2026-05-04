@@ -144,6 +144,7 @@ enum bss_events {
 	BSS_EVENT_SSID,
 	BSS_EVENT_FREQUENCY,
 	BSS_EVENT_SIGNAL,
+	BSS_EVENT_MAXRATE,
 	BSS_EVENT_COUNT
 };
 
@@ -1189,6 +1190,17 @@ static gboolean wifi_network_update_current_bss(struct wifi_network *net)
 	}
 
 	return changed;
+}
+
+static void wifi_network_update_maxrate(struct wifi_network *net)
+{
+	if (net) {
+		GSupplicantBSS *bss = wifi_network_current_bss(net);
+		if (bss) {
+			connman_network_set_maxrate(net->network,
+							bss->maxrate);
+		}
+	}
 }
 
 static void wifi_network_current_bss_changed(GSupplicantInterface *iface,
@@ -3102,6 +3114,11 @@ static void wifi_device_bss_ident_changed(GSupplicantBSS *bss, void *data)
 	}
 }
 
+static void wifi_device_bss_maxrate_changed(GSupplicantBSS *bss, void *dev)
+{
+	wifi_network_update_maxrate(wifi_device_network_for_bss(dev, bss));
+}
+
 static void wifi_device_bss_add_3(struct wifi_device *dev,
 						struct wifi_bss *bss_data)
 {
@@ -3176,6 +3193,10 @@ static void wifi_device_bss_add_3(struct wifi_device *dev,
 			gsupplicant_bss_add_handler(bss,
 				GSUPPLICANT_BSS_PROPERTY_SIGNAL,
 				wifi_device_bss_signal_changed, dev);
+		bss_data->event_id[BSS_EVENT_MAXRATE] =
+			gsupplicant_bss_add_handler(bss,
+				GSUPPLICANT_BSS_PROPERTY_MAXRATE,
+				wifi_device_bss_maxrate_changed, dev);
 	}
 
 	/*
