@@ -226,12 +226,75 @@ static bool is_empty(struct dns_interface *iface)
 	return (!iface->domains && !iface->servers);
 }
 
+/*
+ * If the default service exists and it is different do not allow to update this
+ * service. Only the default service's DNS should be used. The services may be
+ * updated after the service was disabled but that would then block use of the
+ * service at startup as DNSs and domains are updated before the service is
+ * enabled. This makes it possible to handle both cases, when the service is
+ * just initializing or when a service gets updates while not being as default
+ * service, which is the case when using VPN as default service. With split
+ * routed VPNs the transport service's IPv4 and IPv6 should be checked if the
+ * VPN is using either of them. In such case the DNS servers of the split-routed
+ * VPN must be kept in order to access resources behind the VPN as well.
+ */
+static bool skip_iface_update(int index)
+{
+	struct connman_service *default_service = connman_service_get_default();
+	struct connman_ipconfig *ipconfig;
+	int service_index;
+	int vpn_index;
+
+	if (!default_service)
+		return false;
+
+	ipconfig = __connman_service_get_ip4config(default_service);
+	service_index = __connman_ipconfig_get_index(ipconfig);
+	if (service_index == index)
+		return false;
+
+	vpn_index = __connman_connection_get_vpn_index(service_index);
+
+	DBG("index4 %d vpn_index %d index %d", service_index, vpn_index, index);
+
+	/* Split routed VPN -> DNSs must be added */
+	if (vpn_index == index) {
+		DBG("IPv4 split routed VPN, keep DNS");
+		return false;
+	}
+
+	ipconfig = __connman_service_get_ip6config(default_service);
+	service_index = __connman_ipconfig_get_index(ipconfig);
+	if (service_index == index)
+		return false;
+
+	vpn_index = __connman_connection_get_vpn_index(service_index);
+
+	DBG("index6 %d vpn_index %d index %d", service_index, vpn_index, index);
+
+	if (vpn_index == index) {
+		DBG("IPv6 split routed VPN, keep DNS");
+		return false;
+	}
+
+	DBG("skip DNS of %d", index);
+
+	return true;
+}
+
 static void update_interface(gpointer key, gpointer value, gpointer data)
 {
 	struct dns_interface *iface = value;
 	GList **removed_items = data;
 
-	set_systemd_resolved_values(iface);
+	if (skip_iface_update(iface->index))
+		DBG("default service exists and is not %d, skip", iface->index);
+	else {
+		DBG("set systemd resolved values, force updates");
+		iface->needs_server_update = true;
+		iface->needs_domain_update = true;
+		set_systemd_resolved_values(iface);
+	}
 
 	if (is_empty(iface))
 		*removed_items = g_list_prepend(*removed_items, iface);
@@ -336,10 +399,25 @@ static GList *replace_to_end(GList *str_list, const char *str)
 	return g_list_append(str_list, g_strdup(str));
 }
 
+static void update_interface_dns_and_domain(struct dns_interface *iface)
+{
+	DBG("index %d", iface->index);
+
+	iface->needs_domain_update = TRUE;
+	iface->needs_server_update = TRUE;
+
+	if (!update_interfaces_source) {
+		DBG("add new update_systemd_resolved call");
+		update_interfaces_source = g_idle_add(update_systemd_resolved,
+				NULL);
+	}
+}
+
 int __connman_dnsproxy_append(int index, const char *domain,
 							const char *server)
 {
 	struct dns_interface *iface;
+	bool skip_update = false;
 
 	DBG("%d, %s, %s", index, domain ? domain : "no domain",
 			server ? server : "no server");
@@ -358,14 +436,18 @@ int __connman_dnsproxy_append(int index, const char *domain,
 		g_hash_table_replace(interface_hash, GUINT_TO_POINTER(index), iface);
 	}
 
+	skip_update = skip_iface_update(index);
+	if (skip_update)
+		DBG("skip adding DNS and domains for non-default %d", index);
+
 	if (domain) {
 		iface->domains = replace_to_end(iface->domains, domain);
-		iface->needs_domain_update = TRUE;
+		iface->needs_domain_update = !skip_update;
 	}
 
 	if (server) {
 		iface->servers = replace_to_end(iface->servers, server);
-		iface->needs_server_update = TRUE;
+		iface->needs_server_update = !skip_update;
 	}
 
 	if (!update_interfaces_source)
@@ -558,8 +640,8 @@ static void toggle_interface_dns(struct dns_interface *iface, bool enable)
 	DBG("%s interface %p/%d", enable ? "enable" : "disable", iface,
 								iface->index);
 
-	if (iface->enabled == enable) {
-		DBG("already %s", enable ? "enabled" : "disabled");
+	if (iface->enabled && enable) {
+		DBG("already enabled");
 		return;
 	}
 
@@ -571,6 +653,7 @@ static void toggle_interface_dns(struct dns_interface *iface, bool enable)
 	} else {
 		DBG("re-enabling interface %d", iface->index);
 		set_systemd_resolved_values(iface);
+		update_interface_dns_and_domain(iface);
 	}
 
 	if (is_empty(iface)) {
@@ -603,8 +686,10 @@ static void check_interface(gpointer key, gpointer value, gpointer user_data)
 		toggle_interface_dns(iface, search_data->enable);
 	/* If DNSs of an interface are to be enabled disable the others */
 	} else if (search_data->enable) {
+		DBG("disable %d", iface->index);
 		toggle_interface_dns(iface, false);
 	} else {
+		DBG("no-op on %d", iface->index);
 		return;
 	}
 
@@ -723,6 +808,9 @@ static void resolved_service_state_changed(struct connman_service *service,
 	int err;
 
 	index = __connman_service_get_index(service);
+	if (index < 0)
+		return;
+
 	DBG("service %p interface %d state %d", service, index, state);
 
 	switch (state) {
