@@ -94,18 +94,33 @@ struct wg_peer_resolv {
 struct {
 	const char	*opt;
 	bool		save;
+	bool		peer_option;
 } wg_options[] = {
-	{"WireGuard.Address", true},
-	{"WireGuard.ListenPort", true},
-	{"WireGuard.DNS", true},
-	{"WireGuard.PrivateKey", true}, // TODO set false after agent support
-	{"WireGuard.PresharedKey", true}, // TODO set false after agent support
-	{"WireGuard.PublicKey", true},
-	{"WireGuard.AllowedIPs", true},
-	{"WireGuard.EndpointPort", true},
-	{"WireGuard.PersistentKeepalive", true},
-	{"WireGuard.DisableIPv6", true}
+	{"Address", true, false},
+	{"ListenPort", true, false},
+	{"DNS", true, false},
+	{"PrivateKey", true, false}, // TODO set false after agent support
+	{"PresharedKey", true, true}, // TODO set false after agent support
+	{"PublicKey", true, true},
+	{"AllowedIPs", true, true},
+	{"Endpoint", true, true},
+	{"EndpointPort", true, true},
+	{"PersistentKeepalive", true, true},
+	{"DisableIPv6", true, false},
+	{"PeerCount", true, false},
 };
+
+static char* get_wg_opt(const char *opt, bool peer_option, int index)
+{
+	if (!opt)
+		return NULL;
+
+	/* Keep backwards compatibility when single peer mode is in use. */
+	if (peer_option && index >= 0)
+		return g_strdup_printf("WireGuard.Peer%d.%s", index, opt);
+
+	return g_strdup_printf("WireGuard.%s", opt);
+}
 
 static struct wireguard_info *create_private_data(struct vpn_provider *provider)
 {
@@ -862,15 +877,6 @@ static void run_route_setup(struct wireguard_info *info, guint timeout)
 	info->route_setup_id = g_timeout_add(timeout, wg_route_setup_cb, info);
 }
 
-<<<<<<< Updated upstream
-
-static char *get_peer_string(int peerId, const char *suffix)
-{
-	return g_strdup_printf("WireGuard.Peer%d.%s", peerId, suffix);
-}
-
-=======
->>>>>>> Stashed changes
 static int create_multipeer(struct wireguard_info *info, int peercount,
 		bool *do_split_routing, char **gateway4, char **gateway6)
 {
@@ -902,7 +908,7 @@ static int create_multipeer(struct wireguard_info *info, int peercount,
 			}
 		}
 
-		str = get_peer_string(i, "PublicKey");
+		str = get_wg_opt("PublicKey", true, i);
 		option = vpn_provider_get_string(info->provider, str);
 		if (!option) {
 			DBG("%s is missing", str);
@@ -920,8 +926,7 @@ static int create_multipeer(struct wireguard_info *info, int peercount,
 
 		flags = WGPEER_HAS_PUBLIC_KEY | WGPEER_REPLACE_ALLOWEDIPS;
 
-		str = get_peer_string(i, "PresharedKey");
-
+		str = get_wg_opt("PresharedKey", true, i);
 		option = vpn_provider_get_string(info->provider, str);
 		g_free(str);
 
@@ -935,7 +940,7 @@ static int create_multipeer(struct wireguard_info *info, int peercount,
 			flags |= WGPEER_HAS_PRESHARED_KEY;
 		}
 
-		str = get_peer_string(i, "AllowedIPs");
+		str = get_wg_opt("AllowedIPs", true, i);
 		option = vpn_provider_get_string(info->provider, str);
 		if (!option) {
 			DBG("peer #%d %s is missing", i, str);
@@ -951,7 +956,7 @@ static int create_multipeer(struct wireguard_info *info, int peercount,
 			continue;
 		}
 
-		str = get_peer_string(i, "PersistentKeepalive");
+		str = get_wg_opt("PersistentKeepalive", true, i);
 		option = vpn_provider_get_string(info->provider, str);
 		peer->persistent_keepalive_interval =
 				parse_persistent_keepalive_interval(option);
@@ -960,13 +965,13 @@ static int create_multipeer(struct wireguard_info *info, int peercount,
 
 		g_free(str);
 
-		str = get_peer_string(i, "EndpointPort");
+		str = get_wg_opt("EndpointPort", true, i);
 		option = vpn_provider_get_string(info->provider, str);
 		if (!option)
 			option = "51820";
 		g_free(str);
 
-		str = get_peer_string(i, "Endpoint");
+		str = get_wg_opt("Endpoint", true, i);
 		endpoint = vpn_provider_get_string(info->provider, str);
 		g_free(str);
 
@@ -1412,19 +1417,60 @@ static int wg_error_code(struct vpn_provider *provider, int exit_code)
 static int wg_save(struct vpn_provider *provider, GKeyFile *keyfile)
 {
 	const char *option;
+	char *str;
+	char *end;
+	int peercount;
 	int i;
+	int j;
+
+	option = vpn_provider_get_string(provider, "WireGuard.PeerCount");
+	peercount = option ? g_ascii_strtoull(option, &end, 10) : 0;
 
 	for (i = 0; i < (int)ARRAY_SIZE(wg_options); i++) {
 		if (!wg_options[i].save)
 			continue;
 
-		option = vpn_provider_get_string(provider, wg_options[i].opt);
-		if (!option)
+		if (!wg_options[i].peer_option || (wg_options[i].peer_option &&
+								!peercount))
+			str = get_wg_opt(wg_options[i].opt,
+						wg_options[i].peer_option, -1);
+		else {
+			DBG("skip %s, peers: %d", wg_options[i].opt, peercount);
 			continue;
+		}
 
-		g_key_file_set_string(keyfile,
+		DBG("%s", str);
+
+		option = vpn_provider_get_string(provider, str);
+		if (option)
+			g_key_file_set_string(keyfile,
 					vpn_provider_get_save_group(provider),
-					wg_options[i].opt, option);
+					str, option);
+
+		g_free(str);
+	}
+
+	if (!peercount)
+		return 0;
+
+	for (i = 0; i < peercount; i++) {
+		for (j = 0; j < (int)ARRAY_SIZE(wg_options); j++) {
+			if (!wg_options[j].save || !wg_options[j].peer_option)
+				continue;
+
+			str = get_wg_opt(wg_options[j].opt,
+						wg_options[j].peer_option, i);
+			DBG("%s", str);
+
+			option = vpn_provider_get_string(provider, str);
+			if (option)
+				g_key_file_set_string(keyfile,
+						vpn_provider_get_save_group(
+								provider),
+						str, option);
+
+			g_free(str);
+		}
 	}
 
 	return 0;
