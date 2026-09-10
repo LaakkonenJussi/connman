@@ -197,52 +197,63 @@ static int parse_key(const char *str, wg_key key)
 static int parse_allowed_ips(const char *allowed_ips, wg_peer *peer,
 							bool *do_split_routing)
 {
-	struct wg_allowedip *curaip, *allowedip;
+	struct wg_allowedip *curaip = NULL;
+	struct wg_allowedip *allowedip;
 	char buf[INET6_ADDRSTRLEN];
-	char **tokens, **toks;
+	char **tokens, **ip_tokens;
 	char *send;
 	int i;
 
 	*do_split_routing = true;
-	curaip = NULL;
-	tokens = g_strsplit_set(allowed_ips, ", ", -1);
+
+	tokens = g_strsplit(allowed_ips, ",", -1);
+	if (!tokens)
+		return -EINVAL;
+
 	for (i = 0; tokens[i]; i++) {
-		toks = g_strsplit(tokens[i], "/", -1);
-		if (g_strv_length(toks) != 2) {
+		/* Remove white space if any and skip empty content. */
+		char *ip_cidr = g_strstrip(tokens[i]);
+		if (!strlen(ip_cidr))
+			continue;
+
+		ip_tokens = g_strsplit(ip_cidr, "/", 2);
+		if (g_strv_length(ip_tokens) != 2) {
 			DBG("Ignore AllowedIPs value \"%s\", length %d",
-						tokens[i], g_strv_length(toks));
-			g_strfreev(toks);
+						ip_cidr,
+						g_strv_length(ip_tokens));
+			g_strfreev(ip_tokens);
 			continue;
 		}
 
 		allowedip = g_malloc0(sizeof(*allowedip));
 
-		if (inet_pton(AF_INET, toks[0], buf) == 1) {
+		if (inet_pton(AF_INET, ip_tokens[0], buf) == 1) {
 			allowedip->family = AF_INET;
 			memcpy(&allowedip->ip4, buf, sizeof(allowedip->ip4));
-		} else if (inet_pton(AF_INET6, toks[0], buf) == 1) {
+		} else if (inet_pton(AF_INET6, ip_tokens[0], buf) == 1) {
 			allowedip->family = AF_INET6;
 			memcpy(&allowedip->ip6, buf, sizeof(allowedip->ip6));
 		} else {
-			DBG("Ignore AllowedIPs value \"%s\" not valid v4/v6", tokens[i]);
+			DBG("Ignore AllowedIPs value \"%s\" not valid v4/v6",
+				ip_cidr);
 			g_free(allowedip);
-			g_strfreev(toks);
+			g_strfreev(ip_tokens);
 			continue;
 		}
 
-		DBG("use addr %s/%s", toks[0], toks[1]);
+		DBG("use addr %s", ip_cidr);
 
-		allowedip->cidr = g_ascii_strtoull(toks[1], &send, 10);
+		allowedip->cidr = g_ascii_strtoull(ip_tokens[1], &send, 10);
 
 		/*
 		 * Force split routing off if any address is detected as using
 		 * these as allowed IPs indicates that WireGuard is to be used
 		 * to route all traffic.
 		 */
-		if (connman_inet_is_any_addr(toks[0], allowedip->family))
+		if (connman_inet_is_any_addr(ip_tokens[0], allowedip->family))
 			*do_split_routing = false;
 
-		g_strfreev(toks);
+		g_strfreev(ip_tokens);
 
 		if (!curaip)
 			peer->first_allowedip = allowedip;
