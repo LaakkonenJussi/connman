@@ -2696,12 +2696,34 @@ static void append_nameservers(DBusMessageIter *iter,
 	}
 }
 
+static void append_dns_backend(DBusMessageIter *iter)
+{
+	char *server;
+
+	server = DNS_BACKEND_V4;
+	if (server)
+		dbus_message_iter_append_basic(iter, DBUS_TYPE_STRING, &server);
+
+/* Internal dnsproxy defines both, systemd-resolved uses only IPv4 backend. */
+#ifdef DNS_BACKEND_V6
+	server = DNS_BACKEND_V6;
+	if (server)
+		dbus_message_iter_append_basic(iter, DBUS_TYPE_STRING, &server);
+#endif
+}
+
 static void append_dns(DBusMessageIter *iter, void *user_data)
 {
 	struct connman_service *service = user_data;
 
 	if (!is_connected(service->state))
 		return;
+
+	/* If the system is configured to not to expose any DNS over D-Bus. */
+	if (connman_setting_get_bool(CONF_FORCE_DNS_PROXY)) {
+		append_dns_backend(iter);
+		return;
+	}
 
 	if (service->nameservers_config) {
 		append_nameservers(iter, service, service->nameservers_config);
@@ -2733,6 +2755,12 @@ static void append_dnsconfig(DBusMessageIter *iter, void *user_data)
 
 	if (!service->nameservers_config)
 		return;
+
+	/* If the system is configured to not to expose any DNS over D-Bus. */
+	if (connman_setting_get_bool(CONF_FORCE_DNS_PROXY)) {
+		append_dns_backend(iter);
+		return;
+	}
 
 	append_nameservers(iter, NULL, service->nameservers_config);
 }
