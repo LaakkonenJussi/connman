@@ -1271,6 +1271,15 @@ static struct config_option config_options[] = {
 		.error_cb = NULL,
 		.multiplier = 0
 	},
+	/* ForceDNSProxy */
+	{
+		.opt_key = CONF_FORCE_DNS_PROXY,
+		.opt_type = CONF_TYPE_BOOL,
+		.opt_return_type = CONF_TYPE_BOOL,
+		.default_val.bool_val = false,
+		.error_cb = NULL,
+		.multiplier = 0
+	},
 	/* "WifiWPA3Support" */
 	{
 		.opt_key = CONF_WIFI_WPA3_SUPPORT,
