@@ -61,8 +61,11 @@ struct wireguard_info {
 	struct wg_device device;
 	struct wg_peer *peer;
 	struct wg_peer_resolv *resolv;
+	guint valid_peers;
 	guint dying_id;
 	guint route_setup_id;
+	guint handshake_check_id;
+	vpn_provider_connect_cb_t cb;
 };
 
 struct sockaddr_u {
@@ -802,7 +805,92 @@ static void resolve_endpoint_cb(GResolvResultStatus status,
 	run_route_setup(info, 0);
 }
 
-static int disconnect(struct vpn_provider *provider, int error);
+static int disconnect(struct vpn_provider *provider, int err);
+
+static void wg_connect_done(struct wireguard_info *info, int err)
+{
+	DBG("err %d", err);
+
+	if (info->cb) {
+		vpn_provider_connect_cb_t cb = info->cb;
+		info->cb = NULL;
+
+		cb(info->provider, NULL, err);
+	} else if (err) {
+		disconnect(info->provider, err);
+	}
+}
+
+static gboolean wg_handshake_check_cb(gpointer user_data)
+{
+	struct wireguard_info *info = user_data;
+	wg_device *device;
+	wg_peer *peer;
+	int success = 0;
+	int err = 0;
+
+	if (!info) {
+		info->handshake_check_id = 0;
+		return G_SOURCE_REMOVE;
+	}
+
+	if (wg_get_device(&device, info->device.name)) {
+		DBG("cannot get device with name %s, disconnect",
+							info->device.name);
+		info->handshake_check_id = 0;
+		wg_connect_done(info, EINVAL);
+		return G_SOURCE_REMOVE;
+	}
+
+	wg_for_each_peer(device, peer) {
+		DBG("%lu.%lu", peer->last_handshake_time.tv_sec,
+					peer->last_handshake_time.tv_nsec);
+		if (peer->last_handshake_time.tv_sec ||
+					peer->last_handshake_time.tv_nsec)
+			success++;
+	}
+
+	wg_free_device(device);
+
+	DBG("%d/%d peer handshakes successful", success, info->valid_peers);
+	if (!success) {
+		/*
+		 * When we cannot connect to any of the peers we can
+		 * assume something being wrong with the authentication.
+		 * TODO: figure out how to differentiate invalid host from
+		 * invalid auth.
+		 */
+		vpn_provider_add_error(info->provider,
+					VPN_PROVIDER_ERROR_AUTH_FAILED);
+	}
+
+	if (vpn_provider_get_authentication_errors(info->provider) >=
+			vpn_provider_get_auth_error_limit(info->provider)) {
+		DBG("disconnecting due to handshake errors");
+		err = ECONNABORTED;
+	}
+
+	if (success || err)
+		wg_connect_done(info, err);
+
+	if (err) {
+		info->handshake_check_id = 0;
+		return G_SOURCE_REMOVE;
+	}
+
+	return G_SOURCE_CONTINUE;
+}
+
+static void run_handshake_check(struct wireguard_info *info)
+{
+	DBG("");
+
+	if (info->handshake_check_id)
+		g_source_remove(info->handshake_check_id);
+
+	info->handshake_check_id = g_timeout_add(500, wg_handshake_check_cb,
+							info);
+}
 
 static gboolean wg_route_setup_cb(gpointer user_data)
 {
@@ -854,6 +942,8 @@ static gboolean wg_route_setup_cb(gpointer user_data)
 			++idx;
 		}
 	}
+
+	run_handshake_check(info);
 
 	return G_SOURCE_REMOVE;
 }
@@ -1100,6 +1190,8 @@ static int create_multipeer(struct wireguard_info *info, int peercount,
 		peer_id++;
 	}
 
+	info->valid_peers = peer_id;
+
 	uint8_t success = 0;
 	uint8_t invalid = 0;
 	uint8_t unreach = 0;
@@ -1227,6 +1319,7 @@ static int create_singlepeer(struct wireguard_info *info,
 	/* Set first and last peers after the checks to indicate success. */
 	info->device.first_peer = info->peer;
 	info->device.last_peer = info->peer;
+	info->valid_peers = 1;
 
 	family = connman_inet_check_ipaddress(endpoint);
 	if (family != AF_INET && family != AF_INET6) {
@@ -1266,7 +1359,7 @@ static int wg_connect(struct vpn_provider *provider,
 	DBG("");
 
 	vpn_provider_set_plugin_data(provider, info);
-	vpn_provider_set_auth_error_limit(provider, 1);
+	vpn_provider_set_auth_error_limit(provider, 5);
 
 	option = vpn_provider_get_string(provider, "WireGuard.ListenPort");
 	if (option) {
@@ -1380,9 +1473,6 @@ static int wg_connect(struct vpn_provider *provider,
 	vpn_provider_set_supported_ip_networks(provider, true, !disable_ipv6);
 
 done:
-	if (cb)
-		cb(provider, user_data, -err);
-
 	connman_ipaddress_free(ipaddresses.ipaddress_ipv4);
 	connman_ipaddress_free(ipaddresses.ipaddress_ipv6);
 
@@ -1396,7 +1486,12 @@ done:
 		}
 
 		run_route_setup(info, ROUTE_SETUP_TIMEOUT);
+		info->cb = cb;
+		return -EINPROGRESS;
 	}
+
+	if (cb)
+		cb(provider, user_data, -err);
 
 	return err;
 
@@ -1461,6 +1556,9 @@ static int disconnect(struct vpn_provider *provider, int err)
 
 	if (info->route_setup_id)
 		g_source_remove(info->route_setup_id);
+
+	if (info->handshake_check_id)
+		g_source_remove(info->handshake_check_id);
 
 	for (resolv = info->resolv; resolv; resolv = resolv->next) {
 		if (resolv->reresolve_id)
