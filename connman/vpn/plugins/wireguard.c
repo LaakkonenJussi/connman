@@ -51,10 +51,14 @@
 #include "vpn.h"
 #include "wireguard.h"
 
-#define DNS_RERESOLVE_TIMEOUT 20
-#define DNS_RERESOLVE_ERROR_LIMIT 5
-#define ROUTE_SETUP_TIMEOUT 200 // ms
-#define ARRAY_SIZE(a) (sizeof(a)/sizeof(a[0]))
+#define DNS_RERESOLVE_TIMEOUT		20
+#define DNS_RERESOLVE_ERROR_LIMIT	5
+#define ROUTE_SETUP_TIMEOUT		200	// ms
+#define HANDSHAKE_CHECK_TIMEOUT		2 	// seconds
+#define HANDSHAKE_DEFAULT_MAX_DIFF	90 	// seconds
+#define HANDSHAKE_WAIT_TOLERANCE	15	// count, every CHECK_TIMEOUT
+#define NSEC_MULTIP			1000000000ULL
+#define ARRAY_SIZE(a) 			(sizeof(a)/sizeof(a[0]))
 
 struct wireguard_info {
 	struct vpn_provider *provider;
@@ -68,6 +72,8 @@ struct wireguard_info {
 	guint remove_resolv_id;
 	guint dying_id;
 	guint route_setup_id;
+	guint handshake_check_id;
+	vpn_provider_connect_cb_t cb;
 };
 
 struct sockaddr_u {
@@ -93,6 +99,8 @@ struct {
 	{"WireGuard.PersistentKeepalive", true},
 	{"WireGuard.DisableIPv6", true}
 };
+
+static uint64_t handshake_max_diff = HANDSHAKE_DEFAULT_MAX_DIFF * NSEC_MULTIP;
 
 static struct wireguard_info *create_private_data(struct vpn_provider *provider)
 {
@@ -654,7 +662,125 @@ static void resolve_endpoint_cb(GResolvResultStatus status,
 	run_route_setup(info, 0);
 }
 
-static int disconnect(struct vpn_provider *provider, int error);
+static bool handshake_is_valid(wg_peer *peer)
+{
+	struct timespec ts = { 0 };
+	uint64_t handshake;
+	uint64_t current;
+	uint64_t diff;
+	bool valid = true;
+
+	if (clock_gettime(CLOCK_REALTIME, &ts)) {
+		DBG("failed to get time: %s", strerror(errno));
+		return false;
+	}
+
+	handshake = peer->last_handshake_time.tv_sec * NSEC_MULTIP +
+			peer->last_handshake_time.tv_nsec;
+	current = ts.tv_sec * NSEC_MULTIP + ts.tv_nsec;
+	diff = current - handshake;
+
+	if (diff > handshake_max_diff) {
+		DBG("last handshake was over %ds ago",
+					HANDSHAKE_DEFAULT_MAX_DIFF);
+		valid = false;
+	}
+
+	DBG("current   %lu ns", current);
+	DBG("handshake %lu ns", handshake);
+	DBG("diff      %lu ns", diff);
+	DBG("last handshake %llu seconds ago", diff / NSEC_MULTIP);
+
+	return valid;
+}
+
+static int disconnect(struct vpn_provider *provider, int err);
+
+static gboolean wg_handshake_check_cb(gpointer user_data)
+{
+	struct wireguard_info *info = user_data;
+	wg_device *device;
+	wg_peer *peer;
+	int valid_handshakes = 0;
+	int no_data = 0;
+	int peer_count = 0;
+	int err = 0;
+
+	if (!info) {
+		info->handshake_check_id = 0;
+		return G_SOURCE_REMOVE;
+	}
+
+	if (wg_get_device(&device, info->device.name)) {
+		DBG("cannot get device with name %s, disconnect",
+							info->device.name);
+		err = -EINVAL;
+		goto err;
+	}
+
+	wg_for_each_peer(device, peer) {
+		peer_count++;
+
+		if (!peer->rx_bytes && !peer->tx_bytes) {
+			DBG("no data sent or received -> no handshake");
+			no_data++;
+			continue;
+		}
+
+		if (peer->last_handshake_time.tv_sec ||
+					peer->last_handshake_time.tv_nsec) {
+			if (handshake_is_valid(peer))
+				valid_handshakes++;
+		}
+	}
+
+	wg_free_device(device);
+
+	if (no_data == peer_count) {
+		DBG("no data on any peers yet, skip handshake check");
+		return G_SOURCE_CONTINUE;
+	}
+
+	DBG("%d peer handshakes successful", valid_handshakes);
+	if (!valid_handshakes) {
+		/*
+		 * When we cannot connect to any of the peers we can
+		 * assume something being wrong with the authentication.
+		 * TODO: figure out how to differentiate invalid host from
+		 * invalid auth.
+		 */
+		vpn_provider_add_error(info->provider,
+					VPN_PROVIDER_ERROR_AUTH_FAILED);
+
+		if (vpn_provider_get_authentication_errors(info->provider) >=
+				vpn_provider_get_auth_error_limit(
+							info->provider)) {
+			DBG("disconnect due to error limit reached");
+			err = -ECONNABORTED;
+		}
+	}
+
+err:
+	if (err) {
+		info->handshake_check_id = 0;
+		disconnect(info->provider, err);
+		return G_SOURCE_REMOVE;
+	}
+
+	return G_SOURCE_CONTINUE;
+}
+
+static void run_handshake_check(struct wireguard_info *info)
+{
+	DBG("");
+
+	if (info->handshake_check_id)
+		return;
+
+	info->handshake_check_id = g_timeout_add_seconds(
+						HANDSHAKE_CHECK_TIMEOUT,
+						wg_handshake_check_cb, info);
+}
 
 static gboolean wg_dns_reresolve_cb(gpointer user_data)
 {
@@ -737,6 +863,8 @@ static gboolean wg_route_setup_cb(gpointer user_data)
 		++idx;
 	}
 
+	run_handshake_check(info);
+
 	return G_SOURCE_REMOVE;
 }
 
@@ -787,7 +915,7 @@ static int wg_connect(struct vpn_provider *provider,
 	DBG("");
 
 	vpn_provider_set_plugin_data(provider, info);
-	vpn_provider_set_auth_error_limit(provider, 1);
+	vpn_provider_set_auth_error_limit(provider, HANDSHAKE_WAIT_TOLERANCE);
 
 	option = vpn_provider_get_string(provider, "WireGuard.ListenPort");
 	if (option) {
@@ -937,9 +1065,6 @@ static int wg_connect(struct vpn_provider *provider,
 	vpn_provider_set_supported_ip_networks(provider, true, !disable_ipv6);
 
 done:
-	if (cb)
-		cb(provider, user_data, -err);
-
 	connman_ipaddress_free(ipaddresses.ipaddress_ipv4);
 	connman_ipaddress_free(ipaddresses.ipaddress_ipv6);
 
@@ -953,6 +1078,9 @@ done:
 
 		run_route_setup(info, ROUTE_SETUP_TIMEOUT);
 	}
+
+	if (cb)
+		cb(provider, user_data, -err);
 
 	return err;
 
@@ -1011,8 +1139,10 @@ static int disconnect(struct vpn_provider *provider, int err)
 	if (!info)
 		return -ENODATA;
 
-	if (info->dying_id)
+	if (info->dying_id) {
+		DBG("already shutting down");
 		return -EALREADY;
+	}
 
 	if (info->reresolve_id)
 		g_source_remove(info->reresolve_id);
@@ -1022,6 +1152,9 @@ static int disconnect(struct vpn_provider *provider, int err)
 
 	if (info->resolv || info->resolv_id)
 		remove_resolv(info);
+
+	if (info->handshake_check_id)
+		g_source_remove(info->handshake_check_id);
 
 	vpn_provider_set_state(provider, VPN_PROVIDER_STATE_DISCONNECT);
 
