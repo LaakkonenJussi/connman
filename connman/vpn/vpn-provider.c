@@ -3463,6 +3463,10 @@ int vpn_provider_set_domain(struct vpn_provider *provider,
 int vpn_provider_set_nameservers(struct vpn_provider *provider,
 					const char *nameservers)
 {
+	char **nameserver_list;
+	int count = 0;
+	int i;
+
 	DBG("provider %p nameservers %s", provider, nameservers);
 
 	g_strfreev(provider->nameservers);
@@ -3471,7 +3475,39 @@ int vpn_provider_set_nameservers(struct vpn_provider *provider,
 	if (!nameservers)
 		return 0;
 
-	provider->nameservers = g_strsplit_set(nameservers, ", ", 0);
+	/*
+	 * Nameservers may be separeted with commas, spaces or a combination of
+	 * these, e.g., having ", " between the servers. First check the amount
+	 * of valid servers and then allocate the strings using the valid server
+	 * count for the provider.
+	 */
+	nameserver_list = g_strsplit_set(nameservers, ", ", 0);
+	if (!nameserver_list)
+		return -ENOMEM;
+
+	provider->nameservers = g_try_new0(char*,
+					g_strv_length(nameserver_list) + 1);
+	if (!provider->nameservers) {
+		g_strfreev(nameserver_list);
+		return -ENOMEM;
+	}
+
+	for (count = 0, i = 0; nameserver_list[i]; i++) {
+		if (!*nameserver_list[i])
+			continue;
+
+		provider->nameservers[count] = g_strdup(nameserver_list[i]);
+		count++;
+	}
+
+	DBG("valid nameservers %d", count);
+
+	if (!count) {
+		g_strfreev(provider->nameservers);
+		provider->nameservers = NULL;
+	}
+
+	g_strfreev(nameserver_list);
 
 	return 0;
 }
