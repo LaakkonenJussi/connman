@@ -3432,6 +3432,8 @@ int vpn_provider_set_domain(struct vpn_provider *provider,
 int vpn_provider_set_nameservers(struct vpn_provider *provider,
 					const char *nameservers)
 {
+	int i;
+
 	DBG("provider %p nameservers %s", provider, nameservers);
 
 	g_strfreev(provider->nameservers);
@@ -3440,7 +3442,13 @@ int vpn_provider_set_nameservers(struct vpn_provider *provider,
 	if (!nameservers)
 		return 0;
 
-	provider->nameservers = g_strsplit_set(nameservers, ", ", 0);
+	/* 
+	 * Nameservers may have ", " between servers, separate only with comma
+	 * and strip the whitespace off from the entries after.
+	 */
+	provider->nameservers = g_strsplit(nameservers, ",", 0);
+	for (i = 0; provider->nameservers[i]; i++)
+		provider->nameservers[i] = g_strstrip(provider->nameservers[i]);
 
 	return 0;
 }
