@@ -83,6 +83,7 @@ extern "C" {
 #define CONF_ENABLE_LOGIN_MANAGER               "EnableLoginManager"
 #define CONF_DEFAULT_MDNS_CONFIGURATION         "DefaultmDNSConfiguration"
 #define CONF_TETHERING_MDNS_CONFIGURATION       "TetheringmDNSConfiguration"
+#define CONF_IPV6_PRIVACY_USE_SYSTEM_DEFAULT    "IPv6PrivacyUseSystemDefault"
 
 #define CONF_WIFI_WPA3_SUPPORT                  "WifiWPA3Support"
 #define CONF_WIFI_WPA3_SAE_PWE                  "WifiWPA3SAEPWE"
