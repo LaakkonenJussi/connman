@@ -57,7 +57,8 @@ Allowed fields:
   Example: 2001:db8::2/64/2001:db8::1
            2001:db8::1:2:3:4/64
 - IPv6.Privacy: IPv6 privacy option. Value can be either "disabled",
-  "enabled" or "preferred" (or the misspelled "prefered"). See use_tempaddr
+  "enabled", "preferred" (or the misspelled "prefered") or ConnMan specfic
+  "system" that uses the default value configured in the OS. See use_tempaddr
   variable description in Linux kernel Documentation/networking/ip-sysctl.txt
   file.
 - MAC: MAC address of the interface where this setting should be applied.

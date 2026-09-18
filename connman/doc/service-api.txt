@@ -435,6 +435,10 @@ Properties	string State [readonly]
 				enabled and system prefers temporary addresses
 				over public addresses.
 
+				Value "system" is a ConnMan specific option which
+				means that the default value defined in the OS
+				for IPv6 privacy (use_tempaddr) will be used.
+
 				Default value is "disabled".
 
 		dict IPv6.Configuration [readwrite]
