@@ -999,16 +999,19 @@ static void config_append_ipv6(DBusMessageIter *iter, void *user_data)
 			if (opts[1]) {
 				append->values = 2;
 
-				if (g_strcmp0(opts[1], "prefered") != 0 &&
-						g_strcmp0(opts[1],
-							"preferred") != 0) {
+				if (!g_strcmp0(opts[1], "prefered") ||
+						!g_strcmp0(opts[1],
+							"preferred")) {
+					str = "prefered";
+				} else if (!g_strcmp0(opts[1], "system")) {
+					str = "system";
+				} else {
 					fprintf(stderr, "Error %s: %s\n",
 							opts[1],
 							strerror(EINVAL));
 					return;
 				}
 
-				str = "prefered";
 				__connmanctl_dbus_append_dict_entry(iter,
 						"Privacy", DBUS_TYPE_STRING,
 						&str);
