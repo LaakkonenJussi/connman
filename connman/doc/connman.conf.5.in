@@ -254,6 +254,15 @@ servcies are not affected.
 .TP
 Default value is false.
 .TP
+.BI IPv6PrivacyUseSystemDefault== true\ \fR|\fB\ false
+When set to true the system default value for IPv6 privacy from
+/proc/sys/net/ipv6/conf/default/use_tempaddr is used unless user has set
+an override via D-Bus for a service. This value overrides any other
+selection set for the service's IPv6.privacy when user override is not
+set.
+.TP
+Default value is false.
+.TP
 .BI WifiWPA3Support= string
 The maximum level of WPA3 the device supports. Acceptable values are:
 "full" = full WPA3 SAE support, "mixed" = WPA2+WPA3 mixed is supported at
