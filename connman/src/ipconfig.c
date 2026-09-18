@@ -1462,15 +1462,14 @@ static struct connman_ipconfig *create_ipv6config(int index)
 	ipv6config->saved_method = CONNMAN_IPCONFIG_METHOD_UNKNOWN;
 
 	ipdevice = g_hash_table_lookup(ipdevice_hash, GINT_TO_POINTER(index));
-	if (ipdevice) {
-		if (connman_setting_get_bool("IPv6PrivacyUseSystemDefault"))
-			ipv6config->ipv6_current_privacy_config =
-						get_default_ipv6_privacy();
-		else
-			ipv6config->ipv6_current_privacy_config = -1;
-
+	if (ipdevice)
 		ipv6config->ipv6_privacy_config = ipdevice->ipv6_privacy;
-	}
+
+	if (connman_setting_get_bool("IPv6PrivacyUseSystemDefault"))
+		ipv6config->ipv6_current_privacy_config =
+						get_default_ipv6_privacy();
+	else
+		ipv6config->ipv6_current_privacy_config = -1;
 
 	ipv6config->address = connman_ipaddress_alloc(AF_INET6);
 	if (!ipv6config->address) {
@@ -2317,6 +2316,13 @@ int __connman_ipconfig_ipv6_set_privacy(struct connman_ipconfig *ipconfig,
 
 	ipconfig->ipv6_privacy_config = privacy;
 
+	if (connman_setting_get_bool("IPv6PrivacyUseSystemDefault") &&
+					!ipconfig->ipv6_privacy_user_override)
+		ipconfig->ipv6_current_privacy_config =
+						get_default_ipv6_privacy();
+	else
+		ipconfig->ipv6_current_privacy_config = -1;
+
 	return enable_ipv6(ipconfig);
 }
 
@@ -2570,7 +2576,8 @@ static int set_config(struct connman_ipconfig *ipconfig,
 			/* User selected system default option */
 			if (privacy != ipconfig->ipv6_privacy_config ||
 					!g_strcmp0(privacy_string, "system")) {
-				DBG("Set user override");
+				DBG("Set %p IPv6 privacy user override",
+								ipconfig);
 				ipconfig->ipv6_privacy_user_override = true;
 				ipconfig->ipv6_current_privacy_config = -1;
 			}
