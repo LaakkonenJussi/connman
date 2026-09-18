@@ -1907,6 +1907,8 @@ static int enable_ipv6(struct connman_ipconfig *ipconfig)
 
 		if (use_current_system_ipv6_privacy(ipconfig))
 			privacy = ipconfig->ipv6_current_privacy_config;
+		else if (ipconfig->ipv6_privacy_config == 3)
+			privacy = get_default_ipv6_privacy();
 		else
 			privacy = ipconfig->ipv6_privacy_config;
 
@@ -2278,7 +2280,7 @@ static int string2privacy(const char *privacy)
 	else if (g_strcmp0(privacy, "prefered") == 0)
 		return 2;
 	else if (g_strcmp0(privacy, "system") == 0)
-		return get_default_ipv6_privacy();
+		return 3; /* Gets the value from system default */
 	else
 		return 0;
 }
@@ -2308,6 +2310,8 @@ int __connman_ipconfig_ipv6_set_privacy(struct connman_ipconfig *ipconfig,
 
 	if (!ipconfig)
 		return -EINVAL;
+
+	DBG("ipconfig %p privacy %s", ipconfig, value);
 
 	privacy = string2privacy(value);
 
@@ -2559,12 +2563,17 @@ static int set_config(struct connman_ipconfig *ipconfig,
 
 		ipconfig->method = method;
 		if (privacy_string) {
-			DBG("privacy string %s privacy %d", privacy_string,
-						privacy);
+			DBG("privacy string %s privacy %d config %d",
+					privacy_string, privacy,
+					ipconfig->ipv6_privacy_config);
 
-			/* IPv6 privacy is changed via D-Bus by user. */
-			if (privacy != ipconfig->ipv6_privacy_config)
+			/* User selected system default option */
+			if (privacy != ipconfig->ipv6_privacy_config ||
+					!g_strcmp0(privacy_string, "system")) {
+				DBG("Set user override");
 				ipconfig->ipv6_privacy_user_override = true;
+				ipconfig->ipv6_current_privacy_config = -1;
+			}
 
 			ipconfig->ipv6_privacy_config = privacy;
 		}
@@ -2801,17 +2810,19 @@ void __connman_ipconfig_load(struct connman_ipconfig *ipconfig,
 		if (ipconfig->method == CONNMAN_IPCONFIG_METHOD_AUTO ||
 				ipconfig->method == CONNMAN_IPCONFIG_METHOD_MANUAL) {
 			char *privacy;
+			char *override;
 
 			privacy = store_get_str(&is, "privacy");
 			DBG("set %s ipv6_privacy %s", identifier, privacy);
 			ipconfig->ipv6_privacy_config = string2privacy(privacy);
 			g_free(privacy);
 
-			privacy = store_get_str(&is, "PrivacyUserOverride");
+			override = store_get_str(&is, "PrivacyUserOverride");
+			DBG("set IPv6 privacy user override %s", override);
 			ipconfig->ipv6_privacy_user_override =
-					!g_strcmp0(privacy, "true") ?
+					!g_strcmp0(override, "true") ?
 						true : false;
-			g_free(privacy);
+			g_free(override);
 
 			/*
 			 * Use the system default only when there is no user
