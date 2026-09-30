@@ -209,10 +209,25 @@ static int get_endpoint_addr(const char *host, const char *port, int flags,
 	int err;
 
 	memset(&hints, 0, sizeof(struct addrinfo));
-	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_DGRAM;
 	hints.ai_flags = flags;
 	hints.ai_protocol = 0;
+
+	switch (vpn_provider_get_ip_support()) {
+	case VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN:
+		connman_warn("wireguard: default service is not connected,"
+					"cannot resolve host address %s", host);
+		return -EINVAL;
+	case VPN_PROVIDER_IP_SUPPORT_TYPE_IPV4:
+		hints.ai_family = AF_INET;
+		break;
+	case VPN_PROVIDER_IP_SUPPORT_TYPE_IPV6:
+		hints.ai_family = AF_INET6;
+		break;
+	case VPN_PROVIDER_IP_SUPPORT_TYPE_ALL:
+		hints.ai_family = AF_UNSPEC;
+		break;
+	}
 
 	err = getaddrinfo(host, port, &hints, &result);
 	if (err) { /* Any non-zero return from getaddrinfo is an error */
@@ -271,6 +286,34 @@ static const char *endpoint_to_str(struct wg_peer *peer, char *buf,
 	return NULL;
 }
 
+static bool is_addr_supported(const char *addr)
+{
+	int type;
+
+	if (!addr)
+		return false;
+
+	type = connman_inet_check_ipaddress(addr);
+	if (type <= 0) {
+		DBG("address is a hostname: %s", addr);
+		return true;
+	}
+
+	switch (vpn_provider_get_ip_support()) {
+	case VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN:
+		DBG("ConnMan is not connected - should not happen");
+		return false;
+	case VPN_PROVIDER_IP_SUPPORT_TYPE_IPV4:
+		return type == AF_INET;
+	case VPN_PROVIDER_IP_SUPPORT_TYPE_IPV6:
+		return type == AF_INET6;
+	case VPN_PROVIDER_IP_SUPPORT_TYPE_ALL:
+		return type == AF_INET || type == AF_INET6;
+	}
+
+	return false;
+}
+
 static int parse_endpoint_hostname(const char *host, const char *port,
 							struct wg_peer *peer,
 							char **gateway_resolved)
@@ -291,6 +334,12 @@ static int parse_endpoint_hostname(const char *host, const char *port,
 	len = g_strv_length(tokens);
 	if (len > 2 || len < 1) {
 		DBG("Failure tokenizing host %s", host);
+		g_strfreev(tokens);
+		return -EINVAL;
+	}
+
+	if (!is_addr_supported(tokens[0])) {
+		DBG("Cannot use host %s, address is not supported", tokens[0]);
 		g_strfreev(tokens);
 		return -EINVAL;
 	}
@@ -320,7 +369,7 @@ static int parse_endpoint_hostname(const char *host, const char *port,
 static int parse_endpoint_results(char **results, const char *port,
 							struct sockaddr_u *addr)
 {
-	int err = 0;
+	int err = -EINVAL;
 	int i;
 
 	if (!results) {
@@ -329,6 +378,11 @@ static int parse_endpoint_results(char **results, const char *port,
 	}
 
 	for (i = 0; results[i]; i++) {
+		if (!is_addr_supported(results[i])) {
+			DBG("ignore host %s, not supported", results[i]);
+			continue;
+		}
+
 		DBG("using host %s", results[i]);
 
 		/* Use getaddrinfo to fill in the structs after resolve */
