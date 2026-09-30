@@ -66,6 +66,13 @@ enum vpn_provider_route_type {
 	VPN_PROVIDER_ROUTE_TYPE_GW   = 3,
 };
 
+enum vpn_provider_ip_support_type {
+	VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN = 0,
+	VPN_PROVIDER_IP_SUPPORT_TYPE_IPV4    = 1,
+	VPN_PROVIDER_IP_SUPPORT_TYPE_IPV6    = 2,
+	VPN_PROVIDER_IP_SUPPORT_TYPE_ALL     = 3,
+};
+
 struct vpn_provider;
 struct connman_ipaddress;
 
@@ -156,6 +163,8 @@ unsigned int vpn_provider_get_connection_errors(
 
 void vpn_provider_change_address(struct vpn_provider *provider);
 void vpn_provider_clear_address(struct vpn_provider *provider, int family);
+
+enum vpn_provider_ip_support_type vpn_provider_get_ip_support();
 
 typedef void (* vpn_provider_connect_cb_t) (struct vpn_provider *provider,
 					void *user_data, int error);

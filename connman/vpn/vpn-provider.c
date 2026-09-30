@@ -136,7 +136,10 @@ enum connman_state {
 static enum connman_state connman_online_state = CONNMAN_IDLE;
 static bool state_query_completed;
 static char *connman_dbus_name = NULL;
-
+static char *connman_transport_service_path = NULL;
+static bool provider_ip_support_needs_update = false;
+static enum vpn_provider_ip_support_type provider_ip_support =
+					VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN;
 
 static bool provider_get_family(struct vpn_provider *provider, int family)
 {
@@ -209,10 +212,38 @@ static bool is_connman_connected(struct vpn_provider *provider)
 
 		/* fall-through */
 	case CONNMAN_ONLINE:
+		/* VPNs without daemon require that IP support is set */
+		if (flags & VPN_FLAG_NO_DAEMON && provider_ip_support ==
+					VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN) {
+			DBG("daemonless provider and IP support not set, "
+						"return false in online");
+			return false;
+		}
+
 		break;
 	}
 
 	return true;
+}
+
+static bool is_transport_service(const char *path)
+{
+	if (!path)
+		return false;
+
+	return !g_str_has_prefix(path, "/net/connman/service/vpn_");
+}
+
+static void set_ip_support(uint32_t ip_support)
+{
+	if (ip_support > VPN_PROVIDER_IP_SUPPORT_TYPE_ALL) {
+		DBG("invalid IP support level: %u", ip_support);
+		return;
+	}
+
+	provider_ip_support = ip_support;
+
+	DBG("IP support level %u", provider_ip_support);
 }
 
 static void free_route(gpointer data)
@@ -3926,6 +3957,40 @@ static gboolean connman_property_changed(DBusConnection *conn,
 
 		dbus_message_iter_get_basic(&value, &str);
 		set_state(str);
+	} else if (g_str_equal(key, "DefaultService")) {
+		const char *path;
+		if (dbus_message_iter_get_arg_type(&value) != DBUS_TYPE_STRING)
+			return TRUE;
+
+		dbus_message_iter_get_basic(&value, &path);
+		DBG("default service path: %s", path);
+
+		if (!is_transport_service(path)) {
+			DBG("VPN as default, ignore");
+			provider_ip_support_needs_update = false;
+			return TRUE;
+		}
+
+		g_free(connman_transport_service_path);
+		connman_transport_service_path = g_strdup(path);
+
+		DBG("reset IP support level");
+		provider_ip_support_needs_update = true;
+		set_ip_support(0);
+
+	} else if (g_str_equal(key, "DefaultServiceIPSupport")) {
+		dbus_uint32_t ip_support;
+
+		if (dbus_message_iter_get_arg_type(&value) != DBUS_TYPE_UINT32)
+			return TRUE;
+
+		dbus_message_iter_get_basic(&value, &ip_support);
+
+		if (is_transport_service(connman_transport_service_path) &&
+					provider_ip_support_needs_update)
+			set_ip_support(ip_support);
+		else
+			DBG("Do not update IP support, VPN as default");
 	}
 
 	return TRUE;
@@ -4123,6 +4188,11 @@ const char *__vpn_provider_get_connman_dbus_name()
 	return connman_dbus_name;
 }
 
+enum vpn_provider_ip_support_type vpn_provider_get_ip_support()
+{
+	return provider_ip_support;
+}
+
 int __vpn_provider_init(void)
 {
 	int err;
@@ -4182,4 +4252,7 @@ void __vpn_provider_cleanup(void)
 
 	g_free(connman_dbus_name);
 	connman_dbus_name = NULL;
+
+	g_free(connman_transport_service_path);
+	connman_transport_service_path = NULL;
 }
