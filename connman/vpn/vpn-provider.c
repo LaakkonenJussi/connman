@@ -122,6 +122,7 @@ struct vpn_provider_connect_data {
 };
 
 static unsigned int get_connman_state_timeout;
+static unsigned int get_connman_default_service_timeout;
 
 static guint connman_signal_watch;
 static guint connman_service_watch;
@@ -136,8 +137,8 @@ enum connman_state {
 static enum connman_state connman_online_state = CONNMAN_IDLE;
 static bool state_query_completed;
 static char *connman_dbus_name = NULL;
-static char *connman_transport_service_path = NULL;
-static bool provider_ip_support_needs_update = false;
+static char *connman_default_service_path = NULL;
+static bool ip_support_needs_update = false;
 static enum vpn_provider_ip_support_type provider_ip_support =
 					VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN;
 
@@ -170,6 +171,7 @@ static void append_properties(DBusMessageIter *iter,
 static int vpn_provider_save(struct vpn_provider *provider);
 
 static void get_connman_state(void);
+static void get_connman_default_service_properties(void);
 
 static void set_state(const char *new_state)
 {
@@ -188,6 +190,58 @@ static void set_state(const char *new_state)
 		connman_online_state = CONNMAN_IDLE;
 
 	DBG("new state %d ", connman_online_state);
+}
+
+static bool is_transport_service(const char *path)
+{
+	if (!path)
+		return false;
+
+	return !g_str_has_prefix(path, "/net/connman/service/vpn_");
+}
+
+static bool set_default_service_path(const char *path)
+{
+	if (!path || !*path)
+		return false;
+
+	if (!is_transport_service(path)) {
+		DBG("default service is VPN, keep %s as transport",
+						connman_default_service_path);
+		return false;
+	}
+
+	if (g_strcmp0(connman_default_service_path, path)) {
+		g_free(connman_default_service_path);
+		connman_default_service_path = g_strdup(path);
+		DBG("new default service path %s, get properties",
+					connman_default_service_path);
+	} else {
+		DBG("retry properties from %s", connman_default_service_path);
+	}
+
+	get_connman_default_service_properties();
+
+	return true;
+}
+
+static void set_ip_support(uint32_t ip_support)
+{
+	if (ip_support > VPN_PROVIDER_IP_SUPPORT_TYPE_ALL) {
+		DBG("invalid IP support level: %u", ip_support);
+		return;
+	}
+
+	provider_ip_support = ip_support;
+
+	DBG("IP support level %u", provider_ip_support);
+}
+
+static void reset_ip_support_level()
+{
+	DBG("");
+	ip_support_needs_update = true;
+	set_ip_support(0);
 }
 
 static bool is_connman_connected(struct vpn_provider *provider)
@@ -224,26 +278,6 @@ static bool is_connman_connected(struct vpn_provider *provider)
 	}
 
 	return true;
-}
-
-static bool is_transport_service(const char *path)
-{
-	if (!path)
-		return false;
-
-	return !g_str_has_prefix(path, "/net/connman/service/vpn_");
-}
-
-static void set_ip_support(uint32_t ip_support)
-{
-	if (ip_support > VPN_PROVIDER_IP_SUPPORT_TYPE_ALL) {
-		DBG("invalid IP support level: %u", ip_support);
-		return;
-	}
-
-	provider_ip_support = ip_support;
-
-	DBG("IP support level %u", provider_ip_support);
 }
 
 static void free_route(gpointer data)
@@ -3963,37 +3997,221 @@ static gboolean connman_property_changed(DBusConnection *conn,
 			return TRUE;
 
 		dbus_message_iter_get_basic(&value, &path);
-		DBG("default service path: %s", path);
 
-		if (!is_transport_service(path)) {
-			DBG("VPN as default, ignore");
-			provider_ip_support_needs_update = false;
-			return TRUE;
+		if (set_default_service_path(path)) {
+			reset_ip_support_level();
+			get_connman_default_service_properties();
 		}
-
-		g_free(connman_transport_service_path);
-		connman_transport_service_path = g_strdup(path);
-
-		DBG("reset IP support level");
-		provider_ip_support_needs_update = true;
-		set_ip_support(0);
-
-	} else if (g_str_equal(key, "DefaultServiceIPSupport")) {
-		dbus_uint32_t ip_support;
-
-		if (dbus_message_iter_get_arg_type(&value) != DBUS_TYPE_UINT32)
-			return TRUE;
-
-		dbus_message_iter_get_basic(&value, &ip_support);
-
-		if (is_transport_service(connman_transport_service_path) &&
-					provider_ip_support_needs_update)
-			set_ip_support(ip_support);
-		else
-			DBG("Do not update IP support, VPN as default");
 	}
 
 	return TRUE;
+}
+
+static int parse_ip_support(DBusMessageIter *iter, DBusMessageIter *value)
+{
+	DBusMessageIter ip_dict, ip_value;
+	const char *key;
+	const char *str;
+	/*
+	 * IPv4/IPv6 is a variant containing a{sv}.
+	 */
+	if (dbus_message_iter_get_arg_type(value) != DBUS_TYPE_ARRAY ||
+				dbus_message_iter_get_element_type(value) !=
+					DBUS_TYPE_DICT_ENTRY)
+		return -EINVAL;
+
+	dbus_message_iter_recurse(value, &ip_dict);
+
+	while (dbus_message_iter_get_arg_type(&ip_dict) ==
+							DBUS_TYPE_DICT_ENTRY) {
+		dbus_message_iter_recurse(&ip_dict, iter);
+
+		dbus_message_iter_get_basic(iter, &key);
+
+		dbus_message_iter_next(iter);
+		dbus_message_iter_recurse(iter, &ip_value);
+
+		if (g_str_equal(key, "Method")) {
+			if (dbus_message_iter_get_arg_type(&ip_value) ==
+							DBUS_TYPE_STRING) {
+				dbus_message_iter_get_basic(&ip_value, &str);
+
+				DBG("%s = %s", key, str);
+				if (!g_strcmp0(str, "off"))
+					return 0;
+				else
+					return 1;
+			}
+		}
+	}
+
+	return -ENOENT;
+}
+
+static void get_connman_default_service_reply(DBusPendingCall *call,
+								void *user_data)
+{
+	DBusMessage *reply = NULL;
+	DBusError error;
+	DBusMessageIter iter, array, dict, value;
+
+	const char *signature = DBUS_TYPE_ARRAY_AS_STRING
+				DBUS_DICT_ENTRY_BEGIN_CHAR_AS_STRING
+				DBUS_TYPE_STRING_AS_STRING
+				DBUS_TYPE_VARIANT_AS_STRING
+				DBUS_DICT_ENTRY_END_CHAR_AS_STRING;
+	const char *key;
+	const char *sender_name;
+	bool ipv4_support = false;
+	bool ipv6_support = false;
+	int ip_support_value = 0;
+	unsigned int ip_value = 0;
+
+	DBG("");
+
+	if (!dbus_pending_call_get_completed(call))
+		goto done;
+
+	reply = dbus_pending_call_steal_reply(call);
+
+	dbus_error_init(&error);
+
+	if (dbus_set_error_from_message(&error, reply)) {
+		connman_error("%s", error.message);
+
+		/*
+		 * In case of timeout re-add the state function to main
+		 * event loop.
+		 */
+		if (g_ascii_strcasecmp(error.name, DBUS_ERROR_TIMEOUT) == 0) {
+			DBG("D-Bus timeout, re-add "
+				"get_connman_default_service_properties()");
+			get_connman_default_service_properties();
+		} else {
+			dbus_error_free(&error);
+			goto done;
+		}
+	}
+
+	if (!dbus_message_has_signature(reply, signature)) {
+		connman_error("vpnd signature \"%s\" does not match "
+				"expected \"%s\"",
+			dbus_message_get_signature(reply),
+			signature);
+
+		goto done;
+	}
+
+	sender_name = dbus_message_get_sender(reply);
+	if (g_strcmp0(connman_dbus_name, sender_name)) {
+		connman_error("D-Bus state reply from %s, expected %s",
+					connman_dbus_name, sender_name);
+		goto done;
+	}
+
+	if (!dbus_message_iter_init(reply, &array))
+		goto done;
+
+	dbus_message_iter_recurse(&array, &dict);
+
+	while (dbus_message_iter_get_arg_type(&dict) == DBUS_TYPE_DICT_ENTRY) {
+		dbus_message_iter_recurse(&dict, &iter);
+
+		dbus_message_iter_get_basic(&iter, &key);
+
+		dbus_message_iter_next(&iter);
+		dbus_message_iter_recurse(&iter, &value);
+
+		if (g_str_equal(key, "IPv4.Configuration")) {
+			ip_support_value = parse_ip_support(&iter, &value);
+			ipv4_support = ip_support_value > 0;
+			DBG("IPv4 support %d", ipv4_support);
+		}
+
+		if (g_str_equal(key, "IPv6.Configuration")) {
+			ip_support_value = parse_ip_support(&iter, &value);
+			ipv6_support = ip_support_value > 0;
+			DBG("IPv6 support %d", ipv6_support);
+		}
+
+		dbus_message_iter_next(&dict);
+	}
+
+	ip_value = ipv4_support | (ipv6_support << 1);
+
+	set_ip_support(ip_value);
+	ip_support_needs_update = false;
+done:
+	if (reply)
+		dbus_message_unref(reply);
+
+	if (call)
+		dbus_pending_call_unref(call);
+}
+
+static gboolean run_get_connman_default_service_properties(gpointer user_data)
+{
+	const char *method = "GetProperties";
+	gboolean rval = FALSE;
+
+	DBusMessage *msg = NULL;
+	DBusPendingCall *call = NULL;
+
+	DBG("");
+
+	msg = dbus_message_new_method_call(CONNMAN_SERVICE,
+					connman_default_service_path,
+					CONNMAN_SERVICE_INTERFACE, method);
+	if (!msg)
+		goto out;
+
+	rval = g_dbus_send_message_with_reply(connection, msg, &call, -1);
+	if (!rval) {
+		connman_error("Cannot call %s on %s", method,
+						CONNMAN_MANAGER_INTERFACE);
+		goto out;
+	}
+
+	if (!call) {
+		connman_error("set pending call failed");
+		rval = FALSE;
+		goto out;
+	}
+
+	if (!dbus_pending_call_set_notify(call,
+					get_connman_default_service_reply,
+					NULL, NULL)) {
+		connman_error("set notify to pending call failed");
+
+		if (call)
+			dbus_pending_call_unref(call);
+
+		rval = FALSE;
+	}
+
+out:
+	if (msg)
+		dbus_message_unref(msg);
+
+	/* In case sending was success, unset timeout function id */
+	if (rval) {
+		DBG("unsetting get_connman_default_service_timeout id");
+		get_connman_default_service_timeout = 0;
+	}
+
+	/* Return FALSE in case of success to remove from main event loop */
+	return !rval;
+}
+
+static void get_connman_default_service_properties(void)
+{
+	if (get_connman_default_service_timeout)
+		g_source_remove(get_connman_default_service_timeout);
+
+	get_connman_default_service_timeout = g_timeout_add(
+				STATE_INTERVAL_DEFAULT,
+				run_get_connman_default_service_properties,
+				NULL);
 }
 
 static void get_connman_state_reply(DBusPendingCall *call, void *user_data)
@@ -4011,6 +4229,7 @@ static void get_connman_state_reply(DBusPendingCall *call, void *user_data)
 	const char *key;
 	const char *str;
 	const char *sender_name;
+	const char *path;
 
 	DBG("");
 
@@ -4072,7 +4291,7 @@ static void get_connman_state_reply(DBusPendingCall *call, void *user_data)
 		dbus_message_iter_next(&iter);
 		dbus_message_iter_recurse(&iter, &value);
 
-		if (g_ascii_strcasecmp(key, "State") == 0 &&
+		if (g_str_equal(key, "State") &&
 				dbus_message_iter_get_arg_type(&value) ==
 						DBUS_TYPE_STRING) {
 			dbus_message_iter_get_basic(&value, &str);
@@ -4081,8 +4300,18 @@ static void get_connman_state_reply(DBusPendingCall *call, void *user_data)
 
 			set_state(str);
 
-			/* No need to process further */
-			break;
+		}
+
+		if (g_str_equal(key, "DefaultService")) {
+			dbus_message_iter_get_basic(&value, &path);
+
+			DBG("Got default service path %s", path);
+
+			if (set_default_service_path(path)) {
+				reset_ip_support_level();
+				DBG("get service %s properties", path);
+				get_connman_default_service_properties();
+			}
 		}
 
 		dbus_message_iter_next(&dict);
@@ -4253,6 +4482,6 @@ void __vpn_provider_cleanup(void)
 	g_free(connman_dbus_name);
 	connman_dbus_name = NULL;
 
-	g_free(connman_transport_service_path);
-	connman_transport_service_path = NULL;
+	g_free(connman_default_service_path);
+	connman_default_service_path = NULL;
 }
