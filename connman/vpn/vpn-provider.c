@@ -202,7 +202,7 @@ static bool is_transport_service(const char *path)
 
 static bool set_default_service_path(const char *path)
 {
-	if (!path || !*path)
+	if (!path)
 		return false;
 
 	if (!is_transport_service(path)) {
@@ -214,6 +214,13 @@ static bool set_default_service_path(const char *path)
 	if (g_strcmp0(connman_default_service_path, path)) {
 		g_free(connman_default_service_path);
 		connman_default_service_path = g_strdup(path);
+
+		/* NULL default service has an empty path. */
+		if (!*connman_default_service_path) {
+			DBG("empty default service path = no service");
+			return true;
+		}
+
 		DBG("new default service path %s, get properties",
 					connman_default_service_path);
 	} else {
