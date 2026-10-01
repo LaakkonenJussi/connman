@@ -2279,41 +2279,6 @@ static bool service_send_default_changed(struct connman_service *service)
 				&path);
 }
 
-static bool service_send_default_ip_support(struct connman_service *service)
-{
-	enum connman_ipconfig_type type;
-	dbus_uint32_t value;
-	bool is_connected4 = false;
-	bool is_connected6 = false;
-
-	if (service) {
-		is_connected4 = __connman_service_is_connected_state(service,
-					CONNMAN_IPCONFIG_TYPE_IPV4);
-		is_connected6 = __connman_service_is_connected_state(service,
-					CONNMAN_IPCONFIG_TYPE_IPV6);
-	}
-
-	if (is_connected4 && !is_connected6)
-		type = CONNMAN_IPCONFIG_TYPE_IPV4;
-	else if (!is_connected4 && is_connected6)
-		type = CONNMAN_IPCONFIG_TYPE_IPV6;
-	else if (is_connected4 && is_connected6)
-		type = CONNMAN_IPCONFIG_TYPE_ALL;
-	else
-		type = CONNMAN_IPCONFIG_TYPE_UNKNOWN;
-
-	DBG("service %p IP support %s", service,
-					__connman_ipconfig_type2string(type));
-
-	value = (dbus_uint32_t)type;
-
-	return connman_dbus_property_changed_basic(CONNMAN_MANAGER_PATH,
-				CONNMAN_MANAGER_INTERFACE,
-				"DefaultServiceIPSupport",
-				DBUS_TYPE_UINT32,
-				&value);
-}
-
 static void print_service(struct connman_service *service, void *user_data)
 {
 	if (service)
@@ -2419,8 +2384,7 @@ static void default_changed(void)
 	}
 
 	__connman_notifier_default_changed(service);
-	if (service_send_default_changed(service))
-		service_send_default_ip_support(service);
+	service_send_default_changed(service);
 }
 
 static void state_changed(struct connman_service *service)
