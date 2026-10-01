@@ -61,12 +61,14 @@ static struct connman_access_manager_policy *get_manager_access_policy()
 static DBusMessage *get_properties(DBusConnection *conn,
 					DBusMessage *msg, void *data)
 {
+	struct connman_service *service;
 	DBusMessage *reply;
 	DBusMessageIter array, dict;
 	dbus_bool_t offlinemode;
 	dbus_bool_t wmtWifiDualMode;
 	dbus_uint32_t uint32_value;
 	const char *str;
+	const char *path;
 	const char *ipv4_status_url;
 	const char *ipv6_status_url;
 
@@ -83,6 +85,11 @@ static DBusMessage *get_properties(DBusConnection *conn,
 	str = __connman_notifier_get_state();
 	connman_dbus_dict_append_basic(&dict, "State",
 						DBUS_TYPE_STRING, &str);
+
+	service = connman_service_get_default();
+	path = service ? __connman_service_get_path(service) : "";
+	connman_dbus_dict_append_basic(&dict, "DefaultService",
+					DBUS_TYPE_STRING, &path);
 
 	offlinemode = __connman_technology_get_offlinemode();
 	connman_dbus_dict_append_basic(&dict, "OfflineMode",
