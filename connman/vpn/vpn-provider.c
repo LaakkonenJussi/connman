@@ -138,7 +138,6 @@ static enum connman_state connman_online_state = CONNMAN_IDLE;
 static bool state_query_completed;
 static char *connman_dbus_name = NULL;
 static char *connman_default_service_path = NULL;
-static bool ip_support_needs_update = false;
 static enum vpn_provider_ip_support_type provider_ip_support =
 					VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN;
 
@@ -247,7 +246,6 @@ static void set_ip_support(uint32_t ip_support)
 static void reset_ip_support_level()
 {
 	DBG("");
-	ip_support_needs_update = true;
 	set_ip_support(0);
 }
 
@@ -4032,7 +4030,6 @@ static int parse_ip_support(DBusMessageIter *iter, DBusMessageIter *value)
 	while (dbus_message_iter_get_arg_type(&ip_dict) ==
 							DBUS_TYPE_DICT_ENTRY) {
 		dbus_message_iter_recurse(&ip_dict, iter);
-
 		dbus_message_iter_get_basic(iter, &key);
 
 		dbus_message_iter_next(iter);
@@ -4145,9 +4142,7 @@ static void get_connman_default_service_reply(DBusPendingCall *call,
 	}
 
 	ip_value = ipv4_support | (ipv6_support << 1);
-
 	set_ip_support(ip_value);
-	ip_support_needs_update = false;
 done:
 	if (reply)
 		dbus_message_unref(reply);
