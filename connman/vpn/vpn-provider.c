@@ -138,7 +138,7 @@ static enum connman_state connman_online_state = CONNMAN_IDLE;
 static bool state_query_completed;
 static char *connman_dbus_name = NULL;
 static char *connman_default_service_path = NULL;
-static enum vpn_provider_ip_support_type provider_ip_support =
+static enum vpn_provider_ip_support_type connman_ip_support =
 					VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN;
 
 static bool provider_get_family(struct vpn_provider *provider, int family)
@@ -191,6 +191,24 @@ static void set_state(const char *new_state)
 	DBG("new state %d ", connman_online_state);
 }
 
+static void set_ip_support(unsigned int ip_support)
+{
+	if (ip_support > VPN_PROVIDER_IP_SUPPORT_TYPE_ALL) {
+		DBG("invalid IP support level: %u", ip_support);
+		return;
+	}
+
+	connman_ip_support = ip_support;
+
+	DBG("IP support level %u", connman_ip_support);
+}
+
+static void reset_ip_support_level()
+{
+	DBG("");
+	set_ip_support(VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN);
+}
+
 static bool is_transport_service(const char *path)
 {
 	if (!path)
@@ -199,7 +217,7 @@ static bool is_transport_service(const char *path)
 	return !g_str_has_prefix(path, "/net/connman/service/vpn_");
 }
 
-static bool set_default_service_path(const char *path)
+static bool set_default_service(const char *path)
 {
 	if (!path)
 		return false;
@@ -210,15 +228,19 @@ static bool set_default_service_path(const char *path)
 		return false;
 	}
 
+	reset_ip_support_level();
+
 	if (g_strcmp0(connman_default_service_path, path)) {
 		g_free(connman_default_service_path);
-		connman_default_service_path = g_strdup(path);
 
-		/* NULL default service has an empty path. */
-		if (!*connman_default_service_path) {
+		/* When there is no default service it has an empty path. */
+		if (!*path) {
 			DBG("empty default service path = no service");
-			return false;
+			connman_default_service_path = NULL;
+			return true;
 		}
+
+		connman_default_service_path = g_strdup(path);
 
 		DBG("new default service path %s, get properties",
 					connman_default_service_path);
@@ -226,25 +248,9 @@ static bool set_default_service_path(const char *path)
 		DBG("retry properties from %s", connman_default_service_path);
 	}
 
+	get_connman_default_service_properties();
+
 	return true;
-}
-
-static void set_ip_support(unsigned int ip_support)
-{
-	if (ip_support > VPN_PROVIDER_IP_SUPPORT_TYPE_ALL) {
-		DBG("invalid IP support level: %u", ip_support);
-		return;
-	}
-
-	provider_ip_support = ip_support;
-
-	DBG("IP support level %u", provider_ip_support);
-}
-
-static void reset_ip_support_level()
-{
-	DBG("");
-	set_ip_support(VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN);
 }
 
 static bool is_connman_connected(struct vpn_provider *provider)
@@ -270,7 +276,7 @@ static bool is_connman_connected(struct vpn_provider *provider)
 		/* fall-through */
 	case CONNMAN_ONLINE:
 		/* VPNs without daemon require that IP support is set */
-		if (flags & VPN_FLAG_NO_DAEMON && provider_ip_support ==
+		if (flags & VPN_FLAG_NO_DAEMON && connman_ip_support ==
 					VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN) {
 			DBG("daemonless provider and IP support not set, "
 						"return false in online");
@@ -4001,10 +4007,7 @@ static gboolean connman_property_changed(DBusConnection *conn,
 
 		dbus_message_iter_get_basic(&value, &path);
 
-		if (set_default_service_path(path)) {
-			reset_ip_support_level();
-			get_connman_default_service_properties();
-		}
+		set_default_service(path);
 	}
 
 	return TRUE;
@@ -4089,10 +4092,10 @@ static void get_connman_default_service_reply(DBusPendingCall *call,
 			DBG("D-Bus timeout, re-add "
 				"get_connman_default_service_properties()");
 			get_connman_default_service_properties();
-		} else {
-			dbus_error_free(&error);
-			goto done;
 		}
+
+		dbus_error_free(&error);
+		goto done;
 	}
 
 	if (!dbus_message_has_signature(reply, signature)) {
@@ -4141,6 +4144,7 @@ static void get_connman_default_service_reply(DBusPendingCall *call,
 
 	ip_value = ipv4_support | (ipv6_support << 1);
 	set_ip_support(ip_value);
+
 done:
 	if (reply)
 		dbus_message_unref(reply);
@@ -4208,6 +4212,9 @@ static void get_connman_default_service_properties(void)
 	if (get_connman_default_service_timeout)
 		g_source_remove(get_connman_default_service_timeout);
 
+	if (!connman_default_service_path || !*connman_default_service_path)
+		return;
+
 	get_connman_default_service_timeout = g_timeout_add(
 				STATE_INTERVAL_DEFAULT,
 				run_get_connman_default_service_properties,
@@ -4250,10 +4257,10 @@ static void get_connman_state_reply(DBusPendingCall *call, void *user_data)
 		if (g_ascii_strcasecmp(error.name, DBUS_ERROR_TIMEOUT) == 0) {
 			DBG("D-Bus timeout, re-add get_connman_state()");
 			get_connman_state();
-		} else {
-			dbus_error_free(&error);
-			goto done;
 		}
+
+		dbus_error_free(&error);
+		goto done;
 	}
 
 	if (!dbus_message_has_signature(reply, signature)) {
@@ -4299,18 +4306,16 @@ static void get_connman_state_reply(DBusPendingCall *call, void *user_data)
 			DBG("Got initial state %s", str);
 
 			set_state(str);
-
 		}
 
-		if (g_str_equal(key, "DefaultService")) {
+		if (g_str_equal(key, "DefaultService") &&
+				dbus_message_iter_get_arg_type(&value) ==
+						DBUS_TYPE_STRING) {
 			dbus_message_iter_get_basic(&value, &path);
 
 			DBG("Got default service path %s", path);
 
-			if (set_default_service_path(path)) {
-				reset_ip_support_level();
-				get_connman_default_service_properties();
-			}
+			set_default_service(path);
 		}
 
 		dbus_message_iter_next(&dict);
@@ -4418,7 +4423,7 @@ const char *__vpn_provider_get_connman_dbus_name()
 
 enum vpn_provider_ip_support_type vpn_provider_get_ip_support()
 {
-	return provider_ip_support;
+	return connman_ip_support;
 }
 
 int __vpn_provider_init(void)
