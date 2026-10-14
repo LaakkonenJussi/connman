@@ -558,6 +558,11 @@ static gboolean update_provider_state(gpointer data)
 
 	vpn_data = vpn_provider_get_data(provider);
 
+	if (!vpn_data) {
+		DBG("no vpn_data, abort");
+		return FALSE;
+	}
+
 	index = vpn_provider_get_index(provider);
 	DBG("index to watch %d", index);
 	vpn_provider_ref(provider);
