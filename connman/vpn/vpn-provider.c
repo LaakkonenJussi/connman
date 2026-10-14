@@ -2301,6 +2301,10 @@ int vpn_provider_set_state(struct vpn_provider *provider,
 	case VPN_PROVIDER_STATE_READY:
 		return set_connected(provider, true);
 	case VPN_PROVIDER_STATE_DISCONNECT:
+		if (provider->driver && provider->driver->set_state &&
+				provider->driver->get_flags(provider) &
+					VPN_FLAG_NO_DAEMON)
+			provider->driver->set_state(provider, state);
 		return provider_indicate_state(provider, state);
 	case VPN_PROVIDER_STATE_FAILURE:
 		return provider_indicate_state(provider, state);
