@@ -110,6 +110,8 @@ int vpn_provider_set_state(struct vpn_provider *provider,
 
 void vpn_provider_add_error(struct vpn_provider *provider,
 					enum vpn_provider_error error);
+void vpn_provider_clear_error(struct vpn_provider *provider,
+					enum vpn_provider_error error, bool update_time);
 int vpn_provider_indicate_error(struct vpn_provider *provider,
 					enum vpn_provider_error error);
 
