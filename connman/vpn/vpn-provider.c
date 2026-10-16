@@ -2304,6 +2304,9 @@ int vpn_provider_set_state(struct vpn_provider *provider,
 void vpn_provider_add_error(struct vpn_provider *provider,
 			enum vpn_provider_error error)
 {
+	if (!provider)
+		return;
+
 	switch (error) {
 	case VPN_PROVIDER_ERROR_UNKNOWN:
 		provider->previous_connect_time = 0;
@@ -2317,6 +2320,34 @@ void vpn_provider_add_error(struct vpn_provider *provider,
 	case VPN_PROVIDER_ERROR_AUTH_FAILED:
 		vpn_provider_set_uint(provider, "AuthErrors",
 					++provider->auth_error_counter);
+		break;
+	}
+
+	DBG("%p connect errors %d auth errors %d", provider,
+						provider->conn_error_counter,
+						provider->auth_error_counter);
+}
+
+void vpn_provider_clear_error(struct vpn_provider *provider,
+			enum vpn_provider_error error, bool update_time)
+{
+	if (!provider)
+		return;
+
+	switch (error) {
+	case VPN_PROVIDER_ERROR_UNKNOWN:
+		if (update_time)
+			provider->previous_connect_time = get_uptime();
+		break;
+	case VPN_PROVIDER_ERROR_CONNECT_FAILED:
+		if (update_time)
+			provider->previous_connect_time = get_uptime();
+
+		vpn_provider_set_uint(provider, "ConnErrors", 0);
+		break;
+	case VPN_PROVIDER_ERROR_LOGIN_FAILED:
+	case VPN_PROVIDER_ERROR_AUTH_FAILED:
+		vpn_provider_set_uint(provider, "AuthErrors", 0);
 		break;
 	}
 
