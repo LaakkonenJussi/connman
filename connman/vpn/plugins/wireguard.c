@@ -565,8 +565,7 @@ static void resolve_endpoint_cb(GResolvResultStatus status,
 	case G_RESOLV_RESULT_STATUS_SUCCESS:
 		if (!results || !g_strv_length(results)) {
 			DBG("no resolved results");
-			if (info->provider)
-				vpn_provider_add_error(info->provider,
+			vpn_provider_add_error(info->provider,
 					VPN_PROVIDER_ERROR_CONNECT_FAILED);
 
 			return;
@@ -574,16 +573,16 @@ static void resolve_endpoint_cb(GResolvResultStatus status,
 
 		DBG("resolv success, parse endpoint");
 		break;
-	/* request timeouts or an server issue is not an error, try again */
-	case G_RESOLV_RESULT_STATUS_NAME_ERROR: /* NXDOMAIN, might recover? */
-	case G_RESOLV_RESULT_STATUS_NO_ANSWER:
-	case G_RESOLV_RESULT_STATUS_NO_RESPONSE:
-	case G_RESOLV_RESULT_STATUS_SERVER_FAILURE:
-		DBG("retry DNS reresolve");
-		if (info->provider)
-			vpn_provider_add_error(info->provider,
+	/* Server returned NXDOMAIN, it might recover if it is a cache hit. */
+	case G_RESOLV_RESULT_STATUS_NAME_ERROR:
+		vpn_provider_add_error(info->provider,
 					VPN_PROVIDER_ERROR_CONNECT_FAILED);
-
+		/* fall-through */
+	/* Try again if the request timeouts or server malfunctions. */
+	case G_RESOLV_RESULT_STATUS_NO_ANSWER:
+	case G_RESOLV_RESULT_STATUS_NO_RESPONSE: /* Timeout */
+	case G_RESOLV_RESULT_STATUS_SERVER_FAILURE:
+		DBG("retry DNS reresolve, status code %d", status);
 		run_dns_reresolve(info);
 		return;
 	/* Consider these as non-continuable errors */
@@ -592,8 +591,7 @@ static void resolve_endpoint_cb(GResolvResultStatus status,
 	case G_RESOLV_RESULT_STATUS_NOT_IMPLEMENTED:
 	case G_RESOLV_RESULT_STATUS_REFUSED:
 		DBG("stop DNS reresolve, error %d", status);
-		if (err && info->provider)
-			vpn_provider_add_error(info->provider,
+		vpn_provider_add_error(info->provider,
 					VPN_PROVIDER_ERROR_CONNECT_FAILED);
 		return;
 	}
@@ -604,15 +602,26 @@ static void resolve_endpoint_cb(GResolvResultStatus status,
 	 */
 	err = parse_endpoint_results(results, info->port, &addr);
 	if (err) {
-		if (info->provider)
-			vpn_provider_add_error(info->provider,
+		vpn_provider_add_error(info->provider,
 					VPN_PROVIDER_ERROR_CONNECT_FAILED);
+
 		run_dns_reresolve(info);
 		return;
 	}
 
 	if (sockaddr_cmp_addr(&addr,
 			(struct sockaddr_u *)&info->peer.endpoint.addr)) {
+		/*
+		 * Resolve of the existing endpoint was a success. There is no
+		 * change so only clear connection errors as some previous
+		 * resolves might have not succeeded. This is done to avoid
+		 * unnecessary disconnects as temporary disruptions in DNS
+		 * resolving  ould otherwise accumulate. Do not update connect
+		 * time as existing connection is reused.
+		 */
+		vpn_provider_clear_error(info->provider,
+					VPN_PROVIDER_ERROR_CONNECT_FAILED,
+					false);
 		run_dns_reresolve(info);
 		return;
 	}
@@ -624,11 +633,16 @@ static void resolve_endpoint_cb(GResolvResultStatus status,
 		memcpy(&info->peer.endpoint.addr, &addr.sin6,
 					sizeof(info->peer.endpoint.addr6));
 
-	DBG("Endpoint address has changed, udpate WireGuard device");
+	DBG("Endpoint address has changed, update WireGuard device");
 	err = wg_set_device(&info->device);
-	if (err)
+	if (err) {
 		DBG("Failed to update Endpoint address for WireGuard device %s",
 			info->device.name);
+	} else {
+		/* Endpoint changed -> update connect time and clear errors. */
+		vpn_provider_clear_error(info->provider,
+				VPN_PROVIDER_ERROR_CONNECT_FAILED, true);
+	}
 
 	run_dns_reresolve(info);
 
