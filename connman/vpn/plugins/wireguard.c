@@ -670,6 +670,9 @@ static bool handshake_is_valid(wg_peer *peer)
 	uint64_t diff;
 	bool valid = true;
 
+	if (!peer)
+		return false;
+
 	if (clock_gettime(CLOCK_REALTIME, &ts)) {
 		DBG("failed to get time: %s", strerror(errno));
 		return false;
@@ -678,18 +681,31 @@ static bool handshake_is_valid(wg_peer *peer)
 	handshake = peer->last_handshake_time.tv_sec * NSEC_MULTIP +
 			peer->last_handshake_time.tv_nsec;
 	current = ts.tv_sec * NSEC_MULTIP + ts.tv_nsec;
-	diff = current - handshake;
 
+	if (current < handshake)
+		return false;
+
+	diff = current - handshake;
 	if (diff > handshake_max_diff) {
-		DBG("last handshake was over %ds ago",
+		DBG("last handshake was over %us ago",
 					HANDSHAKE_DEFAULT_MAX_DIFF);
-		valid = false;
+
+		if (peer->rx_bytes == peer->last_rx_bytes &&
+					peer->tx_bytes > peer->last_tx_bytes) {
+			DBG("no data received, handshake is not valid");
+			valid = false;
+		}
+	} else {
+		/* Update data since last valid handshake. */
+		DBG("update last rx/tx bytes");
+		peer->last_rx_bytes = peer->rx_bytes;
+		peer->last_tx_bytes = peer->tx_bytes;
 	}
 
-	DBG("current   %lu ns", current);
-	DBG("handshake %lu ns", handshake);
-	DBG("diff      %lu ns", diff);
-	DBG("last handshake %llu seconds ago", diff / NSEC_MULTIP);
+	DBG("current   %"PRIu64" ns", current);
+	DBG("handshake %"PRIu64" ns", handshake);
+	DBG("diff      %"PRIu64" ns", diff);
+	DBG("last handshake %u seconds ago", (unsigned int) (diff / NSEC_MULTIP));
 
 	return valid;
 }
@@ -702,14 +718,13 @@ static gboolean wg_handshake_check_cb(gpointer user_data)
 	wg_device *device;
 	wg_peer *peer;
 	int valid_handshakes = 0;
+	int handshake_count = 0;
 	int no_data = 0;
 	int peer_count = 0;
 	int err = 0;
 
-	if (!info) {
-		info->handshake_check_id = 0;
+	if (!info)
 		return G_SOURCE_REMOVE;
-	}
 
 	if (wg_get_device(&device, info->device.name)) {
 		DBG("cannot get device with name %s, disconnect",
@@ -729,8 +744,11 @@ static gboolean wg_handshake_check_cb(gpointer user_data)
 
 		if (peer->last_handshake_time.tv_sec ||
 					peer->last_handshake_time.tv_nsec) {
-			if (handshake_is_valid(peer))
+			handshake_count++;
+
+			if (handshake_is_valid(peer)) {
 				valid_handshakes++;
+			}
 		}
 	}
 
@@ -742,7 +760,7 @@ static gboolean wg_handshake_check_cb(gpointer user_data)
 	}
 
 	DBG("%d peer handshakes successful", valid_handshakes);
-	if (!valid_handshakes) {
+	if (!valid_handshakes && !handshake_count) {
 		/*
 		 * When we cannot connect to any of the peers we can
 		 * assume something being wrong with the authentication.
@@ -758,7 +776,11 @@ static gboolean wg_handshake_check_cb(gpointer user_data)
 			DBG("disconnect due to error limit reached");
 			err = -ECONNABORTED;
 		}
-	}
+	}/* else {
+		DBG("stop handshake check");
+		info->handshake_check_id = 0;
+		return G_SOURCE_REMOVE;
+	}*/
 
 err:
 	if (err) {
