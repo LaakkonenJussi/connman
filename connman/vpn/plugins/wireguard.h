@@ -54,6 +54,7 @@ typedef struct wg_peer {
 
 	struct timespec64 last_handshake_time;
 	uint64_t rx_bytes, tx_bytes;
+	uint64_t last_rx_bytes, last_tx_bytes;
 	uint16_t persistent_keepalive_interval;
 
 	struct wg_allowedip *first_allowedip, *last_allowedip;
