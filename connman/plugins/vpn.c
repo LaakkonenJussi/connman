@@ -2231,6 +2231,10 @@ static gboolean property_changed(DBusConnection *conn,
 	} else if (g_str_equal(key, "IPv6")) {
 		if (!extract_ip(&value, AF_INET6, data))
 			ipv6_set = true;
+	} else if (g_str_equal(key, "GatewayUpdated")) {
+		dbus_message_iter_get_basic(&value, &str);
+		set_string(data->provider, "Host", str);
+		connman_provider_update_gateway(data->provider, str);
 	} else if (g_str_equal(key, "ServerRoutes")) {
 		err = routes_changed(&value, data->server_routes);
 		/*
