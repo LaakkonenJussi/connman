@@ -3451,6 +3451,17 @@ int vpn_provider_set_ipaddress(struct vpn_provider *provider,
 	return 0;
 }
 
+int vpn_provider_update_gateway(struct vpn_provider *provider,
+							const char *gateway)
+{
+	if (!provider || !gateway || !*gateway)
+		return -EINVAL;
+
+	send_value(provider->path, "GatewayUpdated", gateway);
+
+	return 0;
+}
+
 int vpn_provider_set_pac(struct vpn_provider *provider,
 				const char *pac)
 {
