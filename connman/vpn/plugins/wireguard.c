@@ -551,6 +551,7 @@ static void resolve_endpoint_cb(GResolvResultStatus status,
 {
 	struct wireguard_info *info = user_data;
 	struct sockaddr_u addr;
+	char gw[INET6_ADDRSTRLEN] = { 0 };
 	int err = 0;
 
 	DBG("");
@@ -634,12 +635,19 @@ static void resolve_endpoint_cb(GResolvResultStatus status,
 		return;
 	}
 
-	if (addr.sa.sa_family == AF_INET)
+	if (addr.sa.sa_family == AF_INET) {
 		memcpy(&info->peer.endpoint.addr, &addr.sin,
 					sizeof(info->peer.endpoint.addr4));
-	else
+		if (!inet_ntop(addr.sa.sa_family, &addr.sin.sin_addr, gw,
+							INET6_ADDRSTRLEN))
+			DBG("failed to parse new IPv4 gw");
+	} else {
 		memcpy(&info->peer.endpoint.addr, &addr.sin6,
 					sizeof(info->peer.endpoint.addr6));
+		if (!inet_ntop(addr.sa.sa_family, &addr.sin6.sin6_addr, gw,
+							INET6_ADDRSTRLEN))
+			DBG("failed to parse new IPv6 gw");
+	}
 
 	DBG("Endpoint address has changed, update WireGuard device");
 	err = wg_set_device(&info->device);
@@ -650,6 +658,8 @@ static void resolve_endpoint_cb(GResolvResultStatus status,
 		/* Endpoint changed -> update connect time and clear errors. */
 		vpn_provider_clear_error(info->provider,
 				VPN_PROVIDER_ERROR_CONNECT_FAILED, true);
+		DBG("update gw to %s", gw);
+		vpn_provider_update_gateway(info->provider, gw);
 	}
 
 	run_dns_reresolve(info);
