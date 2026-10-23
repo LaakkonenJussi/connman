@@ -101,6 +101,8 @@ void connman_provider_set_data(struct connman_provider *provider, void *data);
 void *connman_provider_get_data(struct connman_provider *provider);
 int connman_provider_set_ipaddress(struct connman_provider *provider,
 					struct connman_ipaddress *ipaddress);
+int connman_provider_update_gateway(struct connman_provider *provider,
+					const char *gateway);
 int connman_provider_set_pac(struct connman_provider *provider,
 				const char *pac);
 int connman_provider_create_service(struct connman_provider *provider);

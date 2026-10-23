@@ -798,6 +798,55 @@ int connman_provider_set_ipaddress(struct connman_provider *provider,
 	return 0;
 }
 
+int connman_provider_update_gateway(struct connman_provider *provider,
+					const char *gateway)
+{
+	struct connman_ipconfig *ipconfig;
+	const char *old_gateway;
+	int type;
+
+	if (!provider || !gateway)
+		return -EINVAL;
+
+	type = connman_inet_check_ipaddress(gateway);
+	switch (type) {
+	case AF_INET:
+	case AF_INET6:
+		break;
+	default:
+		DBG("invalid gateway address %s", gateway);
+		return -EINVAL;
+	}
+
+	ipconfig = __connman_service_get_ipconfig(provider->vpn_service, type);
+	if (!ipconfig)
+		return -ENOENT;
+
+	DBG("ipconfig %p type %d", ipconfig, type);
+
+	old_gateway = __connman_ipconfig_get_gateway(ipconfig);
+	if (!g_strcmp0(old_gateway, gateway))
+		return -EALREADY;
+
+	DBG("Change gw from %s to %s", old_gateway, gateway);
+	//__connman_ipconfig_gateway_remove(ipconfig);
+	__connman_ipconfig_set_gateway(ipconfig, gateway);
+
+	//__connman_ipconfig_address_add(ipconfig);
+	__connman_ipconfig_gateway_add(ipconfig);
+
+	//connman_provider_set_state(provider, CONNMAN_PROVIDER_STATE_READY);
+
+	if (provider->driver && provider->driver->set_routes)
+		provider->driver->set_routes(provider,
+						CONNMAN_PROVIDER_ROUTE_ALL);
+
+	__connman_service_nameserver_add_routes(provider->vpn_service,
+			provider->driver->get_property(provider, "Host"));
+
+	return 0;
+}
+
 int connman_provider_set_pac(struct connman_provider *provider, const char *pac)
 {
 	DBG("provider %p pac %s", provider, pac);
