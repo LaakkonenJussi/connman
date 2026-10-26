@@ -400,7 +400,7 @@ static struct connection_data *create_connection_data(const char *path)
 	data->setting_strings = g_hash_table_new_full(g_str_hash,
 						g_str_equal, g_free, g_free);
 
-	data->server_routes = g_hash_table_new_full(g_direct_hash,
+	data->server_routes = g_hash_table_new_full(g_str_hash,
 					g_str_equal, g_free, destroy_route);
 	data->user_routes = g_hash_table_new_full(g_str_hash,
 					g_str_equal, g_free, destroy_route);
@@ -2026,7 +2026,7 @@ static int save_route(GHashTable *routes, int family, const char *network,
 		if (!route) {
 			connman_error("out of memory");
 			return -ENOMEM;
-		}
+		}	
 
 		route->family = family;
 		route->network = g_strdup(network);
@@ -2233,8 +2233,12 @@ static gboolean property_changed(DBusConnection *conn,
 			ipv6_set = true;
 	} else if (g_str_equal(key, "GatewayUpdated")) {
 		dbus_message_iter_get_basic(&value, &str);
-		set_string(data->provider, "Host", str);
-		connman_provider_update_gateway(data->provider, str);
+		// TODO: not sure if this is needed or not
+		//set_string(data->provider, "Host", str);
+
+		err = connman_provider_update_gateway(data->provider, str);
+		if (err)
+			DBG("cannot update gateway, error %d", err);
 	} else if (g_str_equal(key, "ServerRoutes")) {
 		err = routes_changed(&value, data->server_routes);
 		/*
