@@ -134,55 +134,6 @@ static struct gateway_data *find_vpn_gateway(int index, const char *gateway)
 	return NULL;
 }
 
-struct get_gateway_params {
-	char *vpn_gateway;
-	int vpn_index;
-};
-
-static void get_gateway_cb(const char *gateway, int index, void *user_data)
-{
-	struct gateway_config *config;
-	struct gateway_data *data;
-	struct get_gateway_params *params = user_data;
-	int family;
-
-	if (index < 0)
-		goto out;
-
-	DBG("phy index %d phy gw %s vpn index %d vpn gw %s", index, gateway,
-		params->vpn_index, params->vpn_gateway);
-
-	data = find_vpn_gateway(params->vpn_index, params->vpn_gateway);
-	if (!data) {
-		DBG("Cannot find VPN link route, index %d addr %s",
-			params->vpn_index, params->vpn_gateway);
-		goto out;
-	}
-
-	family = connman_inet_check_ipaddress(params->vpn_gateway);
-
-	if (family == AF_INET)
-		config = data->ipv4_gateway;
-	else if (family == AF_INET6)
-		config = data->ipv6_gateway;
-	else
-		goto out;
-
-	if (!config) {
-		connman_warn("no config for IP family %d, gw %s not set "
-					"for index %d", family, gateway, index);
-		goto out;
-	}
-
-	config->vpn_phy_index = index;
-
-	DBG("vpn %s phy index %d", config->vpn_ip, config->vpn_phy_index);
-
-out:
-	g_free(params->vpn_gateway);
-	g_free(params);
-}
-
 static struct connman_service *get_vpn_transport(
 					struct connman_service *vpn_service)
 {
@@ -235,6 +186,99 @@ static struct gateway_data *find_active_transport_gateway(
 	}
 
 	return NULL;
+}
+
+static int get_vpn_transport_index(int vpn_index, int family)
+{
+	struct connman_service *service;
+	struct connman_service *transport;
+	struct connman_ipconfig *ipconfig = NULL;
+
+	DBG("get VPN transport index %d family %d", vpn_index, family);
+
+	service = __connman_service_lookup_from_index(vpn_index);
+	if (!service) {
+		DBG("no service found");
+		return -1;
+	}
+
+	transport = get_vpn_transport(service);
+	if (!transport) {
+		DBG("no transport found");
+		return -1;
+	}
+
+	switch (family) {
+	case AF_INET:
+		ipconfig = __connman_service_get_ip4config(transport);
+		break;
+	case AF_INET6:
+		ipconfig = __connman_service_get_ip6config(transport);
+		break;
+	default:
+		return -1;
+	}
+
+	return __connman_ipconfig_get_index(ipconfig);
+}
+
+struct get_gateway_params {
+	char *vpn_gateway;
+	int vpn_index;
+};
+
+static void get_gateway_cb(const char *gateway, int index, void *user_data)
+{
+	struct gateway_config *config;
+	struct gateway_data *data;
+	struct get_gateway_params *params = user_data;
+	int family;
+
+	if (index < 0)
+		goto out;
+
+	DBG("phy index %d phy gw %s vpn index %d vpn gw %s", index, gateway,
+		params->vpn_index, params->vpn_gateway);
+
+	data = find_vpn_gateway(params->vpn_index, params->vpn_gateway);
+	if (!data) {
+		DBG("Cannot find VPN link route, index %d addr %s",
+			params->vpn_index, params->vpn_gateway);
+		goto out;
+	}
+
+	family = connman_inet_check_ipaddress(params->vpn_gateway);
+
+	if (family == AF_INET)
+		config = data->ipv4_gateway;
+	else if (family == AF_INET6)
+		config = data->ipv6_gateway;
+	else
+		goto out;
+
+	if (!config) {
+		connman_warn("no config for IP family %d, gw %s not set "
+					"for index %d", family, gateway, index);
+		goto out;
+	}
+
+	/*
+	 * Use the transport index when updating the gateway. This happens in a
+	 * scenario where WireGuard has changed its endpoint and the VPN is
+	 * being used as a default route already and the transport, the phy
+	 * index is required to be set.
+	*/
+	if (index == params->vpn_index)
+		config->vpn_phy_index = get_vpn_transport_index(
+						params->vpn_index, family);
+	else
+		config->vpn_phy_index = index;
+
+	DBG("vpn %s phy index %d", config->vpn_ip, config->vpn_phy_index);
+
+out:
+	g_free(params->vpn_gateway);
+	g_free(params);
 }
 
 static void set_vpn_routes(struct gateway_data *new_gateway,
@@ -990,10 +1034,11 @@ int __connman_connection_gateway_add(struct connman_service *service,
 	}
 
 	if (service_type == CONNMAN_SERVICE_TYPE_VPN) {
-		struct gateway_data *transport_gateway =
-					find_active_transport_gateway(type,
-						service);
-		if (!transport_gateway) {
+		struct gateway_data *transport_gw;
+		struct gateway_data* gw = NULL;
+
+		transport_gw = find_active_transport_gateway(type, service);
+		if (!transport_gw) {
 			/*
 			 * No active transport yet. Do not set VPN as default
 			 * before a valid transport gateway exists.
@@ -1007,10 +1052,29 @@ int __connman_connection_gateway_add(struct connman_service *service,
 		* Now update the VPN gateway; keep using the saved transport
 		* gateway for the route to the remote endpoint.
 		*/
-		set_default_gateway(new_gateway, type);
 
-		set_vpn_routes(new_gateway, service, gateway, type, peer,
-							transport_gateway);
+		if (active_gateway) {
+			bool is_vpn = false;
+
+			if (active_gateway->ipv4_gateway &&
+					active_gateway->ipv4_gateway->vpn)
+				is_vpn = true;
+
+			if (active_gateway->ipv6_gateway &&
+					active_gateway->ipv6_gateway->vpn)
+				is_vpn = true;
+
+			if (is_vpn)
+				gw = transport_gateway;
+		} else {
+			set_default_gateway(new_gateway, type);
+			gw = active_gateway;
+		}
+
+		set_vpn_routes(new_gateway, service, gateway, type, peer, gw);
+
+		if (!active_gateway)
+			goto done;
 	} else {
 		if (type == CONNMAN_IPCONFIG_TYPE_IPV4 &&
 					new_gateway->ipv4_gateway)
