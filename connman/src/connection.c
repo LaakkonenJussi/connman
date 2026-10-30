@@ -409,6 +409,16 @@ static int del_routes(struct gateway_data *data,
 
 	if (do_ipv4 && data->ipv4_gateway) {
 		if (data->ipv4_gateway->vpn) {
+			struct gateway_config *config = data->ipv4_gateway;
+
+			if (config->vpn_phy_index >= 0 && config->vpn_ip) {
+				DBG("remove VPN endpoint route %s index %d",
+				config->vpn_ip, config->vpn_phy_index);
+
+				connman_inet_del_host_route(
+					config->vpn_phy_index, config->vpn_ip);
+			}
+
 			status4 = connman_inet_clear_gateway_address(
 						data->index4,
 						data->ipv4_gateway->vpn_ip);
@@ -428,6 +438,16 @@ static int del_routes(struct gateway_data *data,
 
 	if (do_ipv6 && data->ipv6_gateway) {
 		if (data->ipv6_gateway->vpn) {
+			struct gateway_config *config = data->ipv4_gateway;
+
+			if (config->vpn_phy_index >= 0 && config->vpn_ip) {
+				DBG("remove VPN endpoint route %s index %d",
+				config->vpn_ip, config->vpn_phy_index);
+
+				connman_inet_del_ipv6_host_route(
+					config->vpn_phy_index, config->vpn_ip);
+			}
+
 			status6 = connman_inet_clear_ipv6_gateway_address(
 						data->index6,
 						data->ipv6_gateway->vpn_ip);
@@ -1131,12 +1151,7 @@ void __connman_connection_gateway_remove(struct connman_service *service,
 
 	data = g_hash_table_lookup(gateway_hash, service);
 	if (!data) {
-		struct connman_service *transport = get_vpn_transport(service);
-		DBG("no gateway to remove, try transport %p", transport);
-
-		if (transport)
-			__connman_connection_gateway_remove(transport, type);
-
+		DBG("no gateway to remove for service %p", service);
 		return;
 	}
 
