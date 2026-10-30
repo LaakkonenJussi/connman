@@ -1035,7 +1035,7 @@ int __connman_connection_gateway_add(struct connman_service *service,
 
 	if (service_type == CONNMAN_SERVICE_TYPE_VPN) {
 		struct gateway_data *transport_gw;
-		struct gateway_data* gw = NULL;
+		struct gateway_data* gw = active_gateway;
 
 		transport_gw = find_active_transport_gateway(type, service);
 		if (!transport_gw) {
@@ -1054,27 +1054,16 @@ int __connman_connection_gateway_add(struct connman_service *service,
 		*/
 
 		if (active_gateway) {
-			bool is_vpn = false;
-
-			if (active_gateway->ipv4_gateway &&
-					active_gateway->ipv4_gateway->vpn)
-				is_vpn = true;
-
-			if (active_gateway->ipv6_gateway &&
-					active_gateway->ipv6_gateway->vpn)
-				is_vpn = true;
-
-			if (is_vpn)
-				gw = transport_gateway;
-		} else {
-			set_default_gateway(new_gateway, type);
-			gw = active_gateway;
+			if ((active_gateway->ipv4_gateway &&
+					active_gateway->ipv4_gateway->vpn) ||
+					(active_gateway->ipv6_gateway &&
+					active_gateway->ipv6_gateway->vpn)) {
+				DBG("use transport as gateway");
+				gw = transport_gw;
+			}
 		}
 
 		set_vpn_routes(new_gateway, service, gateway, type, peer, gw);
-
-		if (!active_gateway)
-			goto done;
 	} else {
 		if (type == CONNMAN_IPCONFIG_TYPE_IPV4 &&
 					new_gateway->ipv4_gateway)
