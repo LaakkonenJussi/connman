@@ -215,6 +215,7 @@ This package provides Wireguard VPN plugin for connman.
     --with-tmpfilesdir=%{_prefix}/lib/tmpfiles.d \
     runstatedir=/run \
     --enable-blacklist-monitor \
+    --enable-route-monitor \
     --enable-clat \
     --with-firewall=iptables \
     --with-dns-backend=systemd-resolved

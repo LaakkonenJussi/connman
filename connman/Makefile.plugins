@@ -387,6 +387,11 @@ builtin_modules += blacklist_monitor
 builtin_sources += plugins/blacklist_monitor.c
 endif
 
+if ROUTE_MONITOR
+builtin_modules += route_monitor
+builtin_sources += plugins/route_monitor.c
+endif
+
 if CLAT
 builtin_modules += clat
 builtin_sources += plugins/clat.c
