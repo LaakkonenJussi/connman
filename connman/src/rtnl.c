@@ -33,10 +33,11 @@
 #include <netinet/ether.h>
 #include <netinet/icmp6.h>
 #include <net/if_arp.h>
-#include <linux/if.h>
+#include <net/if.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <linux/wireless.h>
+#include <linux/fib_rules.h>
 
 #include <glib.h>
 
@@ -1164,6 +1165,53 @@ static void rtnl_route(struct nlmsghdr *hdr)
 	}
 }
 
+static void process_route_notify(struct rtmsg *msg, int bytes, bool add)
+{
+	struct rtattr *attr;
+	unsigned int table = msg->rtm_table;
+	int index = 0;
+	int metric = 0;
+	GSList *list;
+
+	for (attr = RTM_RTA(msg); RTA_OK(attr, bytes);
+						attr = RTA_NEXT(attr, bytes)) {
+		switch (attr->rta_type) {
+		case RTA_TABLE:
+			if (RTA_PAYLOAD(attr) >= sizeof(table))
+				table = *((unsigned int *) RTA_DATA(attr));
+			break;
+		case RTA_OIF:
+			if (RTA_PAYLOAD(attr) >= sizeof(index))
+				index = *((int *) RTA_DATA(attr));
+			break;
+		case RTA_PRIORITY:
+			if (RTA_PAYLOAD(attr) >= sizeof(metric))
+				metric = *((int *) RTA_DATA(attr));
+			break;
+		}
+	}
+
+	for (list = rtnl_list; list; list = list->next) {
+		struct connman_rtnl *rtnl = list->data;
+
+		if (add) {
+			if (rtnl->newroute)
+				rtnl->newroute(msg->rtm_family, table, index,
+							msg->rtm_dst_len,
+							msg->rtm_type,
+							msg->rtm_protocol,
+							metric);
+		} else {
+			if (rtnl->delroute) 
+				rtnl->delroute(msg->rtm_family, table, index,
+							msg->rtm_dst_len,
+							msg->rtm_type,
+							msg->rtm_protocol,
+							metric);
+		}
+	}
+}
+
 static bool is_route_rtmsg(struct rtmsg *msg)
 {
 	if (msg->rtm_flags & RTM_F_CLONED)
@@ -1209,6 +1257,12 @@ static void rtnl_newroute(struct nlmsghdr *hdr)
 
 	rtnl_route(hdr);
 
+	/* Notify before processing so plugins can react early. The routes can
+	 * be in unconventional, i.e., non-standard routing tables and, thus,
+	 * the route table check must be done later only before processing.
+	 */
+	process_route_notify(msg, RTM_PAYLOAD(hdr), true);
+
 	if (is_route_rtmsg(msg)) {
 		if (msg->rtm_family == AF_INET6)
 			metric = get_route_metric(msg, bytes);
@@ -1225,6 +1279,8 @@ static void rtnl_delroute(struct nlmsghdr *hdr)
 	int metric = -1;
 
 	rtnl_route(hdr);
+
+	process_route_notify(msg, RTM_PAYLOAD(hdr), false);
 
 	if (is_route_rtmsg(msg)) {
 		if (msg->rtm_family == AF_INET6)
@@ -1370,6 +1426,16 @@ static void rtnl_newnduseropt(struct nlmsghdr *hdr)
 	g_free(domains);
 }
 
+static void rtnl_newrule(struct nlmsghdr *hdr)
+{
+	DBG("");
+}
+
+static void rtnl_delrule(struct nlmsghdr *hdr)
+{
+	DBG("");
+}
+
 static const char *type2string(uint16_t type)
 {
 	switch (type) {
@@ -1410,44 +1476,60 @@ static GIOChannel *channel = NULL;
 static guint channel_watch = 0;
 
 #define RTNL_REQUEST_SIZE (NLMSG_HDRLEN + NLMSG_ALIGN(sizeof(struct rtgenmsg)))
+#define RTNL_FIB_REQUEST_SIZE NLMSG_LENGTH(sizeof(struct fib_rule_hdr))
+#define RTNL_FIB_ATTR_SIZE (RTA_SPACE(sizeof(uint32_t)) + \
+				RTA_SPACE(sizeof(uint32_t)) + \
+				RTA_SPACE(IF_NAMESIZE))
+#define RTNL_FIB_BUFFER_SIZE \
+		NLMSG_ALIGN(RTNL_FIB_REQUEST_SIZE) + RTNL_FIB_ATTR_SIZE
+
+struct nlmsg_fib_hdr {
+	struct nlmsghdr *nlmsgh;
+	struct fib_rule_hdr *frh;
+	connman_rtnl_rule_cb_t cb;
+	char data[];
+};
 
 static GSList *request_list = NULL;
 static guint32 request_seq = 0;
 
-static struct nlmsghdr *find_request(guint32 seq)
+static struct nlmsg_fib_hdr *find_request(guint32 seq)
 {
 	GSList *list;
 
 	for (list = request_list; list; list = list->next) {
-		struct nlmsghdr *hdr = list->data;
+		struct nlmsg_fib_hdr *hdr = list->data;
 
-		if (hdr->nlmsg_seq == seq)
+		if (hdr->nlmsgh->nlmsg_seq == seq)
 			return hdr;
 	}
 
 	return NULL;
 }
 
-static int send_request(struct nlmsghdr *hdr)
+static int send_request(struct nlmsg_fib_hdr *hdr)
 {
 	struct sockaddr_nl addr;
 	int sk;
 
-	DBG("%s len %d type %d flags 0x%04x seq %d",
-				type2string(hdr->nlmsg_type),
-				hdr->nlmsg_len, hdr->nlmsg_type,
-				hdr->nlmsg_flags, hdr->nlmsg_seq);
+	if (!hdr->frh)
+		DBG("%s len %d type %d flags 0x%04x seq %d",
+				type2string(hdr->nlmsgh->nlmsg_type),
+				hdr->nlmsgh->nlmsg_len,
+				hdr->nlmsgh->nlmsg_type,
+				hdr->nlmsgh->nlmsg_flags,
+				hdr->nlmsgh->nlmsg_seq);
 
 	sk = g_io_channel_unix_get_fd(channel);
 
 	memset(&addr, 0, sizeof(addr));
 	addr.nl_family = AF_NETLINK;
 
-	return sendto(sk, hdr, hdr->nlmsg_len, 0,
-				(struct sockaddr *) &addr, sizeof(addr));
+	return sendto(sk, hdr->nlmsgh, hdr->nlmsgh->nlmsg_len,
+				0, (struct sockaddr *) &addr, sizeof(addr));
 }
 
-static int queue_request(struct nlmsghdr *hdr)
+static int queue_request_full(struct nlmsg_fib_hdr *hdr)
 {
 	request_list = g_slist_append(request_list, hdr);
 
@@ -1457,9 +1539,23 @@ static int queue_request(struct nlmsghdr *hdr)
 	return send_request(hdr);
 }
 
+static int queue_request(struct nlmsghdr *hdr)
+{
+	struct nlmsg_fib_hdr *n_f_hdr;
+
+	n_f_hdr = g_malloc0(sizeof(struct nlmsg_fib_hdr) +
+					NLMSG_ALIGN(hdr->nlmsg_len));
+	n_f_hdr->nlmsgh = (struct nlmsghdr *)n_f_hdr->data;
+
+	memcpy(n_f_hdr->nlmsgh, hdr, hdr->nlmsg_len);
+	g_free(hdr);
+
+	return queue_request_full(n_f_hdr);
+}
+
 static int process_response(guint32 seq)
 {
-	struct nlmsghdr *hdr;
+	struct nlmsg_fib_hdr *hdr;
 
 	DBG("seq %d", seq);
 
@@ -1499,9 +1595,27 @@ static void rtnl_message(void *buf, size_t len)
 			process_response(hdr->nlmsg_seq);
 			return;
 		case NLMSG_ERROR:
+			if (hdr->nlmsg_len < NLMSG_LENGTH(
+						sizeof(struct nlmsgerr)))
+				return;
+
 			err = NLMSG_DATA(hdr);
-			DBG("error %d (%s)", -err->error,
-						strerror(-err->error));
+
+			struct nlmsg_fib_hdr *n_f_hdr;
+
+			/*
+			 * If the request was sent with ack, it has a callback
+			 * that needs the error, or the success reported back.
+			*/
+			n_f_hdr = find_request(hdr->nlmsg_seq);
+			if (n_f_hdr && n_f_hdr->cb)
+				n_f_hdr->cb(hdr->nlmsg_seq, err->error);
+
+			DBG("netlink ACK seq %u: %d (%s)",
+					hdr->nlmsg_seq, err->error,
+					strerror(-err->error));
+
+			process_response(hdr->nlmsg_seq);
 			return;
 		case RTM_NEWLINK:
 			rtnl_newlink(hdr);
@@ -1523,6 +1637,12 @@ static void rtnl_message(void *buf, size_t len)
 			break;
 		case RTM_NEWNDUSEROPT:
 			rtnl_newnduseropt(hdr);
+			break;
+		case RTM_NEWRULE:
+			rtnl_newrule(hdr);
+			break;
+		case RTM_DELRULE:
+			rtnl_delrule(hdr);
 			break;
 		}
 
@@ -1632,6 +1752,98 @@ static int send_getroute(int family)
 	return queue_request(hdr);
 }
 
+static int rtnl_rule_add_attr(struct nlmsg_fib_hdr *hdr, int type,
+				const void *data, int len)
+{
+	struct rtattr *rta;
+	size_t offset = NLMSG_ALIGN(hdr->nlmsgh->nlmsg_len);
+	size_t attr_size = RTA_SPACE(len);
+
+	if (offset + attr_size > RTNL_FIB_BUFFER_SIZE)
+		return -EMSGSIZE;
+
+	rta = (struct rtattr *)((char *)hdr->nlmsgh + offset);
+
+	rta->rta_type = type;
+	rta->rta_len = RTA_LENGTH(len);
+
+	memcpy(RTA_DATA(rta), data, len);
+
+	hdr->nlmsgh->nlmsg_len = offset + attr_size;
+
+	return 0;
+}
+
+/*
+ * Returns 0 when the message was already directly, > 0 meaning the sequence id
+ * of the pending request, and < 0 in case of error.
+*/
+static int send_rule_request(int type, int family, unsigned int fra_table,
+					unsigned int fra_priority,
+					const char *fra_ifname,
+					connman_rtnl_rule_cb_t cb,
+					uint32_t *seq)
+{
+	struct nlmsg_fib_hdr *hdr;
+	int err = 0;
+
+	if (!fra_ifname || !fra_ifname[0])
+		return -EINVAL;
+
+	hdr = g_malloc0(sizeof(struct nlmsg_fib_hdr) + RTNL_FIB_BUFFER_SIZE);
+
+	hdr->nlmsgh = (struct nlmsghdr *)hdr->data;
+	hdr->frh = NLMSG_DATA(hdr->nlmsgh);
+	hdr->cb = cb;
+
+	hdr->nlmsgh->nlmsg_len = NLMSG_LENGTH(sizeof(struct fib_rule_hdr));
+	hdr->nlmsgh->nlmsg_type = type;
+	hdr->nlmsgh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	hdr->nlmsgh->nlmsg_seq = request_seq++;
+	hdr->nlmsgh->nlmsg_pid = 0;
+
+	if (type == RTM_NEWRULE)
+		hdr->nlmsgh->nlmsg_flags |= NLM_F_CREATE | NLM_F_EXCL;
+
+	hdr->frh->family = family;
+	hdr->frh->action = FR_ACT_TO_TBL;
+
+	err = rtnl_rule_add_attr(hdr, FRA_TABLE, &fra_table, sizeof(fra_table));
+	if (err)
+		goto out;
+
+	err = rtnl_rule_add_attr(hdr, FRA_PRIORITY, &fra_priority,
+							sizeof(fra_priority));
+	if (err)
+		goto out;
+
+	err = rtnl_rule_add_attr(hdr, FRA_OIFNAME, fra_ifname,
+							strlen(fra_ifname) + 1);
+	if (err)
+		goto out;
+
+	err = queue_request_full(hdr);
+	if (!err || err == hdr->nlmsgh->nlmsg_len) {
+		if (seq)
+			*seq = hdr->nlmsgh->nlmsg_seq;
+
+		return err;	/* In queue or sent. */
+	}
+
+	if (err < hdr->nlmsgh->nlmsg_len && err > 0) {
+		connman_warn("rtnl: failed to send a request, sent %d/%d bytes",
+						err, hdr->nlmsgh->nlmsg_len);
+		return -EINVAL;
+	}
+
+	/* Remove the failed from the queue set to require ack. */
+	request_list = g_slist_remove(request_list, hdr);
+
+out:
+	g_free(hdr);
+	return err;
+}
+
 static gboolean update_timeout_cb(gpointer user_data)
 {
 	__connman_rtnl_request_update(AF_INET);
@@ -1697,6 +1909,26 @@ unsigned int __connman_rtnl_update_interval_remove(unsigned int interval)
 		update_interval_callback(min);
 
 	return min;
+}
+
+int connman_rtnl_add_rule(int family, unsigned int fra_table,
+					unsigned int fra_priority,
+					const char *fra_ifname,
+					connman_rtnl_rule_cb_t cb,
+					uint32_t *seq)
+{
+	return send_rule_request(RTM_NEWRULE, family, fra_table, fra_priority,
+							fra_ifname, cb, seq);
+}
+
+int connman_rtnl_del_rule(int family, unsigned int fra_table,
+					unsigned int fra_priority,
+					const char *fra_ifname,
+					connman_rtnl_rule_cb_t cb,
+					uint32_t *seq)
+{
+	return send_rule_request(RTM_DELRULE, family, fra_table, fra_priority,
+							fra_ifname, cb, seq);
 }
 
 static bool is_valid_ip_family(int family)
@@ -1796,12 +2028,21 @@ void __connman_rtnl_cleanup(void)
 	update_list = NULL;
 
 	for (list = request_list; list; list = list->next) {
-		struct nlmsghdr *hdr= list->data;
+		struct nlmsg_fib_hdr *hdr = list->data;
 
 		DBG("%s len %d type %d flags 0x%04x seq %d",
-				type2string(hdr->nlmsg_type),
-				hdr->nlmsg_len, hdr->nlmsg_type,
-				hdr->nlmsg_flags, hdr->nlmsg_seq);
+				type2string(hdr->nlmsgh->nlmsg_type),
+				hdr->nlmsgh->nlmsg_len,
+				hdr->nlmsgh->nlmsg_type,
+				hdr->nlmsgh->nlmsg_flags,
+				hdr->nlmsgh->nlmsg_seq);
+
+		/* At this point nothing is processing the callback */
+		if (hdr->cb)
+			hdr->cb = NULL;
+
+		if (send_request(hdr) < hdr->nlmsgh->nlmsg_len)
+			DBG("failed to send while emptying the queue");
 
 		g_free(hdr);
 		list->data = NULL;

@@ -23,6 +23,7 @@
 #define __CONNMAN_RTNL_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -66,10 +67,33 @@ struct connman_rtnl {
 					int metric, unsigned char rtm_protocol);
 	void (*delgateway6) (int index, const char *dst, const char *gateway,
 					int metric, unsigned char rtm_protocol);
+	void (*newroute) (int family, unsigned int table, int index,
+					unsigned char dst_len,
+					unsigned char type,
+					unsigned char protocol,
+					int metric);
+	void (*delroute) (int family, unsigned int table, int index,
+					unsigned char dst_len,
+					unsigned char type,
+					unsigned char protocol,
+					int metric);
 };
 
 int connman_rtnl_register(struct connman_rtnl *rtnl);
 void connman_rtnl_unregister(struct connman_rtnl *rtnl);
+
+typedef void (* connman_rtnl_rule_cb_t) (uint32_t seq, int err);
+
+int connman_rtnl_add_rule(int family, unsigned int fra_table,
+					unsigned int fra_priority,
+					const char *fra_ifname,
+					connman_rtnl_rule_cb_t cb,
+					uint32_t *seq);
+int connman_rtnl_del_rule(int family, unsigned int fra_table,
+					unsigned int fra_priority,
+					const char *fra_ifname,
+					connman_rtnl_rule_cb_t cb,
+					uint32_t *seq);
 
 /* TODO: this could be more generic: handle a list of user spec rtproto types */
 void connman_rtnl_handle_rtprot_ra(bool value);
