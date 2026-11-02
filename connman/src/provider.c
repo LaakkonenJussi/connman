@@ -835,10 +835,7 @@ int connman_provider_update_gateway(struct connman_provider *provider,
 	__connman_ipconfig_gateway_remove(ipconfig);
 	__connman_ipconfig_set_gateway(ipconfig, gateway);
 
-	//__connman_ipconfig_address_add(ipconfig);
 	__connman_ipconfig_gateway_add(ipconfig);
-
-	//connman_provider_set_state(provider, CONNMAN_PROVIDER_STATE_READY);
 
 	if (provider->driver && provider->driver->set_routes)
 		provider->driver->set_routes(provider,
@@ -846,8 +843,7 @@ int connman_provider_update_gateway(struct connman_provider *provider,
 
 	if (provider->driver->get_property)
 		__connman_service_nameserver_add_routes(provider->vpn_service,
-					provider->driver->get_property(
-							provider, "HostIP"));
+					gateway);
 
 	return 0;
 }
