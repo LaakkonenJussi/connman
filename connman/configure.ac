@@ -670,6 +670,7 @@ AC_ARG_ENABLE(route-monitor,
 	AC_HELP_STRING([--enable-route-monitor], [enable Route monitor plugin]),
 			[enable_route_monitor=${enableval}], [enable_route_monitor="no"])
 AM_CONDITIONAL(ROUTE_MONITOR, test "${enable_route_monitor}" != "no")
+AM_CONDITIONAL(ROUTE_MONITOR_BUILTIN, test "${enable_route_monitor}" = "builtin")
 
 AC_ARG_ENABLE(clat,
 	AC_HELP_STRING([--enable-clat], [enable CLAT plugin]),
