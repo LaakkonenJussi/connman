@@ -177,6 +177,19 @@ Requires:   libmnl
 %description plugin-vpn-wireguard
 This package provides Wireguard VPN plugin for connman.
 
+%package plugin-route-monitor
+Summary:    Connection Manager route monitor plugin
+Requires:   %{name} = %{version}-%{release}
+
+%description plugin-route-monitor
+This package provides route monitor plugin for connman for adding oif
+routes to other than normal routing tables. This plugin facilitates the
+need of external network managers, such as rild, to have specific routing
+set up for various needs. These routes are added based on the netlink
+reported per-network tables that is reachable only by marked sockets and
+with the help of this plugin they're known by, e.g., conntrack so firewall
+filtering can detect them properly.
+
 %prep
 %setup -q -n %{name}-%{version}/connman
 
@@ -357,3 +370,6 @@ systemctl daemon-reload || :
 %license COPYING
 %{_libdir}/%{name}/plugins-vpn/wireguard.so
 
+%files plugin-route-monitor
+%license COPYING
+%{_libdir}/%{name}/plugins/route_monitor.so
