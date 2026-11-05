@@ -1591,6 +1591,16 @@ static int process_response(guint32 seq)
 	return send_request(req);
 }
 
+static void remove_request(struct netlink_request *req)
+{
+	if (!req)
+		return;
+
+	request_list = g_slist_remove(request_list, req);
+	g_free(req->hdr);
+	g_free(req);
+}
+
 static void rtnl_message(void *buf, size_t len)
 {
 	while (len > 0) {
@@ -1687,12 +1697,27 @@ static gboolean netlink_resync_cb(gpointer user_data)
 		 * Create request was already sent, do not duplicate it as the
 		 * reply is EEXIST.
 		 */
-		if (req->sent && req->hdr->nlmsgh->nlmsg_flags & NLM_F_CREATE)
+		if (req->sent && req->hdr->nlmsgh->nlmsg_flags & NLM_F_CREATE) {
 			DBG("Do not resend create request seq %u",
 						req->hdr->nlmsgh->nlmsg_seq);
-		else if (send_request(req) < 0)
-			DBG("cannot re-send the request seq %u",
-						req->hdr->nlmsgh->nlmsg_seq);
+			if (req->cb)
+				req->cb(req->hdr->nlmsgh->nlmsg_seq, -EAGAIN);
+
+			remove_request(req);
+
+			/* Take the next one */
+			req = g_slist_nth_data(request_list, 0);
+		}
+	}
+
+	if (req && send_request(req) < 0) {
+		DBG("cannot re-send the request seq %u",
+					req->hdr->nlmsgh->nlmsg_seq);
+
+		if (req->cb)
+			req->cb(req->hdr->nlmsgh->nlmsg_seq, -EINVAL);
+
+		remove_request(req);
 	}
 
 	rtnl_sync(AF_INET);
@@ -1897,7 +1922,7 @@ static int send_rule_request(int type, int family, unsigned int fra_table,
 	if (err < hdr->nlmsgh->nlmsg_len && err > 0) {
 		connman_warn("rtnl: failed to send a request, sent %d/%d bytes",
 						err, hdr->nlmsgh->nlmsg_len);
-		return -EINVAL;
+		err = -EINVAL;
 	}
 
 	/* Remove the failed from the queue set to require ack. */
@@ -2000,6 +2025,29 @@ int connman_rtnl_del_rule(int family, unsigned int fra_table,
 
 	return send_rule_request(RTM_DELRULE, family, fra_table, fra_priority,
 							fra_ifname, cb, seq);
+}
+
+int connman_rtnl_cancel_request(uint32_t seq)
+{
+	struct netlink_request *req;
+
+	req = find_request(seq);
+	if (!req)
+		return -ENOENT;
+
+	/*
+	 * Even if the request is sent clear the callback as there is
+	 * nothing expecting a reply anymore.
+	 */
+	req->cb = NULL;
+
+	/* Sent means that it is on top of the queue waiting for a reply */
+	if (req->sent)
+		return -EALREADY;
+
+	remove_request(req);
+
+	return 0;
 }
 
 static bool is_valid_ip_family(int family)
@@ -2131,11 +2179,14 @@ void __connman_rtnl_cleanup(void)
 		if (hdr->nlmsgh->nlmsg_flags & NLM_F_ACK)
 			hdr->nlmsgh->nlmsg_flags &= ~NLM_F_ACK;
 
-		if (!req->sent) {
+		/* Send only rule deletions when shutting down. */
+		if (hdr->nlmsgh->nlmsg_type == RTM_DELRULE && !req->sent) {
 			if (send_request(req) < hdr->nlmsgh->nlmsg_len)
-				DBG("failed to send while emptying the queue");
+				DBG("failed to send %u when emptying the queue",
+							hdr->nlmsgh->nlmsg_seq);
 		} else {
-			DBG("request is already sent");
+			DBG("request %u is already sent",
+						hdr->nlmsgh->nlmsg_seq);
 		}
 
 		g_free(req->hdr);
