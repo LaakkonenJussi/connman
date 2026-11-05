@@ -76,20 +76,33 @@ static bool is_network_table(unsigned int table)
 }
 
 static struct route_rule *find_rule(int family, unsigned int table, int index,
-								int metric)
+					int metric, bool use_metric, int *count)
 {
 	GSList *list;
+	struct route_rule *return_rule = NULL;
+	int rule_count = 0;
 
 	for (list = rule_list; list; list = list->next) {
 		struct route_rule *rule = list->data;
 
 		if (rule->family == family && rule->table == table &&
-				rule->index == index &&
-				rule->metric == metric)
-			return rule;
+				rule->index == index) {
+			if (use_metric) {
+				if (rule->metric == metric)
+					return rule;
+			} else {
+				if (!rule_count)
+					return_rule = rule;
+
+				rule_count++;
+			}
+		}
 	}
 
-	return NULL;
+	if (count)
+		*count = rule_count;
+
+	return return_rule;
 }
 
 static void free_rule(struct route_rule *rule)
@@ -148,7 +161,7 @@ static void add_rule(int family, unsigned int table, int index,
 	struct route_rule *rule;
 	int err;
 
-	if (find_rule(family, table, index, metric))
+	if (find_rule(family, table, index, metric, true, NULL))
 		return;
 
 	rule = g_try_new0(struct route_rule, 1);
@@ -203,7 +216,7 @@ static void remove_rule(struct route_rule *rule)
 				rule->ifname, strerror(-err));
 		else
 			DBG("Remove rule queued with seq %u", rule->seq);
-	} else if (running) {
+	} else {
 		/*
 		 * Don't delete a rule that is pending still while the plugin
 		 * is active.
@@ -320,9 +333,8 @@ static void monitor_route(int family, unsigned int table, int index,
 						add ? "New" : "Deleted",
 						ifname, table, index, metric);
 
-	rule = find_rule(family, table, index, metric);
-
 	if (add) {
+		rule = find_rule(family, table, index, metric, true, NULL);
 		if (!rule) {
 			add_rule(family, table, index, ifname, metric);
 		} else {
@@ -330,10 +342,16 @@ static void monitor_route(int family, unsigned int table, int index,
 			DBG("rule already exists");
 		}
 	} else {
-		if (rule)
+		int count;
+		rule = find_rule(family, table, index, metric, false, &count);
+		if (rule && count == 1) {
 			remove_rule(rule);
-		else
+		} else if (rule && count > 1) {
+			DBG("keep FIB rule, another route depends on it");
+			free_rule(rule);
+		} else {
 			DBG("rule already removed/does not exist");
+		}
 	}
 
 out:
