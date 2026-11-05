@@ -56,6 +56,7 @@ struct route_rule {
 	uint32_t seq;
 	bool pending;
 	bool requested_del;
+	bool retried;
 };
 
 static GSList *rule_list;
@@ -145,6 +146,40 @@ static void rule_send_callback(uint32_t seq, int err)
 				rule->requested_del = false;
 				remove_rule(rule);
 			}
+		} else if (err == -EEXIST) {
+			if (rule->retried) {
+				DBG("retry of rule %u success", seq);
+				rule->retried = false;
+
+				if (rule->requested_del) {
+					DBG("Do pending remove for rule seq %u",
+								seq);
+					rule->requested_del = false;
+					remove_rule(rule);
+				}
+			} else {
+				DBG("Rule already exists, remove");
+				free_rule(rule);
+			}
+		} else if (err == -EAGAIN) {
+			if (rule->retried) {
+				DBG("Rule alredy retried %u", seq);
+				free_rule(rule);
+				break;
+			}
+
+			DBG("Retry rule %u", seq);
+
+			err = connman_rtnl_add_rule(rule->family, rule->table,
+					MONITOR_ROUTE_RULE_PRIORITY,
+					rule->ifname, rule_send_callback,
+					&rule->seq);
+			if (!err || err > 0) {
+				rule->pending = true;
+				rule->retried = true;
+			} else {
+				free_rule(rule);
+			}
 		} else {
 			DBG("Cannot add rule seq %u: %d/%s -> remove",
 						seq, err, strerror(-err));
@@ -159,10 +194,12 @@ static void add_rule(int family, unsigned int table, int index,
 					const char *ifname, int metric)
 {
 	struct route_rule *rule;
+	int count;
 	int err;
 
-	if (find_rule(family, table, index, metric, true, NULL))
-		return;
+	/* Check if other similar rules with different metric exists */
+	if (!find_rule(family, table, index, metric, false, &count))
+		DBG("Adding a new rule");
 
 	rule = g_try_new0(struct route_rule, 1);
 	if (!rule)
@@ -173,6 +210,12 @@ static void add_rule(int family, unsigned int table, int index,
 	rule->index = index;
 	rule->metric = metric;
 	g_strlcpy(rule->ifname, ifname, sizeof(rule->ifname));
+
+	/* We have another rule with different metric, add this to list only. */
+	if (count) {
+		rule_list = g_slist_prepend(rule_list, rule);
+		return;
+	}
 
 	err = connman_rtnl_add_rule(rule->family, rule->table,
 					MONITOR_ROUTE_RULE_PRIORITY,
@@ -189,15 +232,10 @@ static void add_rule(int family, unsigned int table, int index,
 		rule->pending = true;
 		rule_list = g_slist_prepend(rule_list, rule);
 		return;
+	} else {
+		DBG("Failed to send request to add rule for %s: %s",
+						ifname, strerror(-err));
 	}
-
-	/*
-	 * An identical rule may have been installed by another
-	 * component. Do not claim ownership of that rule.
-	 */
-	if (err != -EEXIST)
-		connman_warn("Failed to add rule for %s: %s",
-					ifname, strerror(-err));
 
 	g_free(rule);
 }
@@ -216,7 +254,7 @@ static void remove_rule(struct route_rule *rule)
 				rule->ifname, strerror(-err));
 		else
 			DBG("Remove rule queued with seq %u", rule->seq);
-	} else {
+	} else if (running) {
 		/*
 		 * Don't delete a rule that is pending still while the plugin
 		 * is active.
@@ -224,6 +262,10 @@ static void remove_rule(struct route_rule *rule)
 		DBG("set rule for %s pending deletion", rule->ifname);
 		rule->requested_del = true;
 		return;
+	} else {
+		err = connman_rtnl_cancel_request(rule->seq);
+		if (err)
+			DBG("cannot cancel %u: %s", rule->seq, strerror(-err));
 	}
 
 	DBG("%s lookup %u priority %u index %d metric %d", rule->ifname,
@@ -345,9 +387,16 @@ static void monitor_route(int family, unsigned int table, int index,
 		int count;
 		rule = find_rule(family, table, index, metric, false, &count);
 		if (rule && count == 1) {
-			remove_rule(rule);
+			rule = find_rule(family, table, index, metric, true,
+									NULL);
+			if (rule)
+				remove_rule(rule);
+			else
+				DBG("cannot find rule to remove");
 		} else if (rule && count > 1) {
 			DBG("keep FIB rule, another route depends on it");
+			rule = find_rule(family, table, index, metric, true,
+									NULL);
 			free_rule(rule);
 		} else {
 			DBG("rule already removed/does not exist");
