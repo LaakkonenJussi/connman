@@ -95,6 +95,8 @@ int connman_rtnl_del_rule(int family, unsigned int fra_table,
 					connman_rtnl_rule_cb_t cb,
 					uint32_t *seq);
 
+int connman_rtnl_cancel_request(uint32_t seq);
+
 /* TODO: this could be more generic: handle a list of user spec rtproto types */
 void connman_rtnl_handle_rtprot_ra(bool value);
 int connman_rtnl_request_route_update(int family);
