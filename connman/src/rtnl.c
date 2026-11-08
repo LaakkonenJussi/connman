@@ -33,10 +33,11 @@
 #include <netinet/ether.h>
 #include <netinet/icmp6.h>
 #include <net/if_arp.h>
-#include <linux/if.h>
+#include <net/if.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <linux/wireless.h>
+#include <linux/fib_rules.h>
 
 #include <glib.h>
 
@@ -1164,6 +1165,53 @@ static void rtnl_route(struct nlmsghdr *hdr)
 	}
 }
 
+static void process_route_notify(struct rtmsg *msg, int bytes, bool add)
+{
+	struct rtattr *attr;
+	unsigned int table = msg->rtm_table;
+	int index = 0;
+	int metric = 0;
+	GSList *list;
+
+	for (attr = RTM_RTA(msg); RTA_OK(attr, bytes);
+						attr = RTA_NEXT(attr, bytes)) {
+		switch (attr->rta_type) {
+		case RTA_TABLE:
+			if (RTA_PAYLOAD(attr) >= sizeof(table))
+				table = *((unsigned int *) RTA_DATA(attr));
+			break;
+		case RTA_OIF:
+			if (RTA_PAYLOAD(attr) >= sizeof(index))
+				index = *((int *) RTA_DATA(attr));
+			break;
+		case RTA_PRIORITY:
+			if (RTA_PAYLOAD(attr) >= sizeof(metric))
+				metric = *((int *) RTA_DATA(attr));
+			break;
+		}
+	}
+
+	for (list = rtnl_list; list; list = list->next) {
+		struct connman_rtnl *rtnl = list->data;
+
+		if (add) {
+			if (rtnl->newroute)
+				rtnl->newroute(msg->rtm_family, table, index,
+							msg->rtm_dst_len,
+							msg->rtm_type,
+							msg->rtm_protocol,
+							metric);
+		} else {
+			if (rtnl->delroute) 
+				rtnl->delroute(msg->rtm_family, table, index,
+							msg->rtm_dst_len,
+							msg->rtm_type,
+							msg->rtm_protocol,
+							metric);
+		}
+	}
+}
+
 static bool is_route_rtmsg(struct rtmsg *msg)
 {
 	if (msg->rtm_flags & RTM_F_CLONED)
@@ -1209,6 +1257,12 @@ static void rtnl_newroute(struct nlmsghdr *hdr)
 
 	rtnl_route(hdr);
 
+	/* Notify before processing so plugins can react early. The routes can
+	 * be in unconventional, i.e., non-standard routing tables and, thus,
+	 * the route table check must be done later only before processing.
+	 */
+	process_route_notify(msg, RTM_PAYLOAD(hdr), true);
+
 	if (is_route_rtmsg(msg)) {
 		if (msg->rtm_family == AF_INET6)
 			metric = get_route_metric(msg, bytes);
@@ -1225,6 +1279,8 @@ static void rtnl_delroute(struct nlmsghdr *hdr)
 	int metric = -1;
 
 	rtnl_route(hdr);
+
+	process_route_notify(msg, RTM_PAYLOAD(hdr), false);
 
 	if (is_route_rtmsg(msg)) {
 		if (msg->rtm_family == AF_INET6)
@@ -1370,6 +1426,16 @@ static void rtnl_newnduseropt(struct nlmsghdr *hdr)
 	g_free(domains);
 }
 
+static void rtnl_newrule(struct nlmsghdr *hdr)
+{
+	DBG("");
+}
+
+static void rtnl_delrule(struct nlmsghdr *hdr)
+{
+	DBG("");
+}
+
 static const char *type2string(uint16_t type)
 {
 	switch (type) {
@@ -1401,6 +1467,10 @@ static const char *type2string(uint16_t type)
 		return "DELROUTE";
 	case RTM_NEWNDUSEROPT:
 		return "NEWNDUSEROPT";
+	case RTM_NEWRULE:
+		return "NEWRULE";
+	case RTM_DELRULE:
+		return "DELRULE";
 	default:
 		return "UNKNOWN";
 	}
@@ -1410,70 +1480,125 @@ static GIOChannel *channel = NULL;
 static guint channel_watch = 0;
 
 #define RTNL_REQUEST_SIZE (NLMSG_HDRLEN + NLMSG_ALIGN(sizeof(struct rtgenmsg)))
+#define RTNL_FIB_REQUEST_SIZE NLMSG_LENGTH(sizeof(struct fib_rule_hdr))
+#define RTNL_FIB_ATTR_SIZE (RTA_SPACE(sizeof(uint32_t)) + \
+				RTA_SPACE(sizeof(uint32_t)) + \
+				RTA_SPACE(IF_NAMESIZE))
+#define RTNL_FIB_BUFFER_SIZE \
+		NLMSG_ALIGN(RTNL_FIB_REQUEST_SIZE) + RTNL_FIB_ATTR_SIZE
+
+#define RESYNC_DELAY 100 // ms
+
+struct nlmsg_fib_hdr {
+	struct nlmsghdr *nlmsgh;
+	struct fib_rule_hdr *frh;
+	char data[];
+};
+
+struct netlink_request {
+	struct nlmsg_fib_hdr *hdr;
+	connman_rtnl_rule_cb_t cb;
+	bool sent;
+};
 
 static GSList *request_list = NULL;
 static guint32 request_seq = 0;
+static guint netlink_resync_id = 0;
 
-static struct nlmsghdr *find_request(guint32 seq)
+static struct netlink_request *find_request(guint32 seq)
 {
 	GSList *list;
 
 	for (list = request_list; list; list = list->next) {
-		struct nlmsghdr *hdr = list->data;
+		struct netlink_request *req = list->data;
 
-		if (hdr->nlmsg_seq == seq)
-			return hdr;
+		if (req->hdr->nlmsgh->nlmsg_seq == seq)
+			return req;
 	}
 
 	return NULL;
 }
 
-static int send_request(struct nlmsghdr *hdr)
+static int send_request(struct netlink_request *req)
 {
+	struct nlmsg_fib_hdr *hdr = req->hdr;
 	struct sockaddr_nl addr;
 	int sk;
+	int err;
 
 	DBG("%s len %d type %d flags 0x%04x seq %d",
-				type2string(hdr->nlmsg_type),
-				hdr->nlmsg_len, hdr->nlmsg_type,
-				hdr->nlmsg_flags, hdr->nlmsg_seq);
+				type2string(hdr->nlmsgh->nlmsg_type),
+				hdr->nlmsgh->nlmsg_len,
+				hdr->nlmsgh->nlmsg_type,
+				hdr->nlmsgh->nlmsg_flags,
+				hdr->nlmsgh->nlmsg_seq);
 
 	sk = g_io_channel_unix_get_fd(channel);
 
 	memset(&addr, 0, sizeof(addr));
 	addr.nl_family = AF_NETLINK;
 
-	return sendto(sk, hdr, hdr->nlmsg_len, 0,
-				(struct sockaddr *) &addr, sizeof(addr));
+	err = sendto(sk, hdr->nlmsgh, hdr->nlmsgh->nlmsg_len,
+				0, (struct sockaddr *) &addr, sizeof(addr));
+	if (err != -1)
+		req->sent = true;
+
+	return err;
 }
 
-static int queue_request(struct nlmsghdr *hdr)
+static int queue_request_full(struct netlink_request *req)
 {
-	request_list = g_slist_append(request_list, hdr);
+	request_list = g_slist_append(request_list, req);
 
 	if (g_slist_length(request_list) > 1)
 		return 0;
 
-	return send_request(hdr);
+	return send_request(req);
+}
+
+static int queue_request(struct nlmsghdr *hdr)
+{
+	struct netlink_request *req;
+
+	req = g_malloc0(sizeof(struct netlink_request));
+	req->hdr = g_malloc0(sizeof(struct nlmsg_fib_hdr) +
+					NLMSG_ALIGN(hdr->nlmsg_len));
+	req->hdr->nlmsgh = (struct nlmsghdr *)req->hdr->data;
+
+	memcpy(req->hdr->nlmsgh, hdr, hdr->nlmsg_len);
+	g_free(hdr);
+
+	return queue_request_full(req);
 }
 
 static int process_response(guint32 seq)
 {
-	struct nlmsghdr *hdr;
+	struct netlink_request *req;
 
 	DBG("seq %d", seq);
 
-	hdr = find_request(seq);
-	if (hdr) {
-		request_list = g_slist_remove(request_list, hdr);
-		g_free(hdr);
+	req = find_request(seq);
+	if (req) {
+		request_list = g_slist_remove(request_list, req);
+		g_free(req->hdr);
+		g_free(req);
 	}
 
-	hdr = g_slist_nth_data(request_list, 0);
-	if (!hdr)
+	req = g_slist_nth_data(request_list, 0);
+	if (!req)
 		return 0;
 
-	return send_request(hdr);
+	return send_request(req);
+}
+
+static void remove_request(struct netlink_request *req)
+{
+	if (!req)
+		return;
+
+	request_list = g_slist_remove(request_list, req);
+	g_free(req->hdr);
+	g_free(req);
 }
 
 static void rtnl_message(void *buf, size_t len)
@@ -1499,9 +1624,27 @@ static void rtnl_message(void *buf, size_t len)
 			process_response(hdr->nlmsg_seq);
 			return;
 		case NLMSG_ERROR:
+			struct netlink_request *req;
+
+			if (hdr->nlmsg_len < NLMSG_LENGTH(
+						sizeof(struct nlmsgerr)))
+				return;
+
 			err = NLMSG_DATA(hdr);
-			DBG("error %d (%s)", -err->error,
-						strerror(-err->error));
+
+			/*
+			 * If the request was sent with ack, it has a callback
+			 * that needs the error, or the success reported back.
+			*/
+			req = find_request(hdr->nlmsg_seq);
+			if (req && req->cb)
+				req->cb(hdr->nlmsg_seq, err->error);
+
+			DBG("netlink ACK seq %u: %d (%s)",
+					hdr->nlmsg_seq, err->error,
+					strerror(-err->error));
+
+			process_response(hdr->nlmsg_seq);
 			return;
 		case RTM_NEWLINK:
 			rtnl_newlink(hdr);
@@ -1524,11 +1667,65 @@ static void rtnl_message(void *buf, size_t len)
 		case RTM_NEWNDUSEROPT:
 			rtnl_newnduseropt(hdr);
 			break;
+		case RTM_NEWRULE:
+			rtnl_newrule(hdr);
+			break;
+		case RTM_DELRULE:
+			rtnl_delrule(hdr);
+			break;
 		}
 
 		len -= hdr->nlmsg_len;
 		buf += hdr->nlmsg_len;
 	}
+}
+
+static void rtnl_sync(int family);
+
+static gboolean netlink_resync_cb(gpointer user_data)
+{
+	struct netlink_request *req;
+
+	if (user_data)
+		DBG("resync because of error %s",
+					strerror(GPOINTER_TO_INT(user_data)));
+
+	/* Retry the last request one on top of the queue. */
+	req = g_slist_nth_data(request_list, 0);
+	if (req) {
+		/*
+		 * Create request was already sent, do not duplicate it as the
+		 * reply is EEXIST.
+		 */
+		if (req->sent && req->hdr->nlmsgh->nlmsg_flags & NLM_F_CREATE) {
+			DBG("Do not resend create request seq %u",
+						req->hdr->nlmsgh->nlmsg_seq);
+			if (req->cb)
+				req->cb(req->hdr->nlmsgh->nlmsg_seq, -EAGAIN);
+
+			remove_request(req);
+
+			/* Take the next one */
+			req = g_slist_nth_data(request_list, 0);
+		}
+	}
+
+	if (req && send_request(req) < 0) {
+		DBG("cannot re-send the request seq %u",
+					req->hdr->nlmsgh->nlmsg_seq);
+
+		if (req->cb)
+			req->cb(req->hdr->nlmsgh->nlmsg_seq, -EINVAL);
+
+		remove_request(req);
+	}
+
+	rtnl_sync(AF_INET);
+	rtnl_sync(AF_INET6);
+
+	netlink_resync_id = 0;
+
+	return G_SOURCE_REMOVE;
 }
 
 static gboolean netlink_event(GIOChannel *chan, GIOCondition cond, gpointer data)
@@ -1539,7 +1736,7 @@ static gboolean netlink_event(GIOChannel *chan, GIOCondition cond, gpointer data
 	ssize_t status;
 	int fd;
 
-	if (cond & (G_IO_NVAL | G_IO_HUP | G_IO_ERR))
+	if (cond & (G_IO_NVAL | G_IO_HUP))
 		return FALSE;
 
 	memset(buf, 0, sizeof(buf));
@@ -1552,6 +1749,14 @@ static gboolean netlink_event(GIOChannel *chan, GIOCondition cond, gpointer data
 	if (status < 0) {
 		if (errno == EINTR || errno == EAGAIN)
 			return TRUE;
+
+		if (errno == ENOBUFS) {
+			if (!netlink_resync_id)
+				netlink_resync_id = g_timeout_add(RESYNC_DELAY,
+							netlink_resync_cb,
+							GINT_TO_POINTER(errno));
+			return TRUE;
+		}
 
 		return FALSE;
 	}
@@ -1585,7 +1790,7 @@ static int send_getlink(int family)
 	hdr->nlmsg_seq = request_seq++;
 
 	msg = (struct rtgenmsg *) NLMSG_DATA(hdr);
-	msg->rtgen_family = AF_INET;
+	msg->rtgen_family = family;
 
 	return queue_request(hdr);
 }
@@ -1630,6 +1835,103 @@ static int send_getroute(int family)
 	msg->rtgen_family = family;
 
 	return queue_request(hdr);
+}
+
+static int rtnl_rule_add_attr(struct nlmsg_fib_hdr *hdr, int type,
+				const void *data, int len)
+{
+	struct rtattr *rta;
+	size_t offset = NLMSG_ALIGN(hdr->nlmsgh->nlmsg_len);
+	size_t attr_size = RTA_SPACE(len);
+
+	if (offset + attr_size > RTNL_FIB_BUFFER_SIZE)
+		return -EMSGSIZE;
+
+	rta = (struct rtattr *)((char *)hdr->nlmsgh + offset);
+
+	rta->rta_type = type;
+	rta->rta_len = RTA_LENGTH(len);
+
+	memcpy(RTA_DATA(rta), data, len);
+
+	hdr->nlmsgh->nlmsg_len = offset + attr_size;
+
+	return 0;
+}
+
+/*
+ * Returns 0 when the message was already directly, > 0 meaning the sequence id
+ * of the pending request, and < 0 in case of error.
+*/
+static int send_rule_request(int type, int family, unsigned int fra_table,
+					unsigned int fra_priority,
+					const char *fra_ifname,
+					connman_rtnl_rule_cb_t cb,
+					uint32_t *seq)
+{
+	struct netlink_request *req;
+	struct nlmsg_fib_hdr *hdr;
+	int err = 0;
+
+	if (!fra_ifname || !fra_ifname[0])
+		return -EINVAL;
+
+	req = g_malloc0(sizeof(struct netlink_request));
+	req->hdr = g_malloc0(sizeof(struct nlmsg_fib_hdr) +
+							RTNL_FIB_BUFFER_SIZE);
+	hdr = req->hdr;
+
+	hdr->nlmsgh = (struct nlmsghdr *)hdr->data;
+	hdr->frh = NLMSG_DATA(hdr->nlmsgh);
+	req->cb = cb;
+
+	hdr->nlmsgh->nlmsg_len = NLMSG_LENGTH(sizeof(struct fib_rule_hdr));
+	hdr->nlmsgh->nlmsg_type = type;
+	hdr->nlmsgh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	hdr->nlmsgh->nlmsg_seq = request_seq++;
+	hdr->nlmsgh->nlmsg_pid = 0;
+
+	if (type == RTM_NEWRULE)
+		hdr->nlmsgh->nlmsg_flags |= NLM_F_CREATE | NLM_F_EXCL;
+
+	hdr->frh->family = family;
+	hdr->frh->action = FR_ACT_TO_TBL;
+
+	err = rtnl_rule_add_attr(hdr, FRA_TABLE, &fra_table, sizeof(fra_table));
+	if (err)
+		goto out;
+
+	err = rtnl_rule_add_attr(hdr, FRA_PRIORITY, &fra_priority,
+							sizeof(fra_priority));
+	if (err)
+		goto out;
+
+	err = rtnl_rule_add_attr(hdr, FRA_OIFNAME, fra_ifname,
+							strlen(fra_ifname) + 1);
+	if (err)
+		goto out;
+
+	err = queue_request_full(req);
+	if (!err || err == hdr->nlmsgh->nlmsg_len) {
+		if (seq)
+			*seq = hdr->nlmsgh->nlmsg_seq;
+
+		return err;	/* In queue or sent. */
+	}
+
+	if (err < hdr->nlmsgh->nlmsg_len && err > 0) {
+		connman_warn("rtnl: failed to send a request, sent %d/%d bytes",
+						err, hdr->nlmsgh->nlmsg_len);
+		err = -EINVAL;
+	}
+
+	/* Remove the failed from the queue set to require ack. */
+	request_list = g_slist_remove(request_list, req);
+
+out:
+	g_free(req->hdr);
+	g_free(req);
+	return err;
 }
 
 static gboolean update_timeout_cb(gpointer user_data)
@@ -1699,6 +2001,55 @@ unsigned int __connman_rtnl_update_interval_remove(unsigned int interval)
 	return min;
 }
 
+int connman_rtnl_add_rule(int family, unsigned int fra_table,
+					unsigned int fra_priority,
+					const char *fra_ifname,
+					connman_rtnl_rule_cb_t cb,
+					uint32_t *seq)
+{
+	DBG("family %d fra_table %u fra_priority %u fra_ifname %s",
+				family, fra_table, fra_priority, fra_ifname);
+
+	return send_rule_request(RTM_NEWRULE, family, fra_table, fra_priority,
+							fra_ifname, cb, seq);
+}
+
+int connman_rtnl_del_rule(int family, unsigned int fra_table,
+					unsigned int fra_priority,
+					const char *fra_ifname,
+					connman_rtnl_rule_cb_t cb,
+					uint32_t *seq)
+{
+	DBG("family %d fra_table %u fra_priority %u fra_ifname %s",
+				family, fra_table, fra_priority, fra_ifname);
+
+	return send_rule_request(RTM_DELRULE, family, fra_table, fra_priority,
+							fra_ifname, cb, seq);
+}
+
+int connman_rtnl_cancel_request(uint32_t seq)
+{
+	struct netlink_request *req;
+
+	req = find_request(seq);
+	if (!req)
+		return -ENOENT;
+
+	/*
+	 * Even if the request is sent clear the callback as there is
+	 * nothing expecting a reply anymore.
+	 */
+	req->cb = NULL;
+
+	/* Sent means that it is on top of the queue waiting for a reply */
+	if (req->sent)
+		return -EALREADY;
+
+	remove_request(req);
+
+	return 0;
+}
+
 static bool is_valid_ip_family(int family)
 {
 	switch (family) {
@@ -1765,13 +2116,24 @@ int __connman_rtnl_init(void)
 	return 0;
 }
 
+static void rtnl_sync(int family)
+{
+	if (!is_valid_ip_family(family))
+		return;
+
+	DBG("family %d", family);
+
+	send_getlink(family);
+	send_getaddr(family);
+	send_getroute(family);
+}
+
 void __connman_rtnl_start(void)
 {
 	DBG("");
 
-	send_getlink(AF_INET);
-	send_getaddr(AF_INET);
-	send_getroute(AF_INET);
+	rtnl_sync(AF_INET);
+	rtnl_sync(AF_INET6);
 }
 
 void __connman_rtnl_cleanup(void)
@@ -1779,6 +2141,9 @@ void __connman_rtnl_cleanup(void)
 	GSList *list;
 
 	DBG("");
+
+	if (netlink_resync_id)
+		g_source_remove(netlink_resync_id);
 
 	for (list = watch_list; list; list = list->next) {
 		struct watch_data *watch = list->data;
@@ -1796,14 +2161,36 @@ void __connman_rtnl_cleanup(void)
 	update_list = NULL;
 
 	for (list = request_list; list; list = list->next) {
-		struct nlmsghdr *hdr= list->data;
+		struct netlink_request *req = list->data;
+		struct nlmsg_fib_hdr *hdr = req->hdr;
 
 		DBG("%s len %d type %d flags 0x%04x seq %d",
-				type2string(hdr->nlmsg_type),
-				hdr->nlmsg_len, hdr->nlmsg_type,
-				hdr->nlmsg_flags, hdr->nlmsg_seq);
+				type2string(hdr->nlmsgh->nlmsg_type),
+				hdr->nlmsgh->nlmsg_len,
+				hdr->nlmsgh->nlmsg_type,
+				hdr->nlmsgh->nlmsg_flags,
+				hdr->nlmsgh->nlmsg_seq);
 
-		g_free(hdr);
+		/* At this point nothing is processing the callback */
+		if (req->cb)
+			req->cb = NULL;
+
+		/* No need to ack anymore */
+		if (hdr->nlmsgh->nlmsg_flags & NLM_F_ACK)
+			hdr->nlmsgh->nlmsg_flags &= ~NLM_F_ACK;
+
+		/* Send only rule deletions when shutting down. */
+		if (hdr->nlmsgh->nlmsg_type == RTM_DELRULE && !req->sent) {
+			if (send_request(req) < hdr->nlmsgh->nlmsg_len)
+				DBG("failed to send %u when emptying the queue",
+							hdr->nlmsgh->nlmsg_seq);
+		} else {
+			DBG("request %u is already sent",
+						hdr->nlmsgh->nlmsg_seq);
+		}
+
+		g_free(req->hdr);
+		g_free(req);
 		list->data = NULL;
 	}
 
