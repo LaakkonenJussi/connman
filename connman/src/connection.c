@@ -68,19 +68,25 @@ static struct gateway_config *find_gateway(int index4, int index6,
 	while (g_hash_table_iter_next(&iter, &key, &value)) {
 		struct gateway_data *data = value;
 
-		if ((data->ipv4_gateway && data->index4 == index4 &&
-				g_str_equal(data->ipv4_gateway->gateway,
-					gateway)) ||
-				(data->ipv4_gateway->vpn &&
-				__connman_inet_is_any_addr(gateway, AF_INET)))
+		if (data->ipv4_gateway) {
+			if ((data->index4 == index4 &&
+					g_str_equal(data->ipv4_gateway->gateway,
+						gateway))/* ||
+					(data->ipv4_gateway->vpn &&
+					__connman_inet_is_any_addr(gateway,
+						AF_INET))*/)
 			return data->ipv4_gateway;
+		}
 
-		if ((data->ipv6_gateway && data->index6 == index6 &&
-				g_str_equal(data->ipv6_gateway->gateway,
-					gateway)) ||
-				(data->ipv6_gateway->vpn &&
-				__connman_inet_is_any_addr(gateway, AF_INET6)))
+		if (data->ipv6_gateway) {
+			if ((data->index6 == index6 &&
+					g_str_equal(data->ipv6_gateway->gateway,
+						gateway))/* ||
+					(data->ipv6_gateway->vpn &&
+					__connman_inet_is_any_addr(gateway,
+						AF_INET6))*/)
 			return data->ipv6_gateway;
+		}
 	}
 
 	return NULL;
@@ -318,12 +324,19 @@ static void set_vpn_routes(struct gateway_data *new_gateway,
 		else if (gateway)
 			config->vpn_ip = g_strdup(gateway);
 
+		DBG("vpn_ip %s", config->vpn_ip);
+
 		params = g_try_malloc(sizeof(struct get_gateway_params));
 		if (!params)
 			return;
 
 		params->vpn_index = index;
-		params->vpn_gateway = g_strdup(gateway);
+		if (gateway)
+			params->vpn_gateway = g_strdup(gateway);
+		else if (config->vpn_ip)
+			params->vpn_gateway = g_strdup(config->vpn_ip);
+		else
+			DBG("No gateway/vpn_ip to set");
 
 		/*
 		 * Find the gateway that is serving the VPN link
