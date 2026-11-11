@@ -198,38 +198,62 @@ done:
 	return err;
 }
 
-static bool is_addr_unspec(int family, struct sockaddr *addr)
+/*
+ * Check if the IP address is unspecified. For IPv4 comparison is done with
+ * INADDR_ANY. For IPv6 IN6_IS_ADDR_UNSPECIFIED() is used.
+ * 
+ * Returns:
+ *   0   on success = address is unspecified
+ *   1   when address is not unspecified
+ *   < 0 when error: addr missing (-ENOENT) or invalid family (-EINVAL)
+ */
+static int is_addr_unspec(int family, struct sockaddr *addr)
 {
 	struct sockaddr_in *in4;
 	struct sockaddr_in6 *in6;
+
+	if (!addr)
+		return -ENOENT;
 
 	switch (family) {
 	case AF_INET:
 		in4 = (struct sockaddr_in*) addr;
-		return in4->sin_addr.s_addr == INADDR_ANY;
+		return in4->sin_addr.s_addr == INADDR_ANY ? 0 : 1;
 	case AF_INET6:
 		in6 = (struct sockaddr_in6*) addr;
-		return IN6_IS_ADDR_UNSPECIFIED(&in6->sin6_addr);
+		return IN6_IS_ADDR_UNSPECIFIED(&in6->sin6_addr) ? 0 : 1;
 	default:
-		return false;
+		return -EINVAL;
 	}
 }
 
-static bool is_addr_ll(int family, struct sockaddr *addr)
+/*
+ * Check if the IP address is a link-local address.
+ * 
+ * Returns:
+ *   0   on success = address is a link local address
+ *   1   when address is not a link local address
+ *   < 0 when error: addr missing (-ENOENT) or invalid family (-EINVAL)
+ */
+
+static int is_addr_ll(int family, struct sockaddr *addr)
 {
 	struct sockaddr_in *in4;
 	struct sockaddr_in6 *in6;
+
+	if (!addr)
+		return -ENOENT;
 
 	switch (family) {
 	case AF_INET:
 		in4 = (struct sockaddr_in*) addr;
 		return (in4->sin_addr.s_addr & IN_CLASSB_NET) ==
-					((in_addr_t) htonl(0xa9fe0000));
+					((in_addr_t) htonl(0xa9fe0000)) ? 0 : 1;
 	case AF_INET6:
 		in6 = (struct sockaddr_in6*) addr;
-		return IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr);
+		return IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr) ? 0 : 1;
 	default:
-		return false;
+		return -EINVAL;
 	}
 }
 
@@ -238,6 +262,7 @@ bool __connman_inet_is_any_addr(const char *address, int family)
 	bool ret = false;
 	struct addrinfo hints;
 	struct addrinfo *result = NULL;
+	int err;
 
 	if (!address || !*address)
 		goto out;
@@ -250,7 +275,21 @@ bool __connman_inet_is_any_addr(const char *address, int family)
 		goto out;
 
 	if (result) {
-		ret = is_addr_unspec(result->ai_family, result->ai_addr);
+		err = is_addr_unspec(result->ai_family, result->ai_addr);
+		switch (err) {
+		case 0:
+			ret = true;
+			DBG("addr %s is unspecified", address);
+			break;
+		case 1:
+			DBG("addr %s is not unspecified", address);
+			break;
+		default:
+			DBG("Failed to check unspec of addr %s family %d: %d",
+						address, family, err);
+			break;
+		}
+
 		freeaddrinfo(result);
 	}
 
@@ -1226,11 +1265,11 @@ static int get_interface_addresses(struct interface_address *if_addr)
 		if (if_addr->ipaddrs[ADDR_TYPE_IPADDR]) {
 			if (!if_addr->allow_unspec && is_addr_unspec(
 						if_addr->family,
-						ifa->ifa_addr))
+						ifa->ifa_addr) <= 0)
 				continue;
 
-			if (if_addr->require_ll && !is_addr_ll(if_addr->family,
-						ifa->ifa_addr))
+			if (if_addr->require_ll && is_addr_ll(if_addr->family,
+						ifa->ifa_addr) != 0)
 				continue;
 
 			addrs[ADDR_TYPE_IPADDR] = ifa->ifa_addr;
@@ -1239,7 +1278,7 @@ static int get_interface_addresses(struct interface_address *if_addr)
 		if (if_addr->ipaddrs[ADDR_TYPE_NETMASK]) {
 			if (!if_addr->allow_unspec && is_addr_unspec(
 						if_addr->family,
-						ifa->ifa_netmask))
+						ifa->ifa_netmask) <= 0)
 				continue;
 
 			addrs[ADDR_TYPE_NETMASK] = ifa->ifa_netmask;
@@ -1249,7 +1288,7 @@ static int get_interface_addresses(struct interface_address *if_addr)
 					(ifa->ifa_flags & IFF_BROADCAST)) {
 			if (!if_addr->allow_unspec && is_addr_unspec(
 						if_addr->family,
-						ifa->ifa_ifu.ifu_broadaddr))
+						ifa->ifa_ifu.ifu_broadaddr) <= 0)
 				continue;
 
 			addrs[ADDR_TYPE_BRDADDR] = ifa->ifa_ifu.ifu_broadaddr;
@@ -1259,7 +1298,7 @@ static int get_interface_addresses(struct interface_address *if_addr)
 					(ifa->ifa_flags & IFF_POINTOPOINT)) {
 			if (!if_addr->allow_unspec && is_addr_unspec(
 						if_addr->family,
-						ifa->ifa_ifu.ifu_dstaddr))
+						ifa->ifa_ifu.ifu_dstaddr) <= 0)
 				continue;
 
 			addrs[ADDR_TYPE_DSTADDR] = ifa->ifa_ifu.ifu_dstaddr;
