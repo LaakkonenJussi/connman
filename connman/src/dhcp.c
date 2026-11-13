@@ -423,8 +423,7 @@ static bool apply_lease_available_on_network(GDHCPClient *dhcp_client,
 		g_free(dhcp->pac);
 		dhcp->pac = pac;
 
-		__connman_ipconfig_set_proxy_autoconfig(dhcp->ipconfig,
-								dhcp->pac);
+		__connman_service_set_proxy_autoconfig(service, dhcp->pac);
 	}
 
 	if (connman_setting_get_bool("Enable6to4"))
@@ -473,9 +472,17 @@ static void lease_available_cb(GDHCPClient *dhcp_client, gpointer user_data)
 
 	DBG("c_address %s", c_address);
 
+	old_method = __connman_ipconfig_get_method(dhcp->ipconfig);
+
 	if (g_strcmp0(address, c_address)) {
 		ip_change = true;
 		if (c_address) {
+			if (old_method == CONNMAN_IPCONFIG_METHOD_AUTO ||
+			    old_method == CONNMAN_IPCONFIG_METHOD_DHCP) {
+				c_gateway = NULL;
+				c_prefixlen = 0;
+			}
+
 			/* Remove old ip address */
 			__connman_ipconfig_address_remove(dhcp->ipconfig);
 		}
@@ -489,7 +496,6 @@ static void lease_available_cb(GDHCPClient *dhcp_client, gpointer user_data)
 	} else if (prefixlen != c_prefixlen)
 		ip_change = true;
 
-	old_method = __connman_ipconfig_get_method(dhcp->ipconfig);
 	__connman_ipconfig_set_method(dhcp->ipconfig,
 						CONNMAN_IPCONFIG_METHOD_DHCP);
 

@@ -1374,8 +1374,13 @@ static int dhcp_recv_l2_packet(struct dhcp_packet *dhcp_pkt, int fd,
 	packet.ip.tot_len = packet.udp.len; /* yes, this is needed */
 	check = packet.udp.check;
 	packet.udp.check = 0;
-	if (check && check != dhcp_checksum(&packet, bytes))
-		return -1;
+
+	if (check) {
+		uint16_t partial = ~dhcp_checksum(&packet, sizeof(struct iphdr));
+
+		if (check != partial && check != dhcp_checksum(&packet, bytes))
+			return -1;
+	}
 
 	memcpy(dhcp_pkt, &packet.data, bytes - (sizeof(packet.ip) +
 							sizeof(packet.udp)));
@@ -1882,7 +1887,9 @@ static char *malloc_option_value_string(uint8_t *option, GDHCPOptionType type)
 		return NULL;
 	upper_length = len_of_option_as_string[type] *
 			((unsigned)len / (unsigned)optlen);
-	dest = ret = g_malloc(upper_length + 1);
+	if (upper_length == 0)
+		return NULL;
+	dest = ret = g_malloc0(upper_length + 1);
 	if (!ret)
 		return NULL;
 
@@ -2340,6 +2347,7 @@ static gboolean listener_event(GIOChannel *channel, GIOCondition condition,
 		} else {
 			re = dhcp_recv_l3_packet(&packet,
 						dhcp_client->listener_sockfd);
+			pkt_len = (uint16_t)(unsigned int)re;
 			xid = packet.xid;
 		}
 	} else if (dhcp_client->listen_mode == L_ARP) {
