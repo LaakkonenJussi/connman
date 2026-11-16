@@ -2233,6 +2233,31 @@ struct connman_service *connman_service_get_default(void)
 	return service;
 }
 
+/**
+ *  @brief
+ *    Determine whether the specified service is the default service.
+ *
+ *  This determines whether the specified service is the default
+ *  service (that is, the service with the default route).
+ *
+ *  @param[in]  service  A pointer to the immutable service for which
+ *                       to determine whether it is the default
+ *                       network service.
+ *  @returns
+ *    True if the specified service is the default network service;
+ *    otherwise, false.
+ *
+ *  @sa connman_service_get_default
+ *
+ */
+static bool connman_service_is_default(const struct connman_service *service)
+{
+	if (!service)
+		return false;
+
+	return connman_service_get_default() == service;
+}
+
 bool __connman_service_index_is_default(int index)
 {
 	struct connman_service *service;
@@ -9094,7 +9119,24 @@ int __connman_service_ipconfig_indicate_state(struct connman_service *service,
 	if (!is_connected(old_state) && is_connected(new_state))
 		nameserver_add_all(service, type);
 
-	__connman_timeserver_sync(service);
+	/*
+	 * Care must be taken here in a multi-technology and -service
+	 * environment. In such an environment, there may be a senior,
+	 * default service that is providing the network service for
+	 * time-of-day synchronization.
+	 *
+	 * Without an appropriate qualifier here, a junior,
+	 * non-default service may come in and usurp the senior,
+	 * default service and start trying to provide time-of-day
+	 * synchronization which is NOT what is desired.
+	 *
+	 * However, this qualifier should NOT be moved to the next
+	 * most outer block. Otherwise, name servers will not be added
+	 * to junior, non-default services and they will be unusable
+	 * from a DNS perspective.
+	 */
+	if (connman_service_is_default(service))
+		__connman_timeserver_sync(service);
 
 	return service_indicate_state(service);
 }
