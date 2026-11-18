@@ -589,6 +589,7 @@ static void connect_reply(DBusPendingCall *call, void *user_data)
 							false);
 			/* fall-through */
 		case -ENOLINK: /* vpnd reports that connmand is not online. */
+		case -EAFNOSUPPORT: /* AF is not supported on transport. */
 		case -EISCONN:
 		case -ECONNREFUSED:
 		default:
