@@ -200,11 +200,30 @@ static int parse_allowed_ips(const char *allowed_ips, wg_peer *peer,
 	return 0;
 }
 
+static bool is_family_supported(int family)
+{
+	switch (vpn_provider_get_ip_support()) {
+	case VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN:
+		return false;
+	case VPN_PROVIDER_IP_SUPPORT_TYPE_IPV4:
+		return family == AF_INET;
+	case VPN_PROVIDER_IP_SUPPORT_TYPE_IPV6:
+		return family == AF_INET6;
+	case VPN_PROVIDER_IP_SUPPORT_TYPE_ALL:
+		return family == AF_INET || family == AF_INET6;
+	default:
+		break;
+	}
+
+	return false;
+}
+
 static int get_endpoint_addr(const char *host, const char *port, int flags,
 							struct sockaddr_u *addr)
 {
 	struct addrinfo hints;
 	struct addrinfo *result = NULL, *rp;
+	int unsupported_family_count = 0;
 	int sk;
 	int err;
 
@@ -212,21 +231,13 @@ static int get_endpoint_addr(const char *host, const char *port, int flags,
 	hints.ai_socktype = SOCK_DGRAM;
 	hints.ai_flags = flags;
 	hints.ai_protocol = 0;
+	hints.ai_family = AF_UNSPEC;
 
-	switch (vpn_provider_get_ip_support()) {
-	case VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN:
+	if (vpn_provider_get_ip_support() ==
+					VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN) {
 		connman_warn("wireguard: default service is not connected,"
 					"cannot resolve host address %s", host);
-		return -EINVAL;
-	case VPN_PROVIDER_IP_SUPPORT_TYPE_IPV4:
-		hints.ai_family = AF_INET;
-		break;
-	case VPN_PROVIDER_IP_SUPPORT_TYPE_IPV6:
-		hints.ai_family = AF_INET6;
-		break;
-	case VPN_PROVIDER_IP_SUPPORT_TYPE_ALL:
-		hints.ai_family = AF_UNSPEC;
-		break;
+		return -ENONET;
 	}
 
 	err = getaddrinfo(host, port, &hints, &result);
@@ -240,6 +251,12 @@ static int get_endpoint_addr(const char *host, const char *port, int flags,
 	}
 
 	for (rp = result; rp; rp = rp->ai_next) {
+		if (!is_family_supported(rp->ai_family)) {
+			DBG("Unsupported IP family type %d", rp->ai_family);
+			unsupported_family_count++;
+			continue;
+		}
+
 		sk = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if (sk < 0)
 			continue;
@@ -256,6 +273,10 @@ static int get_endpoint_addr(const char *host, const char *port, int flags,
 		DBG("no connectable address found in results: %s",
 							strerror(errno));
 		freeaddrinfo(result);
+
+		if (!errno && unsupported_family_count)
+			return -EAFNOSUPPORT;
+
 		return -EHOSTUNREACH;
 	}
 
@@ -994,6 +1015,7 @@ done:
 	if (cb)
 		cb(provider, user_data, -err);
 
+done_no_cb:
 	connman_ipaddress_free(ipaddresses.ipaddress_ipv4);
 	connman_ipaddress_free(ipaddresses.ipaddress_ipv6);
 
@@ -1016,13 +1038,21 @@ error:
 	 * looping when parameters are incorrect and VPN stays in failed
 	 * state.
 	 */
-	if (err == -EHOSTUNREACH) {
+	switch (err) {
+	case -EHOSTUNREACH:
 		vpn_provider_add_error(provider,
 					VPN_PROVIDER_ERROR_CONNECT_FAILED);
-	} else {
+		break;
+	case -EAFNOSUPPORT:
+		DBG("Endpoint IP family is not supported");
+
+		/* Bypass callback and to handle this in connect() call. */
+		goto done_no_cb;
+	default:
 		vpn_provider_add_error(provider,
 					VPN_PROVIDER_ERROR_LOGIN_FAILED);
 		err = -ECONNABORTED;
+		break;
 	}
 
 	goto done;
