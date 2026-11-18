@@ -1009,7 +1009,13 @@ static gboolean do_connect_timeout_function(gpointer data)
 	provider->do_connect_timeout = 0;
 	err = __vpn_provider_connect(provider, cdata->msg);
 
-	if (err < 0 && err != -EINPROGRESS) {
+	switch (err) {
+	case 0:
+	case -EINPROGRESS:
+		break;
+	case -EAFNOSUPPORT:
+		return G_SOURCE_CONTINUE;
+	default:
 		g_dbus_send_message(cdata->conn,
 				__connman_error_failed(cdata->msg, -err));
 		cdata->msg = NULL;
@@ -1116,8 +1122,18 @@ static DBusMessage *do_connect(DBusConnection *conn, DBusMessage *msg,
 	}
 
 	err = __vpn_provider_connect(provider, msg);
-	if (err < 0 && err != -EINPROGRESS)
+	switch (err) {
+	case 0:
+	case -EINPROGRESS:
+		break;
+	case -EAFNOSUPPORT:
+		DBG("Connect provider %p later, EAFNOSUPPORT", provider);
+		do_connect_later(provider, conn, msg);
+		//return __connman_error_failed(msg, EAFNOSUPPORT);
+		break;
+	default:
 		return __connman_error_failed(msg, -err);
+	}
 
 	return NULL;
 }
@@ -1865,6 +1881,9 @@ static void connect_cb(struct vpn_provider *provider, void *user_data,
 						VPN_PROVIDER_STATE_DISCONNECT);
 			}
 			break;
+		case EAFNOSUPPORT:
+			DBG("cb called with EAFNOSUPPORT");
+			break;
 		case ECONNRESET:
 		default:
 			vpn_provider_indicate_error(provider,
@@ -1971,6 +1990,9 @@ int __vpn_provider_connect(struct vpn_provider *provider, DBusMessage *msg)
 			vpn_provider_set_state(provider,
 						VPN_PROVIDER_STATE_CONNECT);
 	}
+
+	if (err == -EAFNOSUPPORT)
+		vpn_provider_set_state(provider, VPN_PROVIDER_STATE_IDLE);
 
 	return err;
 }
