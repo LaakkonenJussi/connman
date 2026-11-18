@@ -4125,10 +4125,9 @@ static int parse_ip_support(DBusMessageIter *value)
 		dbus_message_iter_next(&iter);
 		dbus_message_iter_recurse(&iter, &ip_value);
 
-		if (g_str_equal(key, "Method")) {
-			if (dbus_message_iter_get_arg_type(&ip_value) !=
-							DBUS_TYPE_STRING)
-				continue;
+		if (g_str_equal(key, "Method") &&
+				dbus_message_iter_get_arg_type(&ip_value) ==
+							DBUS_TYPE_STRING) {
 
 			dbus_message_iter_get_basic(&ip_value, &str);
 			DBG("%s = %s", key, str);
@@ -4139,10 +4138,9 @@ static int parse_ip_support(DBusMessageIter *value)
 			enabled = true;
 		}
 
-		if (g_str_equal(key, "Address")) {
-			if (dbus_message_iter_get_arg_type(&ip_value) !=
-							DBUS_TYPE_STRING)
-				continue;
+		if (g_str_equal(key, "Address") &&
+				dbus_message_iter_get_arg_type(&ip_value) ==
+							DBUS_TYPE_STRING) {
 
 			dbus_message_iter_get_basic(&ip_value, &str);
 			DBG("%s = %s", key, str);
@@ -4235,10 +4233,18 @@ static void get_connman_default_service_reply(DBusPendingCall *call,
 				DBUS_DICT_ENTRY_END_CHAR_AS_STRING;
 	const char *key;
 	const char *sender_name;
+	const char *query_service_path = user_data;
 	bool ipv4_support = false;
 	bool ipv6_support = false;
 
 	DBG("");
+
+	if (g_strcmp0(connman_default_service_path, query_service_path)) {
+		DBG("Default service has changed %s -> %s, ignore reply",
+						query_service_path,
+						connman_default_service_path);
+		goto done;
+	}
 
 	if (!dbus_pending_call_get_completed(call))
 		goto done;
@@ -4268,7 +4274,6 @@ static void get_connman_default_service_reply(DBusPendingCall *call,
 		connman_error("signature \"%s\" does not match expected \"%s\"",
 			dbus_message_get_signature(reply),
 			signature);
-
 		goto done;
 	}
 
@@ -4323,9 +4328,10 @@ static gboolean run_connman_dbus_method(const char *path, const char *interface,
 					unsigned int *timeout_id,
 					gpointer user_data)
 {
-	DBusMessage *msg = NULL;
-	DBusPendingCall *call = NULL;
+	DBusMessage *msg;
+	DBusPendingCall *call;
 	gboolean rval = FALSE;
+	char *default_service_path = NULL;
 
 	DBG("path %s interface %s method %s", path, interface, method);
 
@@ -4347,7 +4353,13 @@ static gboolean run_connman_dbus_method(const char *path, const char *interface,
 		goto out;
 	}
 
-	if (!dbus_pending_call_set_notify(call, function, NULL, NULL)) {
+	if (user_data) {
+		default_service_path = g_strdup((char*)user_data);
+		DBG("set default service path %s", default_service_path);
+	}
+
+	if (!dbus_pending_call_set_notify(call, function, default_service_path,
+					default_service_path ? g_free : NULL)) {
 		connman_error("Set notify to pending call failed");
 
 		if (call)
@@ -4388,10 +4400,12 @@ static void get_connman_default_service_properties(void)
 	if (!connman_default_service_path || !*connman_default_service_path)
 		return;
 
-	get_connman_default_service_timeout = g_timeout_add(
+	get_connman_default_service_timeout = g_timeout_add_full(
+				G_PRIORITY_DEFAULT,
 				STATE_INTERVAL_DEFAULT,
 				run_get_connman_default_service_properties,
-				NULL);
+				g_strdup(connman_default_service_path),
+				g_free);
 }
 
 static void get_connman_state_reply(DBusPendingCall *call, void *user_data)
