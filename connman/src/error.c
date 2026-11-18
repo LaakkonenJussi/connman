@@ -70,6 +70,8 @@ DBusMessage *__connman_error_failed(DBusMessage *msg, int errnum)
 		return __connman_error_passphrase_required(msg);
 	case ECANCELED:
 		return __connman_error_operation_canceled(msg);
+	case EAFNOSUPPORT:
+		return __connman_error_af_not_supported(msg);
 	}
 
 	return g_dbus_create_error(msg, CONNMAN_ERROR_INTERFACE
@@ -193,4 +195,10 @@ DBusMessage *__connman_error_operation_canceled(DBusMessage *msg)
 {
 	return g_dbus_create_error(msg, CONNMAN_ERROR_INTERFACE
 				".OperationCanceled", "Operation canceled");
+}
+
+DBusMessage *__connman_error_af_not_supported(DBusMessage *msg)
+{
+	return g_dbus_create_error(msg, CONNMAN_ERROR_INTERFACE
+				".AfNoSupport", "Address family not supported");
 }
