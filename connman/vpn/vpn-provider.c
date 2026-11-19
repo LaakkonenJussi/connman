@@ -4406,6 +4406,12 @@ out:
 
 static gboolean run_get_connman_default_service_properties(gpointer user_data)
 {
+	if (!connman_default_service_path || !*connman_default_service_path) {
+		DBG("default service path has been reset, cancel %s",
+						CONNMAN_DBUS_GET_PROPERTIES);
+		return G_SOURCE_REMOVE;
+	}
+
 	return run_connman_dbus_method(connman_default_service_path,
 					CONNMAN_SERVICE_INTERFACE,
 					CONNMAN_DBUS_GET_PROPERTIES,
