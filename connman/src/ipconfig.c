@@ -791,6 +791,17 @@ update:
 
 	g_string_free(str, TRUE);
 
+	if (lower_down) {
+		/*
+		 * Restore ipdevice IPv6 state on the interface before it goes
+		 * down. The state may have been modified for VPNs and must be
+		 * set here since is_ipv6_supported can be set to false, thus,
+		 * accessing __connman_ipconfig_enable_ipv6() does not work.
+		 */
+		DBG("ipdevice IPv6 %d", ipdevice->ipv6_enabled);
+		set_ipv6_state(ifname, ipdevice->ipv6_enabled);
+	}
+
 	ipconfig_copy = g_list_copy(ipconfig_list);
 	for (list = g_list_first(ipconfig_copy); list;
 						list = g_list_next(list)) {
