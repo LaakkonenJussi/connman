@@ -1028,6 +1028,10 @@ done_no_cb:
 		}
 
 		run_route_setup(info, ROUTE_SETUP_TIMEOUT);
+	} else {
+		vpn_provider_set_plugin_data(provider, NULL);
+		if (info)
+			free_private_data(info);
 	}
 
 	return err;
