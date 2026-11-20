@@ -274,7 +274,8 @@ static int get_endpoint_addr(const char *host, const char *port, int flags,
 							strerror(errno));
 		freeaddrinfo(result);
 
-		if (!errno && unsupported_family_count)
+		/* No address found but unsupported were detected. */
+		if (unsupported_family_count)
 			return -EAFNOSUPPORT;
 
 		return -EHOSTUNREACH;
@@ -362,7 +363,7 @@ static int parse_endpoint_hostname(const char *host, const char *port,
 	if (!is_addr_supported(tokens[0])) {
 		DBG("Cannot use host %s, address is not supported", tokens[0]);
 		g_strfreev(tokens);
-		return -EINVAL;
+		return -EAFNOSUPPORT;
 	}
 
 	DBG("using host %s", tokens[0]);
