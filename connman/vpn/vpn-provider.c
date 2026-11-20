@@ -223,6 +223,7 @@ static void reset_ip_support_updated()
 
 	if (connman_ip_support == connman_ip_support_old) {
 		DBG("no change in ip_support: %d", connman_ip_support);
+		return;
 	}
 
 	connman_ip_support_old = VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN;
@@ -4717,6 +4718,9 @@ void __vpn_provider_cleanup(void)
 		if (!g_source_remove(get_connman_state_timeout))
 			connman_error("connman state timeout not removed");
 	}
+
+	if (get_connman_default_service_timeout)
+		g_source_remove(get_connman_default_service_timeout);
 
 	g_dbus_remove_watch(connection, connman_service_watch);
 	g_dbus_remove_watch(connection, connman_signal_watch);
