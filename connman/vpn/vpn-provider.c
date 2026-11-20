@@ -148,6 +148,10 @@ static char *connman_dbus_name = NULL;
 static char *connman_default_service_path = NULL;
 static enum vpn_provider_ip_support_type connman_ip_support =
 					VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN;
+static enum vpn_provider_ip_support_type connman_ip_support_old =
+					VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN;
+static bool connman_ip_support_updated = false;
+
 
 static bool provider_get_family(struct vpn_provider *provider, int family)
 {
@@ -200,6 +204,31 @@ static void set_state(const char *new_state)
 	DBG("new state %d ", connman_online_state);
 }
 
+static void set_ip_support_needs_update()
+{
+	DBG("");
+	connman_ip_support_old = connman_ip_support;
+	connman_ip_support_updated = false;
+}
+
+static bool get_ip_support_updated()
+{
+	DBG("");
+	return connman_ip_support_updated;
+}
+
+static void reset_ip_support_updated()
+{
+	DBG("");
+
+	if (connman_ip_support == connman_ip_support_old) {
+		DBG("no change in ip_support: %d", connman_ip_support);
+	}
+
+	connman_ip_support_old = VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN;
+	connman_ip_support_updated = true;
+}
+
 static void set_ip_support(unsigned int ip_support)
 {
 	if (ip_support > VPN_PROVIDER_IP_SUPPORT_TYPE_ALL) {
@@ -210,6 +239,8 @@ static void set_ip_support(unsigned int ip_support)
 	connman_ip_support = ip_support;
 
 	DBG("IP support level %u", connman_ip_support);
+
+	reset_ip_support_updated();
 }
 
 static void update_ip_support(unsigned int mask, bool enabled)
@@ -220,6 +251,8 @@ static void update_ip_support(unsigned int mask, bool enabled)
 		connman_ip_support &= ~mask;
 
 	DBG("IP support level %u", connman_ip_support);
+
+	reset_ip_support_updated();
 }
 
 static void reset_ip_support_level()
@@ -1006,20 +1039,29 @@ static gboolean do_connect_timeout_function(gpointer data)
 	if (!is_connman_connected(provider))
 		return G_SOURCE_CONTINUE;
 
-	provider->do_connect_timeout = 0;
-	err = __vpn_provider_connect(provider, cdata->msg);
+	if (connman_ip_support == VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN)
+		return G_SOURCE_CONTINUE;
 
+	if (!get_ip_support_updated()) {
+		DBG("no change in IP support, continue");
+		return G_SOURCE_CONTINUE;
+	}
+
+	err = __vpn_provider_connect(provider, cdata->msg);
 	switch (err) {
 	case 0:
 	case -EINPROGRESS:
 		break;
 	case -EAFNOSUPPORT:
+		set_ip_support_needs_update();
 		return G_SOURCE_CONTINUE;
 	default:
 		g_dbus_send_message(cdata->conn,
 				__connman_error_failed(cdata->msg, -err));
 		cdata->msg = NULL;
 	}
+
+	provider->do_connect_timeout = 0;
 
 	return G_SOURCE_REMOVE;
 }
@@ -1128,8 +1170,9 @@ static DBusMessage *do_connect(DBusConnection *conn, DBusMessage *msg,
 		break;
 	case -EAFNOSUPPORT:
 		DBG("Connect provider %p later, EAFNOSUPPORT", provider);
+		/* Record the old ip support to check if there is a change. */
+		set_ip_support_needs_update();
 		do_connect_later(provider, conn, msg);
-		//return __connman_error_failed(msg, EAFNOSUPPORT);
 		break;
 	default:
 		return __connman_error_failed(msg, -err);
