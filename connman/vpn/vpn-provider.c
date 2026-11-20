@@ -1805,6 +1805,11 @@ int __vpn_provider_disconnect(struct vpn_provider *provider)
 
 	DBG("provider %p", provider);
 
+	if (provider->do_connect_timeout)
+		g_source_remove(provider->do_connect_timeout);
+
+	provider->do_connect_timeout = 0;
+
 	if (provider->driver && provider->driver->disconnect)
 		err = provider->driver->disconnect(provider);
 	else
@@ -2589,6 +2594,26 @@ static gboolean provider_property_changed(DBusConnection *conn,
 		 */
 		vpn_provider_set_boolean(provider, "SplitRouting",
 					split_routing, true);
+	}
+
+	if (g_str_equal(key, "AutoConnect")) {
+		dbus_bool_t autoconnect;
+
+		if (dbus_message_iter_get_arg_type(&value) != DBUS_TYPE_BOOLEAN)
+			goto out;
+
+		dbus_message_iter_get_basic(&value, &autoconnect);
+
+		DBG("property %s value %s", key, bool2str(autoconnect));
+
+		if (!autoconnect) {
+			DBG("AutoConnect false, disable delayed connect");
+
+			if (provider->do_connect_timeout)
+				g_source_remove(provider->do_connect_timeout);
+
+			provider->do_connect_timeout = 0;
+		}
 	}
 
 out:
