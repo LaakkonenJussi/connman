@@ -1053,6 +1053,7 @@ static gboolean do_connect_timeout_function(gpointer data)
 	case 0:
 	case -EINPROGRESS:
 		break;
+	case -ENOLINK:
 	case -EAFNOSUPPORT:
 		set_ip_support_needs_update();
 		return G_SOURCE_CONTINUE;
@@ -1169,8 +1170,9 @@ static DBusMessage *do_connect(DBusConnection *conn, DBusMessage *msg,
 	case 0:
 	case -EINPROGRESS:
 		break;
+	case -ENOLINK:
 	case -EAFNOSUPPORT:
-		DBG("Connect provider %p later, EAFNOSUPPORT", provider);
+		DBG("Connect provider %p later: %d", provider, err);
 		/* Record the old ip support to check if there is a change. */
 		set_ip_support_needs_update();
 		do_connect_later(provider, conn, msg);
@@ -1931,7 +1933,8 @@ static void connect_cb(struct vpn_provider *provider, void *user_data,
 			}
 			break;
 		case EAFNOSUPPORT:
-			DBG("cb called with EAFNOSUPPORT");
+		case ENOLINK:
+			DBG("cb called with EAFNOSUPPORT/ENOLINK");
 			break;
 		case ECONNRESET:
 		default:
