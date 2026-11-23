@@ -237,7 +237,7 @@ static int get_endpoint_addr(const char *host, const char *port, int flags,
 					VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN) {
 		connman_warn("wireguard: default service is not connected,"
 					"cannot resolve host address %s", host);
-		return -ENONET;
+		return -ENOLINK;
 	}
 
 	err = getaddrinfo(host, port, &hints, &result);
@@ -263,7 +263,11 @@ static int get_endpoint_addr(const char *host, const char *port, int flags,
 		if (connect(sk, rp->ai_addr, rp->ai_addrlen) != -1) {
 			/* success */
 			close(sk);
+			err = 0;
 			break;
+		} else {
+			/* Record err to separate from unsupported IP family. */
+			err = -errno;
 		}
 
 		close(sk);
@@ -275,7 +279,7 @@ static int get_endpoint_addr(const char *host, const char *port, int flags,
 		freeaddrinfo(result);
 
 		/* No address found but unsupported were detected. */
-		if (unsupported_family_count)
+		if (!err && unsupported_family_count)
 			return -EAFNOSUPPORT;
 
 		return -EHOSTUNREACH;
@@ -974,7 +978,7 @@ static int wg_connect(struct vpn_provider *provider,
 	ifname = get_ifname();
 	if (!ifname) {
 		DBG("Failed to find an usable device name");
-		err = -ENOENT;
+		err = -ENODEV;
 		goto done;
 	}
 	stpncpy(info->device.name, ifname, sizeof(info->device.name) - 1);
@@ -982,7 +986,7 @@ static int wg_connect(struct vpn_provider *provider,
 
 	err = wg_add_device(info->device.name);
 	if (err) {
-		DBG("Failed to creating WireGuard device %s", info->device.name);
+		DBG("Failed to create WireGuard device %s", info->device.name);
 		goto done;
 	}
 
@@ -990,6 +994,7 @@ static int wg_connect(struct vpn_provider *provider,
 	if (err) {
 		DBG("Failed to configure WireGuard device %s", info->device.name);
 		wg_del_device(info->device.name);
+		goto done;
 	}
 
 	vpn_set_ifname(provider, info->device.name);
@@ -1012,11 +1017,10 @@ static int wg_connect(struct vpn_provider *provider,
 
 	vpn_provider_set_supported_ip_networks(provider, true, !disable_ipv6);
 
-done:
 	if (cb)
 		cb(provider, user_data, -err);
 
-done_no_cb:
+done:
 	connman_ipaddress_free(ipaddresses.ipaddress_ipv4);
 	connman_ipaddress_free(ipaddresses.ipaddress_ipv6);
 
@@ -1048,11 +1052,12 @@ error:
 		vpn_provider_add_error(provider,
 					VPN_PROVIDER_ERROR_CONNECT_FAILED);
 		break;
+	case -ENOLINK:
+		/* Not an error, caused by no IP support on transport. */
+		break;
 	case -EAFNOSUPPORT:
 		DBG("Endpoint IP family is not supported");
-
-		/* Bypass callback and to handle this in connect() call. */
-		goto done_no_cb;
+		break;
 	default:
 		vpn_provider_add_error(provider,
 					VPN_PROVIDER_ERROR_LOGIN_FAILED);
