@@ -120,6 +120,8 @@ struct vpn_provider {
 	unsigned int signal_watch;
 	unsigned int auth_error_limit;
 	time_t previous_connect_time;
+	enum vpn_provider_ip_support_type connman_ip_support_old;
+	bool connman_ip_support_updated;
 };
 
 struct vpn_provider_connect_data {
@@ -148,10 +150,6 @@ static char *connman_dbus_name = NULL;
 static char *connman_default_service_path = NULL;
 static enum vpn_provider_ip_support_type connman_ip_support =
 					VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN;
-static enum vpn_provider_ip_support_type connman_ip_support_old =
-					VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN;
-static bool connman_ip_support_updated = false;
-
 
 static bool provider_get_family(struct vpn_provider *provider, int family)
 {
@@ -204,30 +202,46 @@ static void set_state(const char *new_state)
 	DBG("new state %d ", connman_online_state);
 }
 
-static void set_ip_support_needs_update()
+static void set_ip_support_needs_update(struct vpn_provider *provider)
 {
-	DBG("");
-	connman_ip_support_old = connman_ip_support;
-	connman_ip_support_updated = false;
-}
-
-static bool get_ip_support_updated()
-{
-	DBG("");
-	return connman_ip_support_updated;
-}
-
-static void reset_ip_support_updated()
-{
-	DBG("");
-
-	if (connman_ip_support == connman_ip_support_old) {
-		DBG("no change in ip_support: %d", connman_ip_support);
+	if (!provider)
 		return;
-	}
 
-	connman_ip_support_old = VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN;
-	connman_ip_support_updated = true;
+	DBG("provider %p", provider);
+
+	provider->connman_ip_support_old = connman_ip_support;
+	provider->connman_ip_support_updated = false;
+}
+
+static bool get_ip_support_updated(struct vpn_provider *provider)
+{
+	if (!provider)
+		return false;
+
+	DBG("provider %p", provider);
+
+	/*
+	 * Return the updated flag to indicate the status after the needs
+	 * update was called as the value might have been changed already.
+	 */
+	if (connman_ip_support == provider->connman_ip_support_old)
+		return provider->connman_ip_support_updated;
+
+	provider->connman_ip_support_old = connman_ip_support;
+	provider->connman_ip_support_updated = true;
+
+	return true;
+}
+
+static void reset_ip_support_updated(struct vpn_provider *provider)
+{
+	if (!provider)
+		return;
+
+	DBG("provider %p", provider);
+
+	provider->connman_ip_support_old = VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN;
+	provider->connman_ip_support_updated = false;
 }
 
 static void set_ip_support(unsigned int ip_support)
@@ -240,8 +254,6 @@ static void set_ip_support(unsigned int ip_support)
 	connman_ip_support = ip_support;
 
 	DBG("IP support level %u", connman_ip_support);
-
-	reset_ip_support_updated();
 }
 
 static void update_ip_support(unsigned int mask, bool enabled)
@@ -252,8 +264,6 @@ static void update_ip_support(unsigned int mask, bool enabled)
 		connman_ip_support &= ~mask;
 
 	DBG("IP support level %u", connman_ip_support);
-
-	reset_ip_support_updated();
 }
 
 static void reset_ip_support_level()
@@ -1043,7 +1053,7 @@ static gboolean do_connect_timeout_function(gpointer data)
 	if (connman_ip_support == VPN_PROVIDER_IP_SUPPORT_TYPE_UNKNOWN)
 		return G_SOURCE_CONTINUE;
 
-	if (!get_ip_support_updated()) {
+	if (!get_ip_support_updated(provider)) {
 		DBG("no change in IP support, continue");
 		return G_SOURCE_CONTINUE;
 	}
@@ -1052,10 +1062,11 @@ static gboolean do_connect_timeout_function(gpointer data)
 	switch (err) {
 	case 0:
 	case -EINPROGRESS:
+		reset_ip_support_updated(provider);
 		break;
 	case -ENOLINK:
 	case -EAFNOSUPPORT:
-		set_ip_support_needs_update();
+		set_ip_support_needs_update(provider);
 		return G_SOURCE_CONTINUE;
 	default:
 		g_dbus_send_message(cdata->conn,
@@ -1169,12 +1180,13 @@ static DBusMessage *do_connect(DBusConnection *conn, DBusMessage *msg,
 	switch (err) {
 	case 0:
 	case -EINPROGRESS:
+		reset_ip_support_updated(provider);
 		break;
 	case -ENOLINK:
 	case -EAFNOSUPPORT:
 		DBG("Connect provider %p later: %d", provider, err);
 		/* Record the old ip support to check if there is a change. */
-		set_ip_support_needs_update();
+		set_ip_support_needs_update(provider);
 		do_connect_later(provider, conn, msg);
 		break;
 	default:
