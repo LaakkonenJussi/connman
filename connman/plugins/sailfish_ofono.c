@@ -534,25 +534,69 @@ static GString *modem_configure_ipv4(struct connman_network *network,
 	return modem_append_strv(nameservers, config->dns);
 }
 
+static enum connman_ipconfig_method ofono_method_to_connman(
+					enum ofono_connctx_method ofono_method,
+					bool *add_address)
+{
+	enum connman_ipconfig_method method;
+	bool can_use_address = false;
+
+	switch (ofono_method) {
+	/*
+	 * Ofono cannot understand SLAAC and reports it as unknown. Add the
+	 * single global address if it has been set. Temporary and LL addresses
+	 * are handled by kernel for IPv6.
+	 */
+	case OFONO_CONNCTX_METHOD_UNKNOWN:
+		method = CONNMAN_IPCONFIG_METHOD_AUTO;
+		can_use_address = true;
+		break;
+	/*
+	 * Do not treat this as an OFF method, it can also mean that Ofono does
+	 * not handle a case properly. Set it to auto.
+	 */
+	case OFONO_CONNCTX_METHOD_NONE:
+		method = CONNMAN_IPCONFIG_METHOD_AUTO;
+		break;
+	/* Static (fixed) address is quite unusual for IPv6. */
+	case OFONO_CONNCTX_METHOD_STATIC:
+		method = CONNMAN_IPCONFIG_METHOD_FIXED;
+		can_use_address = true;
+		break;
+	case OFONO_CONNCTX_METHOD_DHCP:
+		method = CONNMAN_IPCONFIG_METHOD_DHCP;
+		break;
+	default:
+		method = CONNMAN_IPCONFIG_METHOD_UNKNOWN;
+		break;
+	}
+
+	if (add_address)
+		*add_address = can_use_address;
+
+	return method;
+}
+
 static GString *modem_configure_ipv6(struct connman_network *network,
 	const struct ofono_connctx_settings *config, GString *nameservers)
 {
-	if (config->method == OFONO_CONNCTX_METHOD_DHCP) {
-		connman_network_set_ipv6_method(network,
-					CONNMAN_IPCONFIG_METHOD_DHCP);
-	} else if (config->address) {
+	enum connman_ipconfig_method method;
+	bool add_address = false;
+
+	method = ofono_method_to_connman(config->method, &add_address);
+
+	if (config->address && add_address) {
 		struct connman_ipaddress *ipaddr =
 					connman_ipaddress_alloc(AF_INET6);
 		connman_ipaddress_set_ipv6(ipaddr, config->address,
 					config->prefix, config->gateway);
-		connman_network_set_ipv6_method(network,
-					CONNMAN_IPCONFIG_METHOD_FIXED);
+		connman_network_set_ipv6_method(network, method);
 		connman_network_set_ipaddress(network, ipaddr);
 		connman_ipaddress_free(ipaddr);
 	} else {
-		connman_network_set_ipv6_method(network,
-					CONNMAN_IPCONFIG_METHOD_AUTO);
+		connman_network_set_ipv6_method(network, method);
 	}
+
 	return modem_append_strv(nameservers, config->dns);
 }
 
