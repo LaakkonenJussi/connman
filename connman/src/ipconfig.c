@@ -506,6 +506,34 @@ static int get_ipv6_ndproxy(gchar *ifname)
 	return value;
 }
 
+static int set_ipv6_addr_gen_mode(gchar *ifname, int value)
+{
+	switch (value) {
+	case -1:
+		value = 0;
+		/* fall through */
+	case 0:
+	case 1:
+	case 2:
+	case 3:
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return write_ipv6_conf_value(ifname, "addr_gen_mode", value);
+}
+
+static int get_ipv6_addr_gen_mode(gchar *ifname)
+{
+	int value = 0;
+
+	if (read_ipv6_conf_value(ifname, "addr_gen_mode", &value) < 0)
+		value = -EINVAL;
+
+	return value;
+}
+
 int __connman_ipconfig_set_rp_filter()
 {
 	int value;
@@ -2053,6 +2081,44 @@ int __connman_ipconfig_ipv6_set_ndproxy(struct connman_ipconfig *ipconfig,
 	return err;
 }
 
+int __connman_ipconfig_get_ipv6_addr_gen_mode(struct connman_ipconfig *ipconfig)
+{
+	char *ifname;
+	int value;
+
+	if (!ipconfig)
+		return -EINVAL;
+
+	ifname = connman_inet_ifname(ipconfig->index);
+	if (!ifname)
+		return -ENOENT;
+
+	value = get_ipv6_addr_gen_mode(ifname);
+	g_free(ifname);
+
+	return value;
+}
+
+int __connman_ipconfig_set_ipv6_addr_gen_mode(struct connman_ipconfig *ipconfig,
+					int value)
+{
+	char *ifname;
+	int err = 0;
+
+	if (!ipconfig)
+		return -EINVAL;
+
+	ifname = connman_inet_ifname(ipconfig->index);
+	if (!ifname)
+		return -ENOENT;
+
+	if (set_ipv6_addr_gen_mode(ifname, value) != 1)
+		err = -EINVAL;
+
+	g_free(ifname);
+
+	return err;
+}
 
 bool __connman_ipconfig_is_usable(struct connman_ipconfig *ipconfig)
 {
