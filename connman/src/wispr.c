@@ -893,14 +893,13 @@ static bool wispr_portal_web_result(GWebResult *result, gpointer user_data)
 	case 303:
 	case 307:
 	case 308:
-		DBG("tls %d, Location header %d", (!g_web_supports_tls()),
-				(!g_web_result_get_header(result, "Location",
-						&redirect)));
+		bool supports_tls = g_web_supports_tls();
+		bool has_header = g_web_result_get_header(result, "Location",
+								&redirect);
 
-		if (!g_web_supports_tls() ||
-			!g_web_result_get_header(result, "Location",
-							&redirect) || !redirect[0]) {
+		DBG("tls %d, Location header %d", !supports_tls, !has_header);
 
+		if (!supports_tls || !has_header || !redirect[0]) {
 			wispr_portal_context_ref(wp_context);
 			__connman_agent_request_browser(wp_context->service,
 					wispr_portal_browser_reply_cb,
