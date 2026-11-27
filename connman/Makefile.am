@@ -1,6 +1,5 @@
 
 AM_MAKEFLAGS = --no-print-directory
-AUTOMAKE_OPTIONS = serial-tests
 
 noinst_LTLIBRARIES =
 
