@@ -932,6 +932,29 @@ static void autoconf_ipv6_set(struct connman_network *network)
 	if (__connman_ipconfig_enable_ipv6(ipconfig))
 		return;
 
+	/*
+	 * Change addr_gen_mode to be 0 for when LL is disabled (1) which will
+	 * ensure that router solicitation messages are sent and getting a
+	 * router advertisement as a reply to function correctly with autoconf
+	 * (SLAAC). Modes:
+	 * - 2 (requires stable secret being set) and
+	 * - 3 (automatically generates stable secret)
+	 * are left as is hence they work (if 2 is configured with a stable
+	 * secret).
+	 */
+	switch (__connman_ipconfig_get_ipv6_addr_gen_mode(ipconfig)) {
+	case 1:
+		if (__connman_ipconfig_set_ipv6_addr_gen_mode(ipconfig, 0))
+			connman_warn("failed to set IPv6 addr_gen_mode to 0");
+		break;
+	case 2:
+	case 3:
+	case 0:
+		break;
+	default:
+		break;
+	}
+
 	__connman_ipconfig_address_remove(ipconfig);
 
 	index = __connman_ipconfig_get_index(ipconfig);
