@@ -866,10 +866,16 @@ static bool wispr_portal_web_result(GWebResult *result, gpointer user_data)
 			connman_agent_cancel(wp_context->service);
 			portal_manage_status(result, wp_context);
 		} else {
+			const char *url = wp_context->redirect_url;
+
+			/* The portal may serve its login page at the probe URL. */
+			if (!url || !url[0])
+				url = wp_context->status_url;
+
 			wispr_portal_context_ref(wp_context);
 			__connman_agent_request_browser(wp_context->service,
 					wispr_portal_browser_reply_cb,
-					wp_context->redirect_url, wp_context);
+					url, wp_context);
 		}
 
 		break;
@@ -887,14 +893,13 @@ static bool wispr_portal_web_result(GWebResult *result, gpointer user_data)
 	case 303:
 	case 307:
 	case 308:
-		DBG("tls %d, Location header %d", (!g_web_supports_tls()),
-				(!g_web_result_get_header(result, "Location",
-						&redirect)));
+		bool supports_tls = g_web_supports_tls();
+		bool has_header = g_web_result_get_header(result, "Location",
+								&redirect);
 
-		if (!g_web_supports_tls() ||
-			!g_web_result_get_header(result, "Location",
-							&redirect)) {
+		DBG("tls %d, Location header %d", !supports_tls, !has_header);
 
+		if (!supports_tls || !has_header || !redirect[0]) {
 			wispr_portal_context_ref(wp_context);
 			__connman_agent_request_browser(wp_context->service,
 					wispr_portal_browser_reply_cb,
