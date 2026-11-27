@@ -1511,7 +1511,7 @@ static void test_init(const char *pname)
 
 	test_tmp_dir = g_dir_make_tmp(template, NULL);
 
-	__connman_log_init(pname, g_test_verbose() ? "*" : NULL, FALSE, FALSE,
+	__connman_log_init(pname, "*", FALSE, FALSE,
 						pname, CONNMAN_VERSION);
 	__connman_inotify_init();
 	g_assert_cmpint(__connman_storage_init(test_tmp_dir, ".local", 0755,
