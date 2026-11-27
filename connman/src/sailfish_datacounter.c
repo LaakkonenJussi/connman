@@ -591,7 +591,7 @@ static gboolean datacounter_file_read(const char *path,
 
 	if (len != COUNTER_FILE_VERSION_1_SIZE &&
 					len != COUNTER_FILE_VERSION_2_SIZE) {
-		connman_error("Invalid datacounter file size %lu", len);
+		connman_error("Invalid datacounter file size %"G_GSIZE_FORMAT, len);
 		g_free(buf);
 		return false;
 	}
@@ -684,7 +684,7 @@ static int write_datacounter_file(const char *path, const char *buf,
 	close(fd);
 
 	if (len > 0) {
-		DBG("%lu bytes left on %s", len, path);
+		DBG("%"G_GSIZE_FORMAT" bytes left on %s", len, path);
 		err = -EIO;
 	}
 
